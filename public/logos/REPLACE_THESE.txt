@@ -1,0 +1,12 @@
+Replace the placeholder files in this folder with the real artwork.
+
+The server looks for these names, in this order, and serves the first match:
+
+  pinnacle.png / .jpg / .jpeg / .webp / .svg
+  pinball-land.png / .jpg / .jpeg / .webp / .svg
+
+Drop the real files here (PNG is fine). You do not need to change any code
+if you keep those filenames. Restart is not required; refresh the display
+pages after replacing a file.
+
+The SVG files checked in with this repo are labeled stand-ins only.

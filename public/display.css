@@ -1,0 +1,127 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+.screen {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  color: #f6f1e4;
+  overflow: hidden;
+  user-select: none;
+  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.screen {
+  display: grid;
+  place-items: stretch;
+}
+
+.panel {
+  min-height: 100%;
+  min-width: 100%;
+}
+
+.logo-panel {
+  display: grid;
+  place-items: center;
+  padding: 6vh 6vw;
+  background: #000;
+}
+
+.logo-panel img {
+  width: min(88vw, 1400px);
+  height: min(78vh, 780px);
+  object-fit: contain;
+}
+
+.off-panel {
+  background: #000;
+}
+
+.board-panel {
+  display: flex;
+  flex-direction: column;
+  padding: 4.5vh 5vw 3vh;
+  background:
+    radial-gradient(circle at 50% -20%, #2a1038 0%, #000 55%);
+}
+
+.board-header {
+  text-align: center;
+  margin-bottom: 2.5vh;
+}
+
+.board-kicker {
+  color: #ffd24a;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  font-size: clamp(14px, 2.1vh, 28px);
+  margin-bottom: 1vh;
+}
+
+.board-header h1 {
+  font-size: clamp(32px, 7vh, 96px);
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.board-rows {
+  list-style: none;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8vh;
+  min-height: 0;
+}
+
+.board-row {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 0.7fr 3.2fr 2fr;
+  align-items: center;
+  gap: 2vw;
+  min-height: 0;
+  padding: 0 1.5vw;
+  border-bottom: 1px solid rgba(255, 210, 74, 0.18);
+  font-size: clamp(22px, 6.2vh, 84px);
+  line-height: 1;
+}
+
+.rank {
+  color: #ffd24a;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.name {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.score {
+  text-align: right;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+}
+
+.board-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: #b9b3a6;
+  font-size: clamp(28px, 5vh, 64px);
+}

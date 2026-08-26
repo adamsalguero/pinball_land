@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#110812" />
+    <title>Pinball Land control</title>
+    <link rel="stylesheet" href="/control.css" />
+  </head>
+  <body>
+    <div id="login" class="login">
+      <form id="login-form" class="login-card">
+        <p class="eyebrow">Pinball Land</p>
+        <h1>Kiosk control</h1>
+        <p class="hint">Enter the PIN to drive the screens. Default is 1234.</p>
+        <label>
+          PIN
+          <input id="pin-input" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="12" />
+        </label>
+        <button type="submit" class="btn primary">Unlock</button>
+        <p id="login-error" class="error" hidden>Wrong PIN</p>
+      </form>
+    </div>
+
+    <div id="app" hidden>
+      <header class="top">
+        <div>
+          <p class="eyebrow">Pinball Land</p>
+          <h1>Kiosk control</h1>
+        </div>
+        <button id="logout" class="btn ghost compact" type="button">Lock</button>
+      </header>
+
+      <button id="off-all" class="btn danger huge" type="button">Off — black all screens</button>
+
+      <section>
+        <h2>Screens</h2>
+        <div id="slots" class="stack"></div>
+      </section>
+
+      <section>
+        <h2>Leaderboards</h2>
+        <div class="row-actions">
+          <select id="board-select" aria-label="Choose event"></select>
+          <button id="new-board" class="btn" type="button">New event</button>
+        </div>
+        <div id="board-editor" class="card"></div>
+      </section>
+    </div>
+
+    <p id="toast" class="toast" hidden></p>
+    <script src="/control.js"></script>
+  </body>
+</html>
