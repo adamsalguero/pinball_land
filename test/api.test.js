@@ -40,10 +40,13 @@ test("serves display and control pages", async () => {
   try {
     const control = await fetch(`${origin}/`);
     const display = await fetch(`${origin}/display/2`);
+    const logo = await fetch(`${origin}/logos/pinnacle`);
     assert.equal(control.status, 200);
     assert.equal(display.status, 200);
+    assert.equal(logo.status, 200);
     assert.match(await control.text(), /Kiosk control/);
     assert.match(await display.text(), /Pinball Land display/);
+    assert.match(await logo.text(), /PINNACLE/);
   } finally {
     server.close();
   }

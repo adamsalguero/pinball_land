@@ -8,10 +8,11 @@
     <link rel="stylesheet" href="/display.css" />
   </head>
   <body>
-    <main id="screen" class="screen off" aria-live="polite">
+    <main id="screen" class="screen" data-mode="off" aria-live="polite">
       <div id="off" class="panel off-panel" hidden></div>
       <div id="logo" class="panel logo-panel" hidden>
-        <img id="logo-image" alt="" />
+        <p id="logo-fallback" class="logo-fallback" hidden></p>
+        <img id="logo-image" alt="" hidden />
       </div>
       <div id="board" class="panel board-panel" hidden>
         <header class="board-header">

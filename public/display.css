@@ -20,12 +20,17 @@ body,
   font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .screen {
   display: grid;
   place-items: stretch;
 }
 
 .panel {
+  grid-area: 1 / 1;
   min-height: 100%;
   min-width: 100%;
 }
@@ -41,6 +46,18 @@ body,
   width: min(88vw, 1400px);
   height: min(78vh, 780px);
   object-fit: contain;
+}
+
+.logo-fallback {
+  max-width: 88vw;
+  padding: 6vh 6vw;
+  text-align: center;
+  border: 6px solid #c9a227;
+  color: #f4e7c3;
+  font-size: clamp(28px, 6vh, 72px);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .off-panel {

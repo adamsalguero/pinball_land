@@ -4,6 +4,7 @@ const screen = document.getElementById("screen");
 const offPanel = document.getElementById("off");
 const logoPanel = document.getElementById("logo");
 const logoImage = document.getElementById("logo-image");
+const logoFallback = document.getElementById("logo-fallback");
 const boardPanel = document.getElementById("board");
 const boardTitle = document.getElementById("board-title");
 const boardRows = document.getElementById("board-rows");
@@ -13,33 +14,44 @@ function formatScore(score) {
   return Number(score || 0).toLocaleString("en-US");
 }
 
-function hideAll() {
-  offPanel.hidden = true;
-  logoPanel.hidden = true;
-  boardPanel.hidden = true;
+function setMode(mode) {
+  screen.dataset.mode = mode;
+  offPanel.hidden = mode !== "off";
+  logoPanel.hidden = mode !== "logo";
+  boardPanel.hidden = mode !== "board";
 }
 
 function showOff() {
-  hideAll();
-  screen.className = "screen off";
-  offPanel.hidden = false;
+  setMode("off");
 }
 
 function showLogo(url, label) {
-  hideAll();
-  screen.className = "screen logo";
-  logoImage.src = url || "";
+  setMode("logo");
   logoImage.alt = label;
-  logoPanel.hidden = false;
+  logoFallback.textContent = `${label} placeholder — replace the file in public/logos`;
+  if (url) {
+    logoFallback.hidden = true;
+    logoImage.hidden = false;
+    logoImage.src = url;
+  } else {
+    logoImage.removeAttribute("src");
+    logoImage.hidden = true;
+    logoFallback.hidden = false;
+  }
 }
 
+logoImage.addEventListener("error", () => {
+  logoImage.hidden = true;
+  logoFallback.hidden = false;
+});
+
 function showBoard(board) {
-  hideAll();
-  screen.className = "screen board";
+  setMode("board");
   boardTitle.textContent = board?.name || "Leaderboard";
   boardRows.replaceChildren();
   const rows = board?.rows || [];
   boardEmpty.hidden = rows.length > 0;
+  boardRows.hidden = rows.length === 0;
   rows.forEach((row, index) => {
     const li = document.createElement("li");
     li.className = "board-row";
@@ -59,7 +71,6 @@ function showBoard(board) {
     li.append(rank, name, score);
     boardRows.append(li);
   });
-  boardPanel.hidden = false;
 }
 
 function render({ state, logos }) {
@@ -69,11 +80,11 @@ function render({ state, logos }) {
     return;
   }
   if (slot.content === "pinnacle") {
-    showLogo(logos.pinnacle, "Pinnacle Financial Group");
+    showLogo(logos?.pinnacle, "Pinnacle Financial Group");
     return;
   }
   if (slot.content === "pinball-land") {
-    showLogo(logos["pinball-land"], "Pinball Land");
+    showLogo(logos?.["pinball-land"], "Pinball Land");
     return;
   }
   const board = (state.leaderboards || []).find((item) => item.id === slot.leaderboardId);

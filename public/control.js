@@ -157,6 +157,11 @@ function renderBoardEditor() {
   nameLabel.append(nameInput);
   boardEditor.append(nameLabel);
 
+  const orderHint = document.createElement("p");
+  orderHint.className = "muted";
+  orderHint.textContent = "Rows stay in the order you set. Use Up/Down to change rank.";
+  boardEditor.append(orderHint);
+
   const actions = document.createElement("div");
   actions.className = "row-actions";
   const clearBtn = document.createElement("button");
