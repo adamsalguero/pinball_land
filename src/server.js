@@ -38,6 +38,8 @@ async function startServer() {
     publicDir: path.join(root, "public"),
     logosDir: path.join(root, "public", "logos"),
     photosDir: path.join(root, "public", "photos"),
+    opdbApiKey: config.opdbApiKey,
+    cacheDir: path.join(root, "data", "opdb"),
   });
 
   const server = http.createServer(app);

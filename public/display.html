@@ -14,32 +14,33 @@
         <p id="logo-fallback" class="logo-fallback" hidden></p>
         <img id="logo-image" alt="" hidden />
       </div>
-      <div id="photo" class="panel collage-panel" hidden>
-        <div>
-          <p class="collage-kicker">Pinnacle Entertainment Center</p>
-          <div class="collage">
-            <figure class="frame">
-              <img id="photo-arcade" alt="Arcade" />
-              <figcaption>Arcade</figcaption>
-            </figure>
-            <figure class="frame">
-              <img id="photo-bar" alt="Bar" />
-              <figcaption>Bar</figcaption>
-            </figure>
-            <figure class="frame">
-              <img id="photo-pool" alt="Pool" />
-              <figcaption>Pool</figcaption>
-            </figure>
+      <div id="amenity" class="panel amenity-panel" hidden>
+        <p class="amenity-kicker">Pinnacle Entertainment Center</p>
+        <div class="amenity-layout">
+          <figure id="amenity-frame" class="amenity-frame" hidden>
+            <img id="amenity-photo" alt="" />
+          </figure>
+          <div class="amenity-copy">
+            <h1 id="amenity-headline"></h1>
+            <p id="amenity-body"></p>
+            <p id="amenity-types" class="amenity-types" hidden></p>
           </div>
         </div>
       </div>
       <div id="board" class="panel board-panel" hidden>
-        <header class="board-header">
-          <p class="board-kicker">Pinnacle Entertainment Center</p>
-          <h1 id="board-title">Leaderboard</h1>
-        </header>
-        <ol id="board-rows" class="board-rows"></ol>
-        <p id="board-empty" class="board-empty" hidden>No scores yet</p>
+        <div id="machine-art-wrap" class="machine-art-wrap" hidden>
+          <img id="machine-art" alt="" hidden />
+          <video id="machine-video" muted loop playsinline hidden></video>
+        </div>
+        <div class="board-main">
+          <header class="board-header">
+            <p class="board-kicker">Pinnacle Entertainment Center</p>
+            <h1 id="board-title">Leaderboard</h1>
+            <p id="board-meta" class="board-meta" hidden></p>
+          </header>
+          <ol id="board-rows" class="board-rows"></ol>
+          <p id="board-empty" class="board-empty" hidden>No scores yet</p>
+        </div>
       </div>
     </main>
     <script src="/display.js"></script>

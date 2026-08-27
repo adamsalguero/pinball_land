@@ -9,6 +9,7 @@ Local web app for the triple-screen wall at Pinball Land (Pinnacle Entertainment
 - Node.js 18+ ([nodejs.org](https://nodejs.org) — LTS, install for all users on the wall PC)
 - Same WiFi as the iPad/phone
 - Wall: `npm run kiosk`. Home testing: `npm start`
+- Optional: a free [OPDB](https://opdb.org) API token if you want pinball backglass art cached for the wall
 
 ## Install and start (home / testing)
 
@@ -44,25 +45,39 @@ Venue always-on after a power blink: BIOS Auto Power On + Windows auto-logon + T
 ## Control page
 
 - Fat buttons, phone-sized, thumb-friendly.
-- Theme: **Pinnacle brand** (default, purple/charcoal/beige from the live site) or **Halloween party** (Ron toggles this; it is saved and does not follow the calendar).
-- Each slot: Pinnacle Group logo, Entertainment Center logo, **photo collage** (arcade / bar / pool as small framed tiles — not stretched fullscreen), leaderboard, or black.
-- Named events, typed-in scores, clear board. PIN default `1234`. Displays do not use the PIN.
+- Theme: **Pinnacle brand** (default, purple/charcoal/beige from the live site, **Lato** 400/700) or **Halloween party** (Ron toggles this; it is saved and does not follow the calendar).
+- **Wall rotation is on by default.** Every TV shares one playlist (Pinnacle Group logo, Entertainment Center logo, three amenity cards, and each enabled leaderboard). Screens are staggered so neighbors are not on the same card. Interval defaults to 14 seconds.
+- Rotation on/off, interval, and per-item toggles live on the control page. Turning rotation off lets you assign each TV by hand.
+- **Off** blacks every screen immediately. **Resume wall** brings the playlist back. Off does not wipe the playlist.
+- Amenities (site wording, never “pool”): **2-story arcade**, **Outdoor Oasis**, **Flexible Event Options**. Photos stay in a small frame on the brand background.
+- Named events, typed-in scores, pinball machines from OPDB (or by name). PIN default `1234`. Displays do not use the PIN.
 
-Change PIN or port in `config.json` (`PORT` and `CONTROL_PIN` also work).
+Change PIN, port, or OPDB token in `config.json` (`PORT`, `CONTROL_PIN`, and `OPDB_API_KEY` also work).
 
-## Logos and venue photos
+## Logos and amenity photos
 
 From [Pinnacle Group Financial Services](https://www.pinnaclegroupfinancial.com/) and [Pinnacle Entertainment Center](https://www.pinnaclegroupfinancial.com/pinnacle-entertainment-center):
 
-- `public/logos/pinnacle.png`
-- `public/logos/pinball-land.png`
-- `public/photos/arcade.jpg`, `bar.jpg`, `pool.png`
+- `public/logos/pinnacle.svg` (PNG fallback: `pinnacle.png`) — Pinnacle Group Financial Services
+- `public/logos/pinball-land.svg` (PNG fallback: `pinball-land.png`) — Pinnacle Entertainment Center
+- `public/photos/arcade.jpg` — 2-story arcade
+- `public/photos/oasis.png` — Outdoor Oasis (the waterfall/garden photo; not a pool)
 
-Logos stay large and contained. Photos only appear as a collage of small frames on the brand background (the files are too low-res for a 55" TV edge-to-edge). Drop in higher-res files with the same names anytime.
+Displays prefer the SVG lockups. Lettering is converted to paths so the wall does not need those mark fonts installed. UI copy uses Lato.
+
+Logos stay large and contained. Amenity photos only appear as a small framed image next to the headline and body (never stretched fullscreen).
+
+## Pinball collection (OPDB)
+
+From the control page, search machines on [Open Pinball Database](https://opdb.org), add them to the collection, and enable that machine’s leaderboard. Enabled boards join the wall rotation. The card shows cached backglass / translite / banner art (`object-fit: contain`) plus typed-in scores.
+
+A free API token is required to download machine JSON and art (account + token on opdb.org). Put it in `config.json` as `opdbApiKey`, or set `OPDB_API_KEY`. Files cache under `data/opdb/` so a WiFi blip does not blank the wall. Without a token, search still works (typeahead) and you can add a machine by name so a party is not blocked; art appears after a token is added and the machine is re-added from search.
+
+If an OPDB entry includes a direct `.mp4` / `.webm` trailer URL, the machine card may loop it muted. YouTube is not scraped.
 
 ## Persistence
 
-Slot assignments, theme, and leaderboards save to `data/state.json`. Refresh and restart keep them.
+Rotation, theme, blackout, leaderboards, and machine collection save to `data/state.json`. Refresh and restart keep them. OPDB caches live in `data/opdb/` (gitignored).
 
 ## Out of scope
 

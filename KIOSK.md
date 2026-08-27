@@ -4,6 +4,10 @@ Supported venue PC: **Beelink SER5** running **Windows 11** (the image it ships 
 
 `npm start` is server-only (home testing). `npm run kiosk` starts the server if needed and opens a frameless fullscreen window on every attached monitor, left-to-right: `/display/1`, `/display/2`, `/display/3`. The control page stays on the phone/iPad.
 
+The wall **auto-rotates by default**: logos, three amenity cards, and every enabled leaderboard, staggered across TVs. Interval and playlist toggles are on the control page. **Off** still blacks every screen immediately.
+
+Optional pinball art: a free OPDB API token (`config.json` `opdbApiKey` or env `OPDB_API_KEY`). Without it, add machines by name and type scores as usual.
+
 ---
 
 ## 1. BIOS: this is what turns the PC back on after a power cut

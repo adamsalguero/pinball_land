@@ -12,10 +12,14 @@ beforeEach(async () => {
   filePath = path.join(dir, "state.json");
 });
 
-test("seeds a Halloween board and three slots on first load", async () => {
+test("seeds a Halloween board, rotation on, and three slots on first load", async () => {
   const store = await Store.load(filePath);
   const state = store.getState();
   assert.equal(state.leaderboards[0].name, "Halloween party");
+  assert.equal(state.leaderboards[0].kind, "event");
+  assert.equal(state.leaderboards[0].inRotation, true);
+  assert.equal(state.rotation.enabled, true);
+  assert.equal(state.blackout, false);
   assert.equal(state.slots["1"].content, "pinnacle");
   assert.equal(state.slots["2"].content, "pinball-land");
   assert.equal(state.slots["3"].content, "leaderboard");
@@ -41,16 +45,17 @@ test("assigns a slot, edits rows, and reloads from disk", async () => {
   assert.equal(board.rows.find((row) => row.name === "Alex P").score, 12500);
 });
 
-test("clear board and black-all persist", async () => {
+test("clear board and black-all persist without wiping slot assignments", async () => {
   const store = await Store.load(filePath);
   const boardId = store.getState().leaderboards[0].id;
   await store.clearLeaderboard(boardId);
   await store.blackAll();
   const reloaded = await Store.load(filePath);
   assert.equal(reloaded.getState().leaderboards[0].rows.length, 0);
-  assert.equal(reloaded.getState().slots["1"].content, "off");
-  assert.equal(reloaded.getState().slots["2"].content, "off");
-  assert.equal(reloaded.getState().slots["3"].content, "off");
+  assert.equal(reloaded.getState().blackout, true);
+  assert.equal(reloaded.getState().slots["1"].content, "pinnacle");
+  await reloaded.resumeWall();
+  assert.equal(reloaded.getState().blackout, false);
 });
 
 test("migrates legacy photo slots and persists halloween theme", async () => {
@@ -69,20 +74,52 @@ test("migrates legacy photo slots and persists halloween theme", async () => {
   const store = await Store.load(filePath);
   const state = store.getState();
   assert.equal(state.theme, "halloween");
-  assert.equal(state.slots["1"].content, "photos");
-  assert.equal(state.slots["2"].content, "photos");
-  assert.equal(state.slots["3"].content, "photos");
+  assert.equal(state.rotation.enabled, true);
+  assert.equal(state.slots["1"].content, "amenity-arcade");
+  assert.equal(state.slots["2"].content, "amenity-oasis");
+  assert.equal(state.slots["3"].content, "amenity-oasis");
   assert.equal(state.leaderboards[0].name, "Keep me");
+  assert.equal(state.leaderboards[0].inRotation, true);
   await store.setTheme("pinnacle");
   const reloaded = await Store.load(filePath);
   assert.equal(reloaded.getState().theme, "pinnacle");
 });
 
-test("assigns collage slot and reloads", async () => {
+test("assigns an Outdoor Oasis amenity slot and reloads", async () => {
   const store = await Store.load(filePath);
-  await store.setSlot("2", { content: "photos" });
+  await store.setSlot("2", { content: "amenity-oasis" });
   const reloaded = await Store.load(filePath);
-  assert.equal(reloaded.getState().slots["2"].content, "photos");
+  assert.equal(reloaded.getState().slots["2"].content, "amenity-oasis");
+});
+
+test("machine boards can be added and toggled in the rotation", async () => {
+  const store = await Store.load(filePath);
+  await store.createLeaderboard("Medieval Madness", {
+    kind: "machine",
+    opdbId: "GTEST-M1",
+    manufacturer: "Williams",
+    year: "1997",
+    inRotation: true,
+  });
+  const machine = store.getState().leaderboards.at(-1);
+  assert.equal(machine.kind, "machine");
+  assert.equal(machine.inRotation, true);
+  assert.equal(machine.opdbId, "GTEST-M1");
+  await store.updateLeaderboard(machine.id, { inRotation: false });
+  const reloaded = await Store.load(filePath);
+  const saved = reloaded.getState().leaderboards.find((board) => board.id === machine.id);
+  assert.equal(saved.inRotation, false);
+  assert.equal(saved.kind, "machine");
+});
+
+test("turning rotation on clears blackout", async () => {
+  const store = await Store.load(filePath);
+  await store.blackAll();
+  await store.setRotation({ enabled: true, intervalSec: 12 });
+  const state = store.getState();
+  assert.equal(state.blackout, false);
+  assert.equal(state.rotation.enabled, true);
+  assert.equal(state.rotation.intervalSec, 12);
 });
 
 test("delete and reorder rows", async () => {

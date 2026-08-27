@@ -1,3 +1,19 @@
+@font-face {
+  font-family: "Lato";
+  src: url("/fonts/Lato-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lato";
+  src: url("/fonts/Lato-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --ink: #1a1916;
@@ -48,7 +64,7 @@ body,
   overflow: hidden;
   user-select: none;
   cursor: none;
-  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Lato", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 [hidden] {
@@ -93,13 +109,125 @@ body,
   border: 6px solid var(--frame);
   color: var(--text);
   font-size: clamp(28px, 6vh, 72px);
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .off-panel {
   background: #000;
+}
+
+.amenity-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 5vh 6vw;
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--purple) 35%, var(--bg)) 0%, var(--bg) 58%);
+}
+
+[data-theme="halloween"] .amenity-panel {
+  background:
+    radial-gradient(circle at 50% 0%, #3a1400 0%, #0b0704 60%);
+}
+
+.amenity-kicker {
+  text-align: center;
+  margin-bottom: 3vh;
+  color: var(--kicker);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  font-size: clamp(14px, 2.2vh, 28px);
+}
+
+.amenity-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr);
+  gap: 4vw;
+  align-items: center;
+  width: min(92vw, 1600px);
+  margin: 0 auto;
+}
+
+.amenity-layout:not(:has(.amenity-frame:not([hidden]))) {
+  grid-template-columns: 1fr;
+  max-width: 1100px;
+}
+
+.amenity-frame {
+  display: flex;
+  background: var(--lockup);
+  border: 6px solid var(--frame);
+  border-radius: 10px;
+  padding: 1.6vh 1.2vw;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.amenity-frame img {
+  width: 100%;
+  height: min(46vh, 420px);
+  object-fit: contain;
+  background: var(--stone);
+}
+
+.amenity-copy h1 {
+  font-size: clamp(32px, 6.4vh, 84px);
+  line-height: 1.05;
+  font-weight: 700;
+  margin-bottom: 2vh;
+}
+
+.amenity-copy p {
+  font-size: clamp(18px, 2.8vh, 34px);
+  line-height: 1.45;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.amenity-types {
+  margin-top: 2.4vh;
+  color: var(--kicker);
+  font-size: clamp(14px, 2.1vh, 24px);
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.board-panel.has-art {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 3vw;
+  align-items: stretch;
+}
+
+.machine-art-wrap {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+
+.machine-art-wrap img,
+.machine-art-wrap video {
+  width: 100%;
+  height: min(82vh, 860px);
+  object-fit: contain;
+  background: #0a0908;
+  border-radius: 12px;
+}
+
+.board-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.board-meta {
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: clamp(14px, 2vh, 24px);
+  margin-top: 0.6vh;
 }
 
 .collage-panel {
@@ -193,7 +321,7 @@ body,
 .board-header h1 {
   font-size: clamp(32px, 7vh, 96px);
   line-height: 1.05;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -222,7 +350,7 @@ body,
 
 .rank {
   color: var(--rank);
-  font-weight: 800;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
@@ -235,7 +363,7 @@ body,
 
 .score {
   text-align: right;
-  font-weight: 800;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.03em;
 }

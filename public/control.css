@@ -1,3 +1,19 @@
+@font-face {
+  font-family: "Lato";
+  src: url("/fonts/Lato-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lato";
+  src: url("/fonts/Lato-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --purple: #62006e;
@@ -48,7 +64,7 @@ body {
   min-height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Lato", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 body {
@@ -264,4 +280,24 @@ select {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 12px;
+}
+
+.toggle-stack,
+.search-hit {
+  display: grid;
+  gap: 8px;
+}
+
+.btn.toggle.active {
+  background: var(--active);
+  color: var(--active-text);
+}
+
+.interval-label {
+  margin-top: 16px;
+}
+
+.search-hit {
+  text-align: left;
+  font-weight: 400;
 }

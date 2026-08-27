@@ -4,6 +4,7 @@ const path = require("path");
 const DEFAULTS = {
   port: 3000,
   pin: "1234",
+  opdbApiKey: "",
 };
 
 function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
@@ -19,6 +20,7 @@ function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
 
   const port = Number.parseInt(process.env.PORT || fileConfig.port || DEFAULTS.port, 10);
   const pin = String(process.env.CONTROL_PIN || fileConfig.pin || DEFAULTS.pin);
+  const opdbApiKey = String(process.env.OPDB_API_KEY || fileConfig.opdbApiKey || DEFAULTS.opdbApiKey);
 
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid port: ${port}`);
@@ -27,7 +29,7 @@ function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
     throw new Error("Control PIN cannot be empty. Set it in config.json or CONTROL_PIN.");
   }
 
-  return { port, pin };
+  return { port, pin, opdbApiKey };
 }
 
 module.exports = { loadConfig, DEFAULTS };
