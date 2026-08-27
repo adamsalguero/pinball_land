@@ -15,8 +15,8 @@ const SLOT_META = [
 ];
 
 const CONTENT = [
-  { id: "pinnacle", label: "Pinnacle logo" },
-  { id: "pinball-land", label: "Pinball Land logo" },
+  { id: "pinnacle", label: "Pinnacle Group" },
+  { id: "pinball-land", label: "Entertainment Center" },
   { id: "leaderboard", label: "Leaderboard" },
   { id: "off", label: "Black" },
 ];

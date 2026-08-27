@@ -1,12 +1,12 @@
-Replace the placeholder files in this folder with the real artwork.
+Logos currently in this folder:
 
-The server looks for these names, in this order, and serves the first match:
+  pinnacle.png          Pinnacle Group Financial Services
+                        (from pinnaclegroupfinancial.com)
+  pinball-land.png      Pinnacle Entertainment Center
+                        (Pinball Land's public venue brand)
 
-  pinnacle.png / .jpg / .jpeg / .webp / .svg
-  pinball-land.png / .jpg / .jpeg / .webp / .svg
+To replace them, drop new files with those same names. PNG/JPG/WebP
+is preferred; the server picks png, then jpg, then webp, then the
+SVG fallbacks. No code change needed if you keep the filenames.
 
-Drop the real files here (PNG is fine). You do not need to change any code
-if you keep those filenames. Restart is not required; refresh the display
-pages after replacing a file.
-
-The SVG files checked in with this repo are labeled stand-ins only.
+The .svg files are labeled stand-ins used only if a PNG/JPG is missing.

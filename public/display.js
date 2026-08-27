@@ -80,11 +80,11 @@ function render({ state, logos }) {
     return;
   }
   if (slot.content === "pinnacle") {
-    showLogo(logos?.pinnacle, "Pinnacle Financial Group");
+    showLogo(logos?.pinnacle, "Pinnacle Group Financial Services");
     return;
   }
   if (slot.content === "pinball-land") {
-    showLogo(logos?.["pinball-land"], "Pinball Land");
+    showLogo(logos?.["pinball-land"], "Pinnacle Entertainment Center");
     return;
   }
   const board = (state.leaderboards || []).find((item) => item.id === slot.leaderboardId);

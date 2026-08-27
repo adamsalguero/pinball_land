@@ -46,7 +46,7 @@ test("serves display and control pages", async () => {
     assert.equal(logo.status, 200);
     assert.match(await control.text(), /Kiosk control/);
     assert.match(await display.text(), /Pinball Land display/);
-    assert.match(await logo.text(), /PINNACLE/);
+    assert.match(logo.headers.get("content-type") || "", /image\/(png|svg\+xml)/);
   } finally {
     server.close();
   }

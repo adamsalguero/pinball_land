@@ -46,6 +46,9 @@ body,
   width: min(88vw, 1400px);
   height: min(78vh, 780px);
   object-fit: contain;
+  background: #f7f1e6;
+  border-radius: 28px;
+  padding: 4vh 5vw;
 }
 
 .logo-fallback {
