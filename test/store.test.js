@@ -53,11 +53,36 @@ test("clear board and black-all persist", async () => {
   assert.equal(reloaded.getState().slots["3"].content, "off");
 });
 
-test("assigns a venue photo to a slot and reloads", async () => {
+test("migrates legacy photo slots and persists halloween theme", async () => {
+  await fs.writeFile(
+    filePath,
+    JSON.stringify({
+      theme: "halloween",
+      slots: {
+        1: { content: "arcade" },
+        2: { content: "pool" },
+        3: { content: "bar" },
+      },
+      leaderboards: [{ id: "evt1", name: "Keep me", rows: [] }],
+    })
+  );
   const store = await Store.load(filePath);
-  await store.setSlot("2", { content: "arcade" });
+  const state = store.getState();
+  assert.equal(state.theme, "halloween");
+  assert.equal(state.slots["1"].content, "photos");
+  assert.equal(state.slots["2"].content, "photos");
+  assert.equal(state.slots["3"].content, "photos");
+  assert.equal(state.leaderboards[0].name, "Keep me");
+  await store.setTheme("pinnacle");
   const reloaded = await Store.load(filePath);
-  assert.equal(reloaded.getState().slots["2"].content, "arcade");
+  assert.equal(reloaded.getState().theme, "pinnacle");
+});
+
+test("assigns collage slot and reloads", async () => {
+  const store = await Store.load(filePath);
+  await store.setSlot("2", { content: "photos" });
+  const reloaded = await Store.load(filePath);
+  assert.equal(reloaded.getState().slots["2"].content, "photos");
 });
 
 test("delete and reorder rows", async () => {

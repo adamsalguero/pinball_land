@@ -98,17 +98,26 @@ test("PIN gates mutations; login cookie allows off and live WS update", async ()
   }
 });
 
-test("can switch a slot to a venue photo with the PIN header", async () => {
+test("can switch a slot to the photo collage and persist theme", async () => {
   const { server, origin } = await startServer();
   try {
     const headers = { "x-pin": "1234" };
     const slot = await json(origin, "/api/slots/2", {
       method: "PUT",
       headers,
-      body: { content: "pool" },
+      body: { content: "photos" },
     });
-    assert.equal(slot.data.state.slots["2"].content, "pool");
+    assert.equal(slot.data.state.slots["2"].content, "photos");
+    assert.ok(slot.data.photos.arcade);
+    assert.ok(slot.data.photos.bar);
     assert.ok(slot.data.photos.pool);
+
+    const themed = await json(origin, "/api/theme", {
+      method: "PUT",
+      headers,
+      body: { theme: "halloween" },
+    });
+    assert.equal(themed.data.state.theme, "halloween");
   } finally {
     server.close();
   }

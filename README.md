@@ -1,103 +1,69 @@
 # Pinball Land kiosk
 
-A small local web app for the triple-screen wall at Pinball Land. One Node process serves three fullscreen display pages plus a phone/iPad control page on the same WiFi.
+Local web app for the triple-screen wall at Pinball Land (Pinnacle Entertainment Center). One Node process serves three display pages plus a phone/iPad control page on the same WiFi.
 
-Adam can run this on a home PC with 1 or 2 monitors tonight. Later the same app runs on a mini PC attached to three TVs. Ron drives it from an iPad or phone. No extra GPU, no serial/TV-brand control, and no live machine scores — just logos, typed-in leaderboards, and a black/off state.
+**Venue PC:** Beelink SER5, **Windows 11**, BIOS Auto Power On after AC loss. **Home PC:** Windows, `npm start` only. Ron drives it from an iPad. See **[KIOSK.md](KIOSK.md)** for the numbered always-on checklist.
 
 ## What you need
 
-- Node.js 18 or newer ([nodejs.org](https://nodejs.org))
-- A computer on the venue (or home) WiFi
-- A browser on each screen, plus a phone or iPad on the **same WiFi**
+- Node.js 18+ ([nodejs.org](https://nodejs.org) — LTS, install for all users on the wall PC)
+- Same WiFi as the iPad/phone
+- Wall: `npm run kiosk`. Home testing: `npm start`
 
-## Install and start
-
-In a terminal, from this folder:
+## Install and start (home / testing)
 
 ```bash
 npm install
 npm start
 ```
 
-The app binds to `0.0.0.0` so other devices on the LAN can reach it. On start it prints URLs like:
+`npm start` is **server only**. It binds `0.0.0.0` and prints:
 
 ```
 This PC control:     http://localhost:3000/
 Phone / iPad:        http://192.168.1.42:3000/
 Left display:        http://localhost:3000/display/1
-Center display:      http://localhost:3000/display/2
-Right display:       http://localhost:3000/display/3
+...
 ```
 
-Use the printed **Phone / iPad** address, not `localhost`, on Ron’s device. Default control PIN is `1234`.
+Use the printed **Phone / iPad** address on Ron’s device. Default PIN is `1234`. Leave the terminal open. Ctrl+C stops it.
 
-Leave this terminal open while the kiosk is running. Ctrl+C stops it.
+Open one display URL per monitor yourself when using `npm start`. You do not need three screens.
 
-## Home PC (1 or 2 monitors)
-
-You do **not** need three physical screens.
-
-1. Start the app with `npm start`.
-2. On monitor 1, open `http://localhost:3000/display/1` (left).
-3. On monitor 2, drag a second browser window to that screen and open `http://localhost:3000/display/2` (center).
-4. Optionally open display 3 in any extra window to preview the right slot.
-5. Open `http://localhost:3000/` on this PC, or the printed LAN URL on your phone, to control them.
-
-To fullscreen a display window: press **F11**, or in Chrome use the browser menu → Full screen. In Chrome you can also start a window as an app:
+## Wall mode (every attached monitor)
 
 ```bash
-chrome --kiosk http://localhost:3000/display/1
+npm install
+npm run kiosk
 ```
 
-(On Windows, point that at your Chrome shortcut / `chrome.exe`. On macOS the binary is usually `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`.)
+This starts the server if it is not already running, then opens a frameless fullscreen window on each attached display, mapped **left-to-right** to `/display/1`, `/display/2`, `/display/3`. Extra monitors beyond three are ignored. The control page is **not** opened on the TVs. Mouse cursor is hidden on the display windows. Running kiosk again replaces previous display windows instead of stacking duplicates.
 
-## Venue: three TVs and an iPad
-
-1. Plug the mini PC into the three TVs (left / center / right).
-2. Run `npm start` on the mini PC.
-3. Open `/display/1`, `/display/2`, and `/display/3` fullscreen on the matching TVs.
-4. On the iPad or phone (same WiFi), open the printed `http://<lan-ip>:3000/` URL.
-5. Unlock with the PIN. Assign each slot: Pinnacle Group, Entertainment Center, Arcade / Bar / Pool photos, a leaderboard, or black.
-6. **Off — black all screens** sets every slot to black immediately. Displays update live; they do not need a refresh.
-
-If the phone cannot load the page: confirm it is on the same WiFi, use the printed LAN IP (not localhost), and allow Node / port 3000 through the PC firewall if Windows asks.
+Venue always-on after a power blink: BIOS Auto Power On + Windows auto-logon + Task Scheduler. Details in [KIOSK.md](KIOSK.md). Also set BenQ **Switch on state = On** so the TVs wake with AC.
 
 ## Control page
 
-- Fat buttons, phone-sized layout, thumb-friendly.
-- Change what each of the three slots shows.
-- Create named events (for example “Halloween party”).
-- Add / edit / reorder / delete player rows. Scores are typed in by a person.
-- Clear a whole board, or delete an event.
-- Optional PIN (default `1234`) so random guests cannot drive it. Display pages do not use the PIN.
+- Fat buttons, phone-sized, thumb-friendly.
+- Theme: **Pinnacle brand** (default, purple/charcoal/beige from the live site) or **Halloween party** (Ron toggles this; it is saved and does not follow the calendar).
+- Each slot: Pinnacle Group logo, Entertainment Center logo, **photo collage** (arcade / bar / pool as small framed tiles — not stretched fullscreen), leaderboard, or black.
+- Named events, typed-in scores, clear board. PIN default `1234`. Displays do not use the PIN.
 
-Change the PIN or port in `config.json`:
-
-```json
-{
-  "port": 3000,
-  "pin": "1234"
-}
-```
-
-You can also override with environment variables: `PORT` and `CONTROL_PIN`.
+Change PIN or port in `config.json` (`PORT` and `CONTROL_PIN` also work).
 
 ## Logos and venue photos
 
-Artwork lives in `public/logos/` and `public/photos/`, taken from Pinnacle Group Financial Services / Pinnacle Entertainment Center branding:
+From [Pinnacle Group Financial Services](https://www.pinnaclegroupfinancial.com/) and [Pinnacle Entertainment Center](https://www.pinnaclegroupfinancial.com/pinnacle-entertainment-center):
 
-- `public/logos/pinnacle.png` — Pinnacle Group Financial Services
-- `public/logos/pinball-land.png` — Pinnacle Entertainment Center
-- `public/photos/arcade.jpg` — pinball arcade
-- `public/photos/bar.jpg` — indoor bar / lounge
-- `public/photos/pool.png` — outdoor pool
+- `public/logos/pinnacle.png`
+- `public/logos/pinball-land.png`
+- `public/photos/arcade.jpg`, `bar.jpg`, `pool.png`
 
-Each TV slot can show either logo, any venue photo, a leaderboard, or black. To swap in higher-resolution files later, drop replacements with those same names (`png`, `jpg`, or `webp`). See `public/logos/REPLACE_THESE.txt` and `public/photos/REPLACE_THESE.txt`. Refresh the display pages after replacing a file.
+Logos stay large and contained. Photos only appear as a collage of small frames on the brand background (the files are too low-res for a 55" TV edge-to-edge). Drop in higher-res files with the same names anytime.
 
 ## Persistence
 
-Current slot assignments and leaderboards are saved to `data/state.json`. A browser refresh or an `npm start` restart keeps the same boards and screen assignments.
+Slot assignments, theme, and leaderboards save to `data/state.json`. Refresh and restart keep them.
 
-## Out of scope (on purpose)
+## Out of scope
 
-No serial/RS232, no BenQ-specific control, no Home Assistant, no smart plugs, no live pinball machine scores, and no animations.
+No serial/RS232, no BenQ serial control, no Home Assistant, no smart plugs, no live pinball scores, no animations.

@@ -1,8 +1,7 @@
-Venue photos for the TV slots. Current files:
+Venue photos for the collage slot (small framed tiles, never fullscreen).
 
   arcade.jpg    pinball arcade
   bar.jpg       indoor bar / lounge
-  pool.png      outdoor pool and waterfalls
+  pool.png      outdoor pool
 
-Drop in higher-resolution versions with the same names (png, jpg, or webp)
-when you have them. No code change needed.
+Drop in higher-resolution versions with the same names when you have them.

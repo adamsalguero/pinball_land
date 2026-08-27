@@ -23,11 +23,9 @@ const CONTENT_GROUPS = [
     ],
   },
   {
-    label: "Venue photos",
+    label: "Venue",
     options: [
-      { id: "arcade", label: "Arcade" },
-      { id: "bar", label: "Bar" },
-      { id: "pool", label: "Pool" },
+      { id: "photos", label: "Photo collage" },
     ],
   },
   {
@@ -76,8 +74,24 @@ function applyPayload(payload) {
   render();
 }
 
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === "halloween" ? "halloween" : "pinnacle";
+  const pinnacleBtn = document.getElementById("theme-pinnacle");
+  const halloweenBtn = document.getElementById("theme-halloween");
+  if (!pinnacleBtn || !halloweenBtn) return;
+  pinnacleBtn.classList.toggle("active", theme !== "halloween");
+  halloweenBtn.classList.toggle("active", theme === "halloween");
+}
+
 function selectedBoard() {
   return current.state.leaderboards.find((board) => board.id === selectedBoardId) || null;
+}
+
+function isSlotActive(content, optionId) {
+  if (optionId === "photos") {
+    return ["photos", "arcade", "bar", "pool", "collage", "venue"].includes(content);
+  }
+  return content === optionId;
 }
 
 function renderSlots() {
@@ -102,7 +116,7 @@ function renderSlots() {
       for (const option of group.options) {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = `btn${slot.content === option.id ? " active" : ""}`;
+        button.className = `btn${isSlotActive(slot.content, option.id) ? " active" : ""}`;
         button.textContent = option.label;
         button.addEventListener("click", async () => {
           const patch = { content: option.id };
@@ -287,6 +301,7 @@ function renderBoardEditor() {
 }
 
 function render() {
+  applyTheme(current.state?.theme);
   renderSlots();
   renderBoardSelect();
   renderBoardEditor();
@@ -326,6 +341,15 @@ document.getElementById("logout").addEventListener("click", async () => {
 document.getElementById("off-all").addEventListener("click", async () => {
   applyPayload(await api("/api/off", { method: "POST" }));
   toast("All screens black");
+});
+
+document.getElementById("theme-pinnacle").addEventListener("click", async () => {
+  applyPayload(await api("/api/theme", { method: "PUT", body: { theme: "pinnacle" } }));
+});
+
+document.getElementById("theme-halloween").addEventListener("click", async () => {
+  applyPayload(await api("/api/theme", { method: "PUT", body: { theme: "halloween" } }));
+  toast("Halloween theme on");
 });
 
 document.getElementById("new-board").addEventListener("click", async () => {

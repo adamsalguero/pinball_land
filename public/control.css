@@ -1,13 +1,37 @@
 :root {
   color-scheme: dark;
-  --bg: #110812;
-  --card: #1c101f;
-  --line: #3a243f;
-  --text: #f7f1e8;
-  --muted: #c3b7b0;
-  --gold: #ffd24a;
-  --pink: #ff3d8a;
-  --cyan: #3df0ff;
+  --purple: #62006e;
+  --lavender: #a269a9;
+  --charcoal: #504e50;
+  --ink: #1a1916;
+  --beige: #f8f8f5;
+  --stone: #d8d8d6;
+  --forest: #2d4c32;
+  --bg: #1a1916;
+  --card: #2a222c;
+  --line: #504e50;
+  --text: #f8f8f5;
+  --muted: #d8d8d6;
+  --accent: #a269a9;
+  --danger: #9b2d4a;
+  --active: #a269a9;
+  --active-text: #f8f8f5;
+  --primary: #a269a9;
+  --primary-text: #f8f8f5;
+}
+
+[data-theme="halloween"] {
+  --bg: #120800;
+  --card: #241208;
+  --line: #5a2a10;
+  --text: #fff1d6;
+  --muted: #d9a066;
+  --accent: #ff7a18;
+  --danger: #c2410c;
+  --active: #ff7a18;
+  --active-text: #1a0a00;
+  --primary: #ff7a18;
+  --primary-text: #1a0a00;
 }
 
 * {
@@ -35,7 +59,7 @@ body {
 
 .eyebrow {
   margin: 0;
-  color: var(--gold);
+  color: var(--accent);
   letter-spacing: 0.28em;
   text-transform: uppercase;
   font-size: 12px;
@@ -106,7 +130,7 @@ select {
   min-height: 52px;
   border-radius: 14px;
   border: 1px solid var(--line);
-  background: #0d070f;
+  background: var(--ink);
   color: var(--text);
   padding: 12px 14px;
   font-size: 18px;
@@ -116,7 +140,7 @@ select {
   min-height: 52px;
   border: 0;
   border-radius: 14px;
-  background: #3a243f;
+  background: #3a3338;
   color: var(--text);
   font-size: 17px;
   font-weight: 700;
@@ -129,13 +153,13 @@ select {
 }
 
 .btn.primary {
-  background: var(--gold);
-  color: #1a1200;
+  background: var(--primary);
+  color: var(--primary-text);
 }
 
 .btn.danger {
-  background: var(--pink);
-  color: #1a0010;
+  background: var(--danger);
+  color: #fff;
 }
 
 .btn.ghost {
@@ -157,14 +181,18 @@ select {
 }
 
 .btn.active {
-  background: var(--cyan);
-  color: #04181c;
+  background: var(--active);
+  color: var(--active-text);
 }
 
 .choices {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.choices:has(> :only-child) {
+  grid-template-columns: 1fr;
 }
 
 .row-actions {
@@ -194,7 +222,7 @@ select {
 }
 
 .error {
-  color: #ff8aa8;
+  color: #e8a0b4;
   margin: 0;
 }
 
@@ -203,8 +231,8 @@ select {
   left: 50%;
   bottom: 24px;
   transform: translateX(-50%);
-  background: #fff;
-  color: #110812;
+  background: var(--beige);
+  color: var(--ink);
   padding: 12px 16px;
   border-radius: 999px;
   font-weight: 700;
@@ -229,4 +257,11 @@ select {
   display: grid;
   gap: 8px;
   margin-top: 8px;
+}
+
+.theme-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
 }

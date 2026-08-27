@@ -3,7 +3,9 @@ const path = require("path");
 const crypto = require("crypto");
 
 const SLOT_IDS = ["1", "2", "3"];
-const CONTENTS = ["pinnacle", "pinball-land", "arcade", "bar", "pool", "leaderboard", "off"];
+const CONTENTS = ["pinnacle", "pinball-land", "photos", "leaderboard", "off"];
+const THEMES = ["pinnacle", "halloween"];
+const LEGACY_PHOTO_CONTENTS = ["arcade", "bar", "pool", "collage", "venue"];
 
 function id() {
   return crypto.randomUUID();
@@ -16,6 +18,7 @@ function clone(value) {
 function defaultState() {
   const halloweenId = id();
   return {
+    theme: "pinnacle",
     slots: {
       1: { content: "pinnacle", leaderboardId: halloweenId },
       2: { content: "pinball-land", leaderboardId: halloweenId },
@@ -58,8 +61,19 @@ function normalizeLeaderboard(board) {
   };
 }
 
+function normalizeContent(content) {
+  if (LEGACY_PHOTO_CONTENTS.includes(content)) {
+    return "photos";
+  }
+  return CONTENTS.includes(content) ? content : "off";
+}
+
+function normalizeTheme(theme) {
+  return THEMES.includes(theme) ? theme : "pinnacle";
+}
+
 function normalizeSlot(slot, fallbackLeaderboardId) {
-  const content = CONTENTS.includes(slot?.content) ? slot.content : "off";
+  const content = normalizeContent(slot?.content);
   const leaderboardId =
     typeof slot?.leaderboardId === "string" && slot.leaderboardId
       ? slot.leaderboardId
@@ -78,7 +92,11 @@ function normalizeState(raw) {
   for (const slotId of SLOT_IDS) {
     slots[slotId] = normalizeSlot(incoming.slots?.[slotId] || seeded.slots[slotId], fallbackId);
   }
-  return { slots, leaderboards };
+  return {
+    theme: normalizeTheme(incoming.theme ?? seeded.theme),
+    slots,
+    leaderboards,
+  };
 }
 
 class Store {
@@ -160,6 +178,14 @@ class Store {
     for (const slotId of SLOT_IDS) {
       this.state.slots[slotId].content = "off";
     }
+    return this.commit();
+  }
+
+  async setTheme(theme) {
+    if (!THEMES.includes(theme)) {
+      throw Object.assign(new Error("theme must be pinnacle or halloween"), { status: 400 });
+    }
+    this.state.theme = theme;
     return this.commit();
   }
 
@@ -274,6 +300,10 @@ module.exports = {
   Store,
   SLOT_IDS,
   CONTENTS,
+  THEMES,
+  LEGACY_PHOTO_CONTENTS,
   defaultState,
   normalizeState,
+  normalizeContent,
+  normalizeTheme,
 };

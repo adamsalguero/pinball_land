@@ -124,6 +124,15 @@ function createApp({ store, pin, publicDir, logosDir, photosDir }) {
     }
   });
 
+  app.put("/api/theme", requirePin, async (req, res, next) => {
+    try {
+      await store.setTheme(req.body?.theme);
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post("/api/leaderboards", requirePin, async (req, res, next) => {
     try {
       await store.createLeaderboard(req.body?.name);
