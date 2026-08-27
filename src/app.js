@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const path = require("path");
 const express = require("express");
 const { WebSocketServer } = require("ws");
-const { resolveLogos, KEYS } = require("./logos");
+const { resolveLogos, resolvePhotos, LOGO_KEYS, PHOTO_KEYS } = require("./logos");
 
 const COOKIE_NAME = "pl_session";
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -29,21 +29,26 @@ function sendJson(res, status, body) {
   res.status(status).json(body);
 }
 
-function createApp({ store, pin, publicDir, logosDir }) {
+function createApp({ store, pin, publicDir, logosDir, photosDir }) {
   const app = express();
   const sessions = new Set();
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "200kb" }));
 
+  function urlsFor(resolved) {
+    const urls = {};
+    for (const [key, value] of Object.entries(resolved)) {
+      urls[key] = value.url;
+    }
+    return urls;
+  }
+
   function payload() {
-    const logos = resolveLogos(logosDir);
     return {
       state: store.getState(),
-      logos: {
-        pinnacle: logos.pinnacle.url,
-        "pinball-land": logos["pinball-land"].url,
-      },
+      logos: urlsFor(resolveLogos(logosDir)),
+      photos: urlsFor(resolvePhotos(photosDir)),
     };
   }
 
@@ -197,17 +202,30 @@ function createApp({ store, pin, publicDir, logosDir }) {
     }
   });
 
-  app.get("/logos/:key", (req, res) => {
-    if (!KEYS.includes(req.params.key)) {
-      return res.status(404).send("Unknown logo");
+  function sendMedia(res, resolved, key, kind) {
+    if (!resolved[key]) {
+      return res.status(404).send(`Unknown ${kind}`);
     }
-    const logos = resolveLogos(logosDir);
-    const filePath = logos[req.params.key].filePath;
+    const filePath = resolved[key].filePath;
     if (!filePath) {
-      return res.status(404).send("Logo file not found");
+      return res.status(404).send(`${kind} file not found`);
     }
     res.setHeader("Cache-Control", "no-store");
     res.sendFile(filePath);
+  }
+
+  app.get("/logos/:key", (req, res) => {
+    if (!LOGO_KEYS.includes(req.params.key)) {
+      return res.status(404).send("Unknown logo");
+    }
+    sendMedia(res, resolveLogos(logosDir), req.params.key, "Logo");
+  });
+
+  app.get("/photos/:key", (req, res) => {
+    if (!PHOTO_KEYS.includes(req.params.key)) {
+      return res.status(404).send("Unknown photo");
+    }
+    sendMedia(res, resolvePhotos(photosDir), req.params.key, "Photo");
   });
 
   app.get("/display/:slot", (req, res) => {

@@ -57,7 +57,7 @@ chrome --kiosk http://localhost:3000/display/1
 2. Run `npm start` on the mini PC.
 3. Open `/display/1`, `/display/2`, and `/display/3` fullscreen on the matching TVs.
 4. On the iPad or phone (same WiFi), open the printed `http://<lan-ip>:3000/` URL.
-5. Unlock with the PIN. Assign each slot: Pinnacle Group, Entertainment Center, a leaderboard, or black.
+5. Unlock with the PIN. Assign each slot: Pinnacle Group, Entertainment Center, Arcade / Bar / Pool photos, a leaderboard, or black.
 6. **Off — black all screens** sets every slot to black immediately. Displays update live; they do not need a refresh.
 
 If the phone cannot load the page: confirm it is on the same WiFi, use the printed LAN IP (not localhost), and allow Node / port 3000 through the PC firewall if Windows asks.
@@ -82,14 +82,17 @@ Change the PIN or port in `config.json`:
 
 You can also override with environment variables: `PORT` and `CONTROL_PIN`.
 
-## Logos
+## Logos and venue photos
 
-Current artwork lives in `public/logos/`:
+Artwork lives in `public/logos/` and `public/photos/`, taken from Pinnacle Group Financial Services / Pinnacle Entertainment Center branding:
 
-- `pinnacle.png` — Pinnacle Group Financial Services
-- `pinball-land.png` — Pinnacle Entertainment Center (the venue brand on [Ron’s site](https://www.pinnaclegroupfinancial.com/pinnacle-entertainment-center))
+- `public/logos/pinnacle.png` — Pinnacle Group Financial Services
+- `public/logos/pinball-land.png` — Pinnacle Entertainment Center
+- `public/photos/arcade.jpg` — pinball arcade
+- `public/photos/bar.jpg` — indoor bar / lounge
+- `public/photos/pool.png` — outdoor pool
 
-To swap in higher-resolution files later, drop replacements with those same names (`png`, `jpg`, or `webp`). The server prefers raster files over the SVG stand-ins. See `public/logos/REPLACE_THESE.txt`. Refresh the display pages after replacing a file.
+Each TV slot can show either logo, any venue photo, a leaderboard, or black. To swap in higher-resolution files later, drop replacements with those same names (`png`, `jpg`, or `webp`). See `public/logos/REPLACE_THESE.txt` and `public/photos/REPLACE_THESE.txt`. Refresh the display pages after replacing a file.
 
 ## Persistence
 

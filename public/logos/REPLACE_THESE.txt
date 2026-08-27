@@ -1,12 +1,10 @@
 Logos currently in this folder:
 
   pinnacle.png          Pinnacle Group Financial Services
-                        (from pinnaclegroupfinancial.com)
   pinball-land.png      Pinnacle Entertainment Center
-                        (Pinball Land's public venue brand)
 
-To replace them, drop new files with those same names. PNG/JPG/WebP
-is preferred; the server picks png, then jpg, then webp, then the
-SVG fallbacks. No code change needed if you keep the filenames.
+These are the real marks. Drop in higher-resolution files with the same
+names anytime. PNG/JPG/WebP is preferred; the server picks png, then jpg,
+then webp, then the SVG fallbacks. No code change needed.
 
 The .svg files are labeled stand-ins used only if a PNG/JPG is missing.

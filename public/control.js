@@ -14,11 +14,29 @@ const SLOT_META = [
   { id: "3", label: "Right" },
 ];
 
-const CONTENT = [
-  { id: "pinnacle", label: "Pinnacle Group" },
-  { id: "pinball-land", label: "Entertainment Center" },
-  { id: "leaderboard", label: "Leaderboard" },
-  { id: "off", label: "Black" },
+const CONTENT_GROUPS = [
+  {
+    label: "Brand",
+    options: [
+      { id: "pinnacle", label: "Pinnacle Group" },
+      { id: "pinball-land", label: "Entertainment Center" },
+    ],
+  },
+  {
+    label: "Venue photos",
+    options: [
+      { id: "arcade", label: "Arcade" },
+      { id: "bar", label: "Bar" },
+      { id: "pool", label: "Pool" },
+    ],
+  },
+  {
+    label: "Show",
+    options: [
+      { id: "leaderboard", label: "Leaderboard" },
+      { id: "off", label: "Black" },
+    ],
+  },
 ];
 
 let current = { state: { slots: {}, leaderboards: [] }, logos: {} };
@@ -74,23 +92,29 @@ function renderSlots() {
     title.textContent = meta.label;
     card.append(title);
 
-    const choices = document.createElement("div");
-    choices.className = "choices";
-    for (const option of CONTENT) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `btn${slot.content === option.id ? " active" : ""}`;
-      button.textContent = option.label;
-      button.addEventListener("click", async () => {
-        const patch = { content: option.id };
-        if (option.id === "leaderboard" && selectedBoardId) {
-          patch.leaderboardId = selectedBoardId;
-        }
-        applyPayload(await api(`/api/slots/${meta.id}`, { method: "PUT", body: patch }));
-      });
-      choices.append(button);
+    for (const group of CONTENT_GROUPS) {
+      const heading = document.createElement("p");
+      heading.className = "choice-heading";
+      heading.textContent = group.label;
+      card.append(heading);
+      const choices = document.createElement("div");
+      choices.className = "choices";
+      for (const option of group.options) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `btn${slot.content === option.id ? " active" : ""}`;
+        button.textContent = option.label;
+        button.addEventListener("click", async () => {
+          const patch = { content: option.id };
+          if (option.id === "leaderboard" && selectedBoardId) {
+            patch.leaderboardId = selectedBoardId;
+          }
+          applyPayload(await api(`/api/slots/${meta.id}`, { method: "PUT", body: patch }));
+        });
+        choices.append(button);
+      }
+      card.append(choices);
     }
-    card.append(choices);
 
     const pickerLabel = document.createElement("label");
     pickerLabel.textContent = "Event on this screen";

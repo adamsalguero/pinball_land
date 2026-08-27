@@ -67,6 +67,17 @@ body,
   background: #000;
 }
 
+.photo-panel {
+  display: grid;
+  background: #000;
+}
+
+.photo-panel img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .board-panel {
   display: flex;
   flex-direction: column;

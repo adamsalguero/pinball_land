@@ -1,0 +1,8 @@
+Venue photos for the TV slots. Current files:
+
+  arcade.jpg    pinball arcade
+  bar.jpg       indoor bar / lounge
+  pool.png      outdoor pool and waterfalls
+
+Drop in higher-resolution versions with the same names (png, jpg, or webp)
+when you have them. No code change needed.

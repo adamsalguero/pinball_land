@@ -17,6 +17,7 @@ async function startServer() {
     pin: "1234",
     publicDir: path.join(root, "public"),
     logosDir: path.join(root, "public", "logos"),
+    photosDir: path.join(root, "public", "photos"),
   });
   const server = http.createServer(app);
   attachWebSocket(server);
@@ -41,12 +42,15 @@ test("serves display and control pages", async () => {
     const control = await fetch(`${origin}/`);
     const display = await fetch(`${origin}/display/2`);
     const logo = await fetch(`${origin}/logos/pinnacle`);
+    const photo = await fetch(`${origin}/photos/arcade`);
     assert.equal(control.status, 200);
     assert.equal(display.status, 200);
     assert.equal(logo.status, 200);
+    assert.equal(photo.status, 200);
     assert.match(await control.text(), /Kiosk control/);
     assert.match(await display.text(), /Pinball Land display/);
     assert.match(logo.headers.get("content-type") || "", /image\/(png|svg\+xml)/);
+    assert.match(photo.headers.get("content-type") || "", /image\/jpeg/);
   } finally {
     server.close();
   }
@@ -89,6 +93,22 @@ test("PIN gates mutations; login cookie allows off and live WS update", async ()
     assert.equal(off.data.state.slots["2"].content, "off");
     assert.equal(off.data.state.slots["3"].content, "off");
     await wsState;
+  } finally {
+    server.close();
+  }
+});
+
+test("can switch a slot to a venue photo with the PIN header", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const headers = { "x-pin": "1234" };
+    const slot = await json(origin, "/api/slots/2", {
+      method: "PUT",
+      headers,
+      body: { content: "pool" },
+    });
+    assert.equal(slot.data.state.slots["2"].content, "pool");
+    assert.ok(slot.data.photos.pool);
   } finally {
     server.close();
   }

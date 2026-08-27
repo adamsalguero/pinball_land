@@ -3,7 +3,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const SLOT_IDS = ["1", "2", "3"];
-const CONTENTS = ["pinnacle", "pinball-land", "leaderboard", "off"];
+const CONTENTS = ["pinnacle", "pinball-land", "arcade", "bar", "pool", "leaderboard", "off"];
 
 function id() {
   return crypto.randomUUID();

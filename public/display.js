@@ -1,10 +1,18 @@
 const SLOT = location.pathname.split("/").pop();
 
+const PHOTO_LABELS = {
+  arcade: "Arcade",
+  bar: "Bar",
+  pool: "Pool",
+};
+
 const screen = document.getElementById("screen");
 const offPanel = document.getElementById("off");
 const logoPanel = document.getElementById("logo");
 const logoImage = document.getElementById("logo-image");
 const logoFallback = document.getElementById("logo-fallback");
+const photoPanel = document.getElementById("photo");
+const photoImage = document.getElementById("photo-image");
 const boardPanel = document.getElementById("board");
 const boardTitle = document.getElementById("board-title");
 const boardRows = document.getElementById("board-rows");
@@ -18,6 +26,7 @@ function setMode(mode) {
   screen.dataset.mode = mode;
   offPanel.hidden = mode !== "off";
   logoPanel.hidden = mode !== "logo";
+  photoPanel.hidden = mode !== "photo";
   boardPanel.hidden = mode !== "board";
 }
 
@@ -28,7 +37,7 @@ function showOff() {
 function showLogo(url, label) {
   setMode("logo");
   logoImage.alt = label;
-  logoFallback.textContent = `${label} placeholder — replace the file in public/logos`;
+  logoFallback.textContent = `${label} — add the file in public/logos`;
   if (url) {
     logoFallback.hidden = true;
     logoImage.hidden = false;
@@ -44,6 +53,17 @@ logoImage.addEventListener("error", () => {
   logoImage.hidden = true;
   logoFallback.hidden = false;
 });
+
+function showPhoto(url, label) {
+  setMode("photo");
+  photoImage.alt = label;
+  if (url) {
+    photoImage.src = url;
+  } else {
+    photoImage.removeAttribute("src");
+    showOff();
+  }
+}
 
 function showBoard(board) {
   setMode("board");
@@ -73,7 +93,7 @@ function showBoard(board) {
   });
 }
 
-function render({ state, logos }) {
+function render({ state, logos, photos }) {
   const slot = state.slots[SLOT];
   if (!slot || slot.content === "off") {
     showOff();
@@ -85,6 +105,10 @@ function render({ state, logos }) {
   }
   if (slot.content === "pinball-land") {
     showLogo(logos?.["pinball-land"], "Pinnacle Entertainment Center");
+    return;
+  }
+  if (PHOTO_LABELS[slot.content]) {
+    showPhoto(photos?.[slot.content], PHOTO_LABELS[slot.content]);
     return;
   }
   const board = (state.leaderboards || []).find((item) => item.id === slot.leaderboardId);

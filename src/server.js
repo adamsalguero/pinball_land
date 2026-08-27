@@ -14,6 +14,7 @@ async function main() {
     pin: config.pin,
     publicDir: path.join(root, "public"),
     logosDir: path.join(root, "public", "logos"),
+    photosDir: path.join(root, "public", "photos"),
   });
 
   const server = http.createServer(app);

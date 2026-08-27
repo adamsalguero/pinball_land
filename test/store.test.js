@@ -53,6 +53,13 @@ test("clear board and black-all persist", async () => {
   assert.equal(reloaded.getState().slots["3"].content, "off");
 });
 
+test("assigns a venue photo to a slot and reloads", async () => {
+  const store = await Store.load(filePath);
+  await store.setSlot("2", { content: "arcade" });
+  const reloaded = await Store.load(filePath);
+  assert.equal(reloaded.getState().slots["2"].content, "arcade");
+});
+
 test("delete and reorder rows", async () => {
   const store = await Store.load(filePath);
   const boardId = store.getState().leaderboards[0].id;
