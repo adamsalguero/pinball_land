@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1a1916" />
+    <title>Pinball Land control</title>
+    <link rel="stylesheet" href="/control.css" />
+  </head>
+  <body>
+    <div id="login" class="login">
+      <form id="login-form" class="login-card">
+        <p class="eyebrow">Pinball Land</p>
+        <h1>Kiosk control</h1>
+        <p class="hint">Enter the PIN to drive the screens. Default is 1234.</p>
+        <label>
+          PIN
+          <input id="pin-input" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="12" />
+        </label>
+        <button type="submit" class="btn primary">Unlock</button>
+        <p id="login-error" class="error" hidden>Wrong PIN</p>
+      </form>
+    </div>
+
+    <div id="app" hidden>
+      <header class="top">
+        <div>
+          <p class="eyebrow">Pinball Land</p>
+          <h1>Kiosk control</h1>
+        </div>
+        <button id="logout" class="btn ghost compact" type="button">Lock</button>
+      </header>
+
+      <button id="off-all" class="btn danger huge" type="button">Off — black all screens</button>
+
+      <section>
+        <h2>Theme</h2>
+        <p class="muted">Ron turns Halloween on from this iPad. It does not follow the calendar.</p>
+        <div class="theme-toggle">
+          <button id="theme-pinnacle" class="btn" type="button">Pinnacle brand</button>
+          <button id="theme-halloween" class="btn" type="button">Halloween party</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Wall rotation</h2>
+        <p class="muted">On by default. Every TV shares one playlist — Pinnacle Group logo, Entertainment Center logo, 2-story arcade, Outdoor Oasis, Flexible Event Options, and enabled leaderboards — staggered so neighbors are not on the same card.</p>
+        <div class="theme-toggle">
+          <button id="rotation-on" class="btn" type="button">Rotation on</button>
+          <button id="rotation-off" class="btn" type="button">Rotation off</button>
+        </div>
+        <label class="interval-label">
+          Seconds per card
+          <input id="interval" type="number" min="3" max="180" step="1" />
+        </label>
+        <p class="choice-heading">Include in the playlist</p>
+        <div id="rotation-items" class="toggle-stack"></div>
+      </section>
+
+      <section>
+        <h2>Pinball collection</h2>
+        <p id="opdb-help" class="muted"></p>
+        <label>
+          Search OPDB
+          <input id="machine-search" type="search" placeholder="The Addams Family" autocomplete="off" />
+        </label>
+        <div id="machine-results" class="stack"></div>
+        <form id="manual-machine" class="add-row">
+          <input id="manual-machine-name" placeholder="Add a machine by name" required />
+          <button class="btn primary" type="submit">Add to collection</button>
+        </form>
+      </section>
+
+      <section>
+        <h2>Leaderboards</h2>
+        <p class="muted">Event boards and each enabled machine. Toggle “On the wall” to include it in rotation.</p>
+        <div class="row-actions">
+          <select id="board-select" aria-label="Choose board"></select>
+          <button id="new-board" class="btn" type="button">New event</button>
+        </div>
+        <div id="board-editor" class="card"></div>
+      </section>
+
+      <section id="manual-screens">
+        <h2>Manual screens</h2>
+        <p class="muted">Used only while rotation is off. Assign each TV yourself.</p>
+        <div id="slots" class="stack"></div>
+      </section>
+    </div>
+
+    <p id="toast" class="toast" hidden></p>
+    <script src="/control.js"></script>
+  </body>
+</html>

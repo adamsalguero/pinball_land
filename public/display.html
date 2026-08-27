@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="pinnacle">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Pinball Land display</title>
+    <link rel="stylesheet" href="/display.css" />
+  </head>
+  <body>
+    <main id="screen" class="screen" data-mode="off" aria-live="polite">
+      <div id="off" class="panel off-panel" hidden></div>
+      <div id="logo" class="panel logo-panel" hidden>
+        <p id="logo-fallback" class="logo-fallback" hidden></p>
+        <img id="logo-image" alt="" hidden />
+      </div>
+      <div id="amenity" class="panel amenity-panel" hidden>
+        <p class="amenity-kicker">Pinnacle Entertainment Center</p>
+        <div class="amenity-layout">
+          <figure id="amenity-frame" class="amenity-frame" hidden>
+            <img id="amenity-photo" alt="" />
+          </figure>
+          <div class="amenity-copy">
+            <h1 id="amenity-headline"></h1>
+            <p id="amenity-body"></p>
+            <p id="amenity-types" class="amenity-types" hidden></p>
+          </div>
+        </div>
+      </div>
+      <div id="board" class="panel board-panel" hidden>
+        <div id="machine-art-wrap" class="machine-art-wrap" hidden>
+          <img id="machine-art" alt="" hidden />
+          <video id="machine-video" muted loop playsinline hidden></video>
+        </div>
+        <div class="board-main">
+          <header class="board-header">
+            <p class="board-kicker">Pinnacle Entertainment Center</p>
+            <h1 id="board-title">Leaderboard</h1>
+            <p id="board-meta" class="board-meta" hidden></p>
+          </header>
+          <ol id="board-rows" class="board-rows"></ol>
+          <p id="board-empty" class="board-empty" hidden>No scores yet</p>
+        </div>
+      </div>
+    </main>
+    <script src="/display.js"></script>
+  </body>
+</html>

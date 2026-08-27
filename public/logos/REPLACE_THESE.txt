@@ -1,0 +1,8 @@
+Logos currently in this folder:
+
+  pinnacle.svg          Pinnacle Group Financial Services (vector; lettering is paths)
+  pinball-land.svg      Pinnacle Entertainment Center hex lockup (vector; lettering is paths)
+  pinnacle.png          raster fallback
+  pinball-land.png      raster fallback
+
+Displays prefer the SVG. Drop in a revised SVG or PNG with the same name anytime.
