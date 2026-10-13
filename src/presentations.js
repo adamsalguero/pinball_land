@@ -56,7 +56,7 @@ class Presentations {
     return session;
   }
 
-  async start({ slot, source, url = null, file = null, idleMinutes, helper = null }) {
+  async start({ slot, source, url = null, file = null, idleMinutes, helper = null, hold = false }) {
     const slotId = String(slot);
     if (!["1", "2", "3"].includes(slotId)) {
       throw Object.assign(new Error("Unknown display"), { status: 404 });
@@ -88,6 +88,7 @@ class Presentations {
       startedAt: this.now(),
       lastActivityAt: this.now(),
       helper: helper || null,
+      hold: Boolean(hold),
     };
     this.sessions.set(slotId, session);
     this.byId.set(session.id, session);
@@ -116,6 +117,7 @@ class Presentations {
   async endExpired(now = this.now()) {
     const ended = [];
     for (const session of this.sessions.values()) {
+      if (session.hold) continue;
       const idleMs = session.idleMinutes * 60 * 1000;
       if (now - session.lastActivityAt >= idleMs) ended.push(session);
     }
@@ -217,6 +219,8 @@ class Presentations {
             ok: Boolean(session.helper.ok),
             error: session.helper.error || null,
             pid: session.helper.pid || null,
+            mirror: Boolean(session.helper.mirror),
+            capture: Boolean(session.helper.capture),
           }
         : null,
     };

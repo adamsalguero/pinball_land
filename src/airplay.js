@@ -19,20 +19,121 @@ function resolveAirplayCommand({
     return { ok: true, command: configured, source: "config" };
   }
 
-  const names = platform === "win32" ? ["uxplay.exe", "UxPlay.exe"] : ["uxplay"];
+  const names = platform === "win32"
+    ? ["uxplay.exe", "UxPlay.exe", "uxplay-windows.exe"]
+    : ["uxplay", "uxplay.exe"];
   const candidates = [];
   for (const name of names) {
     candidates.push(path.join(root, "tools", name));
     candidates.push(path.join(root, "tools", "uxplay", name));
+    candidates.push(path.join(root, "tools", "uxplay-windows", name));
   }
   for (const candidate of candidates) {
     if (exists(candidate)) return { ok: true, command: candidate, source: "tools" };
   }
+  const nested = findNestedUxplay(path.join(root, "tools", "uxplay-windows"), exists);
+  if (nested) return { ok: true, command: nested, source: "tools" };
   return {
     ok: false,
     error:
-      "UxPlay is not installed. Put uxplay.exe in tools\\ or set airplay.command in config.json. AirServer is the paid alternative. See PRESENTING.md.",
+      "UxPlay is not installed. Run scripts\\install-airplay-windows.ps1, or set airplay.command in config.json. See PRESENTING.md.",
   };
+}
+
+function findNestedUxplay(dir, exists, depth = 0) {
+  if (depth > 4 || !exists(dir)) return null;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const files = [];
+  const dirs = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) dirs.push(full);
+    else if (/^uxplay.*\.exe$/i.test(entry.name) && exists(full)) files.push(full);
+  }
+  files.sort();
+  if (files[0]) return files[0];
+  for (const child of dirs) {
+    const found = findNestedUxplay(child, exists, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+const AIRPLAY_TARGETS = ["off", "1", "2", "3", "all"];
+
+function normalizeAirplayTarget(value) {
+  const target = String(value || "off");
+  return AIRPLAY_TARGETS.includes(target) ? target : "off";
+}
+
+function interpretAirplayLog(line) {
+  const text = String(line || "");
+  if (/client disconnected|connection closed|stopped mirroring|mirroring stopped|teardown/i.test(text)) {
+    return "end";
+  }
+  if (/client connected|accepted connection|raop_rtp_mirror|mirror stream|beginning mirroring|mirroring started|connection established/i.test(text)) {
+    return "start";
+  }
+  return null;
+}
+
+class AirplaySession {
+  constructor({ endAfter = 3 } = {}) {
+    this.endAfter = endAfter;
+    this.active = false;
+    this.seenWaiting = false;
+    this.seenPlaced = false;
+    this.waitingStreak = 0;
+  }
+
+  reset() {
+    this.active = false;
+    this.seenWaiting = false;
+    this.seenPlaced = false;
+    this.waitingStreak = 0;
+  }
+
+  noteLog(line) {
+    const kind = interpretAirplayLog(line);
+    if (kind === "start") {
+      this.active = true;
+      this.waitingStreak = 0;
+      return "start";
+    }
+    if (kind === "end" && this.active) {
+      this.active = false;
+      this.seenPlaced = false;
+      this.waitingStreak = 0;
+      return "end";
+    }
+    return null;
+  }
+
+  noteProbe(placed) {
+    if (!placed) {
+      this.seenWaiting = true;
+      if (this.active && this.seenPlaced) {
+        this.waitingStreak += 1;
+        if (this.waitingStreak >= this.endAfter) {
+          this.active = false;
+          this.seenPlaced = false;
+          this.waitingStreak = 0;
+          return "end";
+        }
+      }
+      return null;
+    }
+    this.waitingStreak = 0;
+    this.seenPlaced = true;
+    if (!this.seenWaiting || this.active) return null;
+    this.active = true;
+    return "start";
+  }
 }
 
 function buildAirplayArgs({ windowTitle, bounds, extraArgs = [], platform = process.platform } = {}) {
@@ -117,6 +218,7 @@ class AirplayController {
     getAirplayConfig = () => ({}),
     exists = fs.existsSync,
     onExit = null,
+    onSession = null,
   } = {}) {
     if (!spawnImpl) throw new Error("spawnImpl is required");
     this.spawn = spawnImpl;
@@ -125,11 +227,17 @@ class AirplayController {
     this.getAirplayConfig = getAirplayConfig;
     this.exists = exists;
     this.onExit = onExit;
+    this.onSession = onSession;
     this.child = null;
     this.slot = null;
+    this.keepAlive = false;
+    this.restarts = 0;
+    this.logBuffer = "";
+    this.session = new AirplaySession();
   }
 
   start({ slot, bounds } = {}) {
+    this.keepAlive = false;
     this.stop();
     const airplay = this.getAirplayConfig() || {};
     const resolved = resolveAirplayCommand({
@@ -170,7 +278,102 @@ class AirplayController {
     return { ok: true, pid: child?.pid || null, command: resolved.command };
   }
 
+  ensureRunning({ bounds } = {}) {
+    this.keepAlive = true;
+    if (this.child) {
+      return { ok: true, pid: this.child.pid || null, already: true };
+    }
+    const airplay = this.getAirplayConfig() || {};
+    const resolved = resolveAirplayCommand({
+      command: airplay.command,
+      root: this.root,
+      exists: this.exists,
+      platform: this.platform,
+    });
+    if (!resolved.ok) return resolved;
+    const args = buildAirplayArgs({
+      windowTitle: airplay.windowTitle,
+      bounds,
+      extraArgs: airplay.args,
+      platform: this.platform,
+    });
+    return this.launch(resolved, args, null);
+  }
+
+  launch(resolved, args, slot) {
+    let child;
+    try {
+      child = this.spawn(resolved.command, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: false,
+      });
+    } catch (err) {
+      return { ok: false, error: err.message || "Could not start UxPlay" };
+    }
+    this.child = child;
+    this.slot = slot;
+    this.watchLogs(child);
+    const noteExit = (message) => {
+      if (this.child !== child) return;
+      this.child = null;
+      const exitedSlot = this.slot;
+      this.slot = null;
+      const wasActive = this.session.active;
+      this.session.reset();
+      if (wasActive && this.onSession) this.onSession("end", false);
+      if (this.onExit && exitedSlot) this.onExit(exitedSlot, message);
+      if (this.keepAlive && this.restarts < 5) {
+        this.restarts += 1;
+        const timer = setTimeout(() => {
+          if (this.keepAlive && !this.child) this.ensureRunning();
+        }, 2000);
+        if (typeof timer.unref === "function") timer.unref();
+      }
+    };
+    if (child && typeof child.on === "function") {
+      child.on("error", (err) => noteExit(err.message || "UxPlay failed to start"));
+      child.on("exit", (code) => noteExit(`UxPlay exited (${code})`));
+    }
+    return { ok: true, pid: child?.pid || null, command: resolved.command };
+  }
+
+  watchLogs(child) {
+    const feed = (chunk) => {
+      this.logBuffer += String(chunk);
+      let splitAt = this.logBuffer.search(/\r?\n/);
+      while (splitAt !== -1) {
+        const line = this.logBuffer.slice(0, splitAt);
+        this.logBuffer = this.logBuffer.slice(splitAt).replace(/^\r?\n/, "");
+        this.consumeLog(line);
+        splitAt = this.logBuffer.search(/\r?\n/);
+      }
+    };
+    if (child?.stdout && typeof child.stdout.on === "function") child.stdout.on("data", feed);
+    if (child?.stderr && typeof child.stderr.on === "function") child.stderr.on("data", feed);
+  }
+
+  consumeLog(line) {
+    const event = this.session.noteLog(line);
+    if (event && this.onSession) this.onSession(event, this.session.active);
+    return event;
+  }
+
+  noteProbe(placed, { notify = true } = {}) {
+    const event = this.session.noteProbe(Boolean(placed));
+    if (event && notify && this.onSession) this.onSession(event, this.session.active);
+    return event;
+  }
+
+  isActive() {
+    return this.session.active;
+  }
+
+  pid() {
+    return this.child?.pid || null;
+  }
+
   stop() {
+    this.keepAlive = false;
     const child = this.child;
     this.child = null;
     this.slot = null;
@@ -204,5 +407,9 @@ module.exports = {
   resolveAirplayCommand,
   buildAirplayArgs,
   buildPlacementScript,
+  interpretAirplayLog,
+  normalizeAirplayTarget,
+  AIRPLAY_TARGETS,
+  AirplaySession,
   AirplayController,
 };

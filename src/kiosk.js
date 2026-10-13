@@ -1,4 +1,8 @@
-const { app, BrowserWindow, screen } = require("electron");
+const { app, BrowserWindow, screen, session, desktopCapturer } = require("electron");
+
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 const { spawn } = require("child_process");
 const path = require("path");
 const { loadConfig } = require("./config");
@@ -17,6 +21,7 @@ let displaysConfig = null;
 const windows = new Map();
 let pollTimer = null;
 let placing = false;
+let captureDisplayId = null;
 
 function closeWindows() {
   for (const win of windows.values()) {
@@ -90,31 +95,65 @@ function runPlacement(pid, bounds) {
   });
 }
 
-async function placeAirplay(presentations) {
-  if (placing) return;
+function installCaptureHandler() {
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: { width: 0, height: 0 },
+      });
+      const wanted = captureDisplayId == null ? "" : String(captureDisplayId);
+      const source = sources.find((item) => String(item.display_id) === wanted) || sources[0];
+      if (!source) {
+        callback({});
+        return;
+      }
+      callback({ video: source });
+    } catch (err) {
+      console.error(err);
+      callback({});
+    }
+  });
+}
+
+async function placeAirplay(data) {
+  if (placing) return data;
   placing = true;
   try {
     const mapped = mapDisplaysToSlots(screen.getAllDisplays(), displaysConfig || {});
+    const target = data.airplay?.target || "off";
+    const pid = data.airplay?.pid;
+    const primary = data.airplay?.primarySlot;
+    let placed = false;
+    if (pid && target !== "off" && primary && process.platform === "win32") {
+      const item = mapped.windows.find((entry) => String(entry.slot) === String(primary));
+      if (item) {
+        captureDisplayId = item.id;
+        placed = await runPlacement(pid, item.bounds);
+      }
+    }
+    if (process.platform === "win32" && pid) {
+      await fetch(`http://127.0.0.1:${port}/api/airplay/probe`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ placed }),
+      }).catch(() => {});
+      const res = await fetch(`http://127.0.0.1:${port}/api/state`);
+      if (res.ok) data = await res.json();
+    }
     for (const item of mapped.windows) {
-      const session = presentations?.[String(item.slot)];
       const win = windows.get(item.slot);
-      const airplay = session?.source === "airplay" && session.helper?.ok && session.helper?.pid;
-      if (!airplay) {
-        if (win && !win.isDestroyed() && !win.isVisible()) {
-          win.show();
-          win.setFullScreen(true);
-        }
-        continue;
-      }
-      const placed = await runPlacement(session.helper.pid, item.bounds);
-      if (placed && win && !win.isDestroyed() && win.isVisible()) {
-        win.hide();
-      }
-      if (!placed && win && !win.isDestroyed() && !win.isVisible()) {
+      if (!win || win.isDestroyed()) continue;
+      const session = data.presentations?.[String(item.slot)];
+      const native = session?.source === "airplay" && session.helper?.capture !== true && String(item.slot) === String(data.airplay?.primarySlot);
+      if (native && placed) {
+        if (win.isVisible()) win.hide();
+      } else if (!win.isVisible()) {
         win.show();
         win.setFullScreen(true);
       }
     }
+    return data;
   } finally {
     placing = false;
   }
@@ -146,7 +185,7 @@ async function refreshKiosk() {
     layoutKey = signature;
     openDisplayWindows();
   }
-  await placeAirplay(data.presentations);
+  await placeAirplay(data);
   await reportMonitors();
 }
 
@@ -183,6 +222,7 @@ function scheduleRefresh() {
 }
 
 async function boot() {
+  installCaptureHandler();
   port = await ensureServer();
   await waitForHealth(port);
   await refreshKiosk();

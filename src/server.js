@@ -86,6 +86,8 @@ async function startServer() {
     opdbApiKey: config.opdbApiKey,
     cacheDir: path.join(root, "data", "opdb"),
     uploadsDir: path.join(root, "data", "uploads"),
+    mediaDir: path.join(root, "media"),
+    mediaCatalog: path.join(root, "data", "media-library.json"),
     configStore,
     isHttpsReady: () => httpsReady,
   });

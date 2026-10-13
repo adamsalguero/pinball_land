@@ -83,7 +83,7 @@ No Assigned Access / Windows Kiosk Mode is required.
    netsh advfirewall firewall add rule name="Pinball Land browser share" dir=in action=allow protocol=TCP localport=3443
    ```
 
-   AirPlay also needs the UxPlay program allowed on private networks the first time it runs. Details are in [PRESENTING.md](PRESENTING.md).
+   AirPlay also needs UxPlay allowed on private networks the first time it runs. Install it with `scripts\install-airplay-windows.ps1` (Administrator PowerShell). Details are in [PRESENTING.md](PRESENTING.md).
 
 9. Tests:
    - Sign out and back in: kiosk windows should appear without clicking anything.
@@ -122,7 +122,28 @@ Saved in `config.json` under `displays` (and `presentation.idleMinutes`). If Win
 
 ---
 
-## 6. Presenting on one screen
+## 6. TV power (Kasa plugs)
+
+The control page **Smart plugs** section uses `tplink-smarthome-api` on the local network. It does not use a TP-Link cloud account.
+
+1. Plug each **TV** into its own Kasa plug. **Never put the wall PC on a smart plug.** If that plug turns off, the kiosk dies and nothing can turn it back on from the iPad.
+2. On each BenQ, OSD → **System** (or **Setup**) → **Switch on state** = **On**. The panel then powers on when the plug restores AC. Without that, the plug can be “on” while the TV stays in standby.
+3. On the iPad, tap **Find plugs**, then assign one plug to display 1, 2, and 3. Each plug can only belong to one screen.
+4. **On** / **Off** under a screen switches that plug and shows On, Off, or — if the plug has not answered yet. **All on** / **All off** hit every assigned plug.
+5. Optional schedule, for example on at `10:00` and off at `22:00`. The PC clock is the clock that matters. An overnight window (on `22:00`, off `02:00`) is allowed. The schedule applies the current open/closed state, then again when the window changes.
+
+Home testing has no plugs. The buttons talk to whatever is on the LAN; the automated tests use a fake client and do not scan the network.
+
+## 7. Videos and party themes
+
+Clips live in the `media\` folder (`library`, `halloween`, `christmas`). Upload from the iPad. Nothing in this repo is a movie or cartoon download. Legal places to get clips are in **[MEDIA.md](MEDIA.md)**.
+
+- **All-ages** is on by default. A clip marked not all-ages stays out of rotation and cannot be played until you turn All-ages off.
+- Halloween and Christmas themes add the matching folder (and matching tags) to the wall rotation. Pinnacle brand does not, unless you tap **Add to rotation** on that clip.
+- **Play here** uses the screen selected under Present. **Sync all** plays the same clip on every enabled TV, lined up on one clock. **Span all** stretches one picture across the wall, a slice per TV.
+- The kiosk asks Chromium for hardware H.264/HEVC decode. H.264 works on the SER5. HEVC may need the Microsoft **HEVC Video Extensions** from the Microsoft Store. Do not turn GPU acceleration off.
+
+## 8. Presenting on one screen
 
 Guests can take one TV for a presentation. The other TVs keep rotating. End it from the iPad, or it ends itself after the idle minutes (default 10). **Off** still blacks every screen.
 

@@ -1,3 +1,5 @@
+const { includeInRotation } = require("./media");
+
 const DEFAULT_INTERVAL_SEC = 14;
 
 const ROTATION_ITEM_IDS = [
@@ -35,7 +37,7 @@ function normalizeRotation(raw) {
   };
 }
 
-function buildPlaylist(state) {
+function buildPlaylist(state, options = {}) {
   const cards = [];
   const items = state?.rotation?.items || DEFAULT_ROTATION_ITEMS;
   if (items.logoPinnacle) {
@@ -57,6 +59,18 @@ function buildPlaylist(state) {
     if (board.inRotation) {
       cards.push({ type: "leaderboard", id: board.id });
     }
+  }
+  const videos = Array.isArray(options.videos) ? options.videos : [];
+  for (const video of videos) {
+    if (!includeInRotation(video, { theme: state?.theme, allAges: options.allAges !== false })) continue;
+    cards.push({
+      type: "video",
+      id: video.id,
+      url: video.url,
+      title: video.title,
+      loop: video.loop !== false,
+      mode: "card",
+    });
   }
   return cards;
 }

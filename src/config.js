@@ -2,6 +2,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const { normalizeDisplays } = require("./displays");
+const { normalizePlugs } = require("./plugs");
 
 const DEFAULTS = {
   port: 3000,
@@ -38,10 +39,19 @@ function parsePort(value, fallback, label, { allowZero = false } = {}) {
 function normalizeAirplay(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   const args = Array.isArray(incoming.args) ? incoming.args.map((item) => String(item)).filter(Boolean) : [];
+  const { normalizeAirplayTarget } = require("./airplay");
   return {
     command: String(incoming.command || "").trim(),
     args,
     windowTitle: String(incoming.windowTitle || "Pinball Land").trim() || "Pinball Land",
+    target: normalizeAirplayTarget(incoming.target),
+  };
+}
+
+function normalizeMediaSettings(raw) {
+  const incoming = raw && typeof raw === "object" ? raw : {};
+  return {
+    allAges: incoming.allAges !== false,
   };
 }
 
@@ -73,6 +83,8 @@ function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
     displays: normalizeDisplays(fileConfig.displays),
     presentation: normalizePresentation(fileConfig.presentation),
     airplay: normalizeAirplay(fileConfig.airplay),
+    plugs: normalizePlugs(fileConfig.plugs),
+    media: normalizeMediaSettings(fileConfig.media),
   };
 }
 
@@ -129,6 +141,19 @@ function createConfigStore(configPath) {
           ...patch.airplay,
         });
       }
+      if (patch.plugs) {
+        raw.plugs = normalizePlugs(patch.plugs);
+      } else if (!raw.plugs) {
+        raw.plugs = normalizePlugs(null);
+      }
+      if (patch.media) {
+        raw.media = normalizeMediaSettings({
+          ...normalizeMediaSettings(raw.media),
+          ...patch.media,
+        });
+      } else if (!raw.media) {
+        raw.media = normalizeMediaSettings(null);
+      }
       if (raw.port === undefined) raw.port = DEFAULTS.port;
       if (raw.pin === undefined) raw.pin = DEFAULTS.pin;
       if (raw.httpsPort === undefined) raw.httpsPort = DEFAULTS.httpsPort;
@@ -146,4 +171,5 @@ module.exports = {
   clampIdle,
   normalizeAirplay,
   normalizePresentation,
+  normalizeMediaSettings,
 };

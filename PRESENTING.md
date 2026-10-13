@@ -60,45 +60,46 @@ The laptop and the wall PC must be on the same WiFi. There is no internet relay.
 
 ## B. AirPlay (iPhone, iPad, Mac)
 
-Apple devices mirror with AirPlay. The wall PC runs **UxPlay**, a free AirPlay receiver, only while a presentation is active. The kiosk moves UxPlay’s video window onto the TV you picked and covers that TV. The instruction card stays up until the mirror actually connects.
+Apple devices mirror with AirPlay. The wall PC keeps **UxPlay** running, so the receiver is already on the network. You do not start it per guest.
 
 ### One-time setup on the wall PC (Windows 11)
 
-UxPlay does not ship as a signed Windows installer. You build it, or you buy AirServer (below).
+Upstream [UxPlay](https://github.com/FDH2/UxPlay) does not publish a Windows exe. This project downloads the x64 build from [leapbtw/uxplay-windows 2.0.0.1736](https://github.com/leapbtw/uxplay-windows/releases/tag/2.0.0.1736) and Apple’s Bonjour Print Services installer. Both downloads are checked against SHA-256 before they are used. The ARM64 zip is not used.
 
-1. Install [Bonjour Print Services for Windows](https://support.apple.com/kb/DL999) (Apple’s Bonjour). Without it, iPhones often never see the receiver. If that download is gone, install Bonjour from the Apple Bonjour SDK or from iTunes; the service you need is the Bonjour service.
-2. Build UxPlay for Windows with MSYS2, following [UxPlay’s Windows instructions](https://github.com/FDH2/UxPlay) (the current tree is also at [antimof/UxPlay](https://github.com/antimof/UxPlay)). You want `uxplay.exe`.
-3. Copy `uxplay.exe` to `C:\pinball-land\tools\uxplay.exe` (same folder as this project, under `tools`).
-4. Or set the full path in `config.json`:
+In an **Administrator** PowerShell, from the project folder:
 
-   ```json
-   "airplay": {
-     "command": "C:\\pinball-land\\tools\\uxplay.exe",
-     "args": [],
-     "windowTitle": "Pinball Land"
-   }
-   ```
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-airplay-windows.ps1
+```
 
-   Extra flags in `args` are added after the ones the kiosk already passes (`-n`, `-nh`, `-s`, and on Windows `-vs d3d11videosink`). Do not add `-fs`. The kiosk places the window itself. Fullscreen mode sticks to the primary monitor.
-5. First launch: when Windows Firewall asks, allow **uxplay.exe** on **private** networks. AirPlay uses Bonjour (UDP 5353) plus the ports UxPlay opens (TCP 7000 and nearby UDP ports).
-6. Restart the kiosk (`npm run kiosk`). The iPad’s Present section stops saying the helper is missing.
+That script:
 
-The name iPhones see is **Pinball Land** (`airplay.windowTitle`).
+1. Downloads `uxplay-windows.zip` and checks SHA-256 `9d3a51c15fc9db857351195e7eb7bbb21700d9ae25d936a54bcf8536b62cca18`.
+2. Unpacks it to `tools\uxplay-windows\`. The kiosk finds `uxplay*.exe` there on its own.
+3. Downloads [Bonjour Print Services 2.0.2](https://download.info.apple.com/Mac_OS_X/061-8098.20100603.gthyu/BonjourPSSetup.exe) (Apple’s page: [Bonjour Print Services for Windows](https://support.apple.com/en-us/106380)) and checks SHA-256 `7f1ec347cd429cfb25a34b2147e02231334f28290e0c28be213415b0f99da1a0`.
+4. Installs Bonjour quietly if the window is elevated.
+
+The 2.0 build also bundles mDNSResponder, so an iPhone can still see the receiver if Bonjour’s installer complains. Install Bonjour anyway. The exe is unsigned: if SmartScreen appears, choose **More info**, then **Run anyway**.
+
+Allow **uxplay** and **Node.js** on private networks when Windows Firewall asks. AirPlay uses Bonjour (UDP 5353) plus the ports UxPlay opens (TCP 7000 and nearby UDP).
+
+Restart the kiosk (`npm run kiosk`). The server starts UxPlay and leaves it running. The name iPhones see is **Pinball Land** (`airplay.windowTitle`).
+
+To point at a different exe, set `airplay.command` in `config.json`. Extra flags in `args` are added after `-n`, `-nh`, `-s`, and on Windows `-vs d3d11videosink`. Do not add `-fs`. Fullscreen mode sticks to the primary monitor. The kiosk moves the window itself.
 
 ### Each time an iPhone mirrors
 
-1. On the iPad, select the TV and tap **AirPlay**.
-2. The TV says to open Screen Mirroring and pick **Pinball Land**. If the helper is not installed, the TV says so instead of pretending it worked.
-3. On the iPhone or Mac: Control Center → **Screen Mirroring** → **Pinball Land**.
-4. When the picture connects, UxPlay’s window is moved onto that TV. The other TVs keep rotating.
-5. Only one AirPlay at a time. Starting it on a second TV moves it there.
-6. Tap **End presentation** on the iPad. That closes UxPlay and returns the TV to rotation.
+1. On the iPad, under **AirPlay**, tap the TV once: **Left**, **Center**, **Right**, or **All three**. **Off** clears the choice. That is the whole setup. The screens stay on rotation until a phone actually connects.
+2. On the iPhone or Mac: Control Center → **Screen Mirroring** → **Pinball Land**.
+3. The kiosk notices the session (UxPlay’s log, or the video window appearing after it had been absent). The chosen TV leaves rotation and shows the mirror. The other TVs keep rotating.
+4. **All three** is still one AirPlay session. UxPlay’s window goes on the left TV. The center and right TVs copy that screen. It is the same picture on each TV, not three separate receivers.
+5. When the phone stops mirroring, those TVs return to rotation. You can also tap **Off**, or **End presentation** if the mirror card is already up. UxPlay itself stays running for the next guest.
 
-If the video lands on the wrong monitor, set **Monitor order** under Displays so Left/Center/Right match the wall, then start AirPlay again.
+If the video lands on the wrong monitor, set **Monitor order** under Displays so Left/Center/Right match the wall, then tap the target again.
 
 ### Paid fallback: AirServer
 
-If building UxPlay is not worth it, [AirServer](https://www.airserver.com/) for Windows is the paid receiver. Install it, set its name to Pinball Land, and put its `.exe` in `airplay.command`. The kiosk launches that program and tries to place its largest window on the chosen TV. AirServer’s own display settings may also need “fullscreen on this monitor.” Test it once before a party. The kiosk does not include a license.
+[AirServer](https://www.airserver.com/) for Windows is the paid receiver. Install it, set its name to Pinball Land, and put its `.exe` in `airplay.command`. The kiosk launches that program and tries to place its largest window on the chosen TV. The kiosk does not include a license.
 
 ---
 

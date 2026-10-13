@@ -46,6 +46,21 @@
   --rank: #ff7a18;
   --line: rgba(255, 122, 24, 0.35);
   --lockup: #2a1408;
+  --purple: #ff7a18;
+}
+
+[data-theme="christmas"] {
+  --bg: #07140c;
+  --panel: #102016;
+  --text: #f4efe4;
+  --muted: #d4c4a8;
+  --accent: #c8102e;
+  --frame: #1f7a3a;
+  --kicker: #e8c872;
+  --rank: #e8c872;
+  --line: rgba(200, 16, 46, 0.45);
+  --lockup: #102016;
+  --purple: #1f7a3a;
 }
 
 * {
@@ -303,6 +318,43 @@ body,
 [data-theme="halloween"] .board-panel {
   background:
     radial-gradient(circle at 50% -20%, #4a1600 0%, #0b0704 55%);
+}
+
+[data-theme="christmas"] .amenity-panel,
+[data-theme="christmas"] .collage-panel {
+  background:
+    radial-gradient(circle at 50% 0%, #1a3d24 0%, #07140c 62%);
+}
+
+[data-theme="christmas"] .board-panel {
+  background:
+    radial-gradient(circle at 50% -20%, #3a1218 0%, #07140c 55%);
+}
+
+[data-theme="christmas"] .frame figcaption {
+  color: #e8c872;
+}
+
+.video-panel {
+  overflow: hidden;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.video-panel video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.video-panel video.span {
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  flex: none;
 }
 
 .board-header {

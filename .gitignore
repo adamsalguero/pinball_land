@@ -4,7 +4,16 @@ data/state.json.tmp
 data/opdb/
 data/certs/
 data/uploads/
+data/media-library.json
+data/media-library.json.tmp
 tools/*.exe
+tools/uxplay-windows/
+media/**
+!media/.gitkeep
+!media/halloween/
+!media/halloween/.gitkeep
+!media/christmas/
+!media/christmas/.gitkeep
 .DS_Store
 *.log
 .env

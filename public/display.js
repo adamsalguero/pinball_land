@@ -27,6 +27,8 @@ const presentInstructions = document.getElementById("present-instructions");
 const presentVideo = document.getElementById("present-video");
 const presentImage = document.getElementById("present-image");
 const presentFrame = document.getElementById("present-frame");
+const videoPanel = document.getElementById("video-panel");
+const wallVideo = document.getElementById("wall-video");
 
 let payload = null;
 let lastKey = "";
@@ -37,6 +39,8 @@ let signalChain = Promise.resolve();
 let shownPresentId = null;
 let shownPresentSource = null;
 let helloId = null;
+let mirrorId = null;
+let syncTimer = null;
 const pendingMessages = [];
 
 function formatScore(score) {
@@ -44,7 +48,7 @@ function formatScore(score) {
 }
 
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme === "halloween" ? "halloween" : "pinnacle";
+  document.documentElement.dataset.theme = theme === "halloween" || theme === "christmas" ? theme : "pinnacle";
 }
 
 function setMode(mode) {
@@ -54,6 +58,23 @@ function setMode(mode) {
   amenityPanel.hidden = mode !== "amenity";
   boardPanel.hidden = mode !== "board";
   presentPanel.hidden = mode !== "present";
+  videoPanel.hidden = mode !== "video";
+}
+
+function clearSync() {
+  if (syncTimer) clearInterval(syncTimer);
+  syncTimer = null;
+}
+
+function stopWallVideo() {
+  clearSync();
+  wallVideo.onended = null;
+  wallVideo.onloadedmetadata = null;
+  wallVideo.pause();
+  wallVideo.removeAttribute("src");
+  wallVideo.classList.remove("span");
+  wallVideo.style.width = "";
+  wallVideo.style.transform = "";
 }
 
 function teardownPresent() {
@@ -78,12 +99,14 @@ function teardownPresent() {
 function showOff() {
   setMode("off");
   stopVideo();
+  stopWallVideo();
   teardownPresent();
 }
 
 function showLogo(url, label) {
   setMode("logo");
   stopVideo();
+  stopWallVideo();
   teardownPresent();
   logoImage.alt = label;
   logoFallback.textContent = `${label} — add the file in public/logos`;
@@ -106,6 +129,7 @@ logoImage.addEventListener("error", () => {
 function showAmenity(amenity, photos) {
   setMode("amenity");
   stopVideo();
+  stopWallVideo();
   teardownPresent();
   amenityHeadline.textContent = amenity?.headline || "";
   amenityBody.textContent = amenity?.body || "";
@@ -160,6 +184,7 @@ function renderRows(rows) {
 
 function showBoard(board) {
   setMode("board");
+  stopWallVideo();
   teardownPresent();
   boardTitle.textContent = board?.name || "Leaderboard";
   const meta = [board?.manufacturer, board?.year].filter(Boolean).join(" · ");
@@ -244,6 +269,19 @@ function resolveCard() {
   if (!state || state.blackout) return { type: "off" };
   const presentation = payload.presentations?.[SLOT];
   if (presentation?.source) return { type: "present", presentation };
+  const playback = payload.playback;
+  if (playback?.url && Array.isArray(playback.slots) && playback.slots.map(String).includes(String(SLOT))) {
+    return {
+      type: "video",
+      id: playback.videoId,
+      url: playback.url,
+      title: playback.title,
+      loop: Boolean(playback.loop),
+      mode: playback.mode,
+      startedAt: playback.startedAt,
+      slots: playback.slots.map(String),
+    };
+  }
   const layout = payload.layout?.[SLOT];
   if (layout && layout.content && layout.content !== "rotation") {
     return cardFromContent(layout.content, layout.leaderboardId);
@@ -260,11 +298,14 @@ function cardKey(card) {
   if (!card) return "off";
   if (card.type === "present") {
     const item = card.presentation;
-    return `present:${item.id}:${item.source}:${item.url || ""}:${item.fileUrl || ""}:${item.code || ""}:${item.helper?.ok}:${item.helper?.error || ""}`;
+    return `present:${item.id}:${item.source}:${item.url || ""}:${item.fileUrl || ""}:${item.code || ""}:${item.helper?.ok}:${item.helper?.capture}:${item.helper?.error || ""}`;
   }
   if (card.type === "logo") return `logo:${card.key}`;
   if (card.type === "amenity") return `amenity:${card.id}`;
   if (card.type === "leaderboard") return `board:${card.id}`;
+  if (card.type === "video") {
+    return `video:${card.id}:${card.mode}:${card.startedAt || ""}:${(card.slots || []).join(",")}`;
+  }
   return card.type || "off";
 }
 
@@ -308,8 +349,56 @@ function renderCard(card) {
     showAmenity(amenity, photos);
     return;
   }
+  if (card.type === "video") {
+    showVideo(card);
+    return;
+  }
   const board = (payload.state.leaderboards || []).find((item) => item.id === card.id);
   showBoard(board);
+}
+
+function alignVideo(startedAt) {
+  if (!wallVideo.duration || !Number.isFinite(wallVideo.duration)) return;
+  const elapsed = ((Date.now() - Number(startedAt)) / 1000) % wallVideo.duration;
+  if (Math.abs(wallVideo.currentTime - elapsed) > 0.35) wallVideo.currentTime = elapsed;
+}
+
+function showVideo(card) {
+  setMode("video");
+  stopVideo();
+  teardownPresent();
+  clearSync();
+  const slots = card.slots || [SLOT];
+  const primary = String(slots[0] || SLOT);
+  if (card.mode === "span") {
+    const count = Math.max(1, slots.length);
+    const index = Math.max(0, slots.map(String).indexOf(String(SLOT)));
+    wallVideo.classList.add("span");
+    wallVideo.style.width = `${count * 100}%`;
+    wallVideo.style.transform = `translateX(-${(index * 100) / count}%)`;
+  } else {
+    wallVideo.classList.remove("span");
+    wallVideo.style.width = "100%";
+    wallVideo.style.transform = "";
+  }
+  wallVideo.loop = Boolean(card.loop);
+  wallVideo.muted = card.mode === "card" || String(SLOT) !== primary;
+  if (wallVideo.getAttribute("src") !== card.url) wallVideo.src = card.url;
+  if (card.startedAt && card.mode !== "card") {
+    const seek = () => alignVideo(card.startedAt);
+    wallVideo.onloadedmetadata = seek;
+    syncTimer = setInterval(seek, 2000);
+  }
+  wallVideo.onended = () => {
+    if (card.mode === "card" || card.loop) return;
+    if (String(SLOT) !== primary) return;
+    fetch("/api/media/next", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ videoId: card.id }),
+    }).catch(() => {});
+  };
+  wallVideo.play().catch(() => {});
 }
 
 function shareLines() {
@@ -395,6 +484,7 @@ async function acceptSignal(presentation, signal) {
 function showPresent(presentation) {
   setMode("present");
   stopVideo();
+  stopWallVideo();
   const same = shownPresentId === presentation.id && shownPresentSource === presentation.source;
   if (!same) {
     if (pc) {
@@ -426,16 +516,40 @@ function showPresent(presentation) {
   }
 
   if (presentation.source === "airplay") {
-    presentVideo.hidden = true;
     presentImage.hidden = true;
     presentFrame.hidden = true;
     presentCode.hidden = true;
-    presentWaiting.hidden = false;
     const name = payload?.airplay?.serverName || "Pinball Land";
+    if (presentation.helper?.capture) {
+      presentHeading.textContent = "AirPlay on every screen";
+      presentInstructions.textContent = "Copying the mirror from the first TV.";
+      if (mirrorId !== presentation.id || !presentVideo.srcObject) {
+        mirrorId = presentation.id;
+        navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }).then((stream) => {
+          presentVideo.srcObject = stream;
+          presentVideo.muted = true;
+          presentVideo.hidden = false;
+          presentWaiting.hidden = true;
+          presentVideo.play().catch(() => {});
+        }).catch(() => {
+          presentWaiting.hidden = false;
+          presentVideo.hidden = true;
+          presentInstructions.textContent = "This screen copies the AirPlay picture. The first TV still has the real mirror.";
+        });
+      }
+      return;
+    }
+    if (presentVideo.srcObject) {
+      for (const track of presentVideo.srcObject.getTracks()) track.stop();
+      presentVideo.srcObject = null;
+    }
+    mirrorId = null;
+    presentVideo.hidden = true;
+    presentWaiting.hidden = false;
     presentHeading.textContent = presentation.helper?.ok === false ? "AirPlay needs setup" : "AirPlay to this screen";
     presentInstructions.textContent = presentation.helper?.ok === false
-      ? `${presentation.helper.error || "UxPlay is not running."}\n\nInstall the helper on the wall PC, then try again. Steps are in PRESENTING.md.`
-      : `On iPhone or Mac: Control Center → Screen Mirroring → ${name}.\n\nThis screen stays up until the mirror connects.`;
+      ? `${presentation.helper.error || "UxPlay is not running."}\n\nRun scripts\\install-airplay-windows.ps1 on the wall PC. Steps are in PRESENTING.md.`
+      : `On iPhone or Mac: Control Center → Screen Mirroring → ${name}.\n\nThis screen switches over when the mirror connects.`;
     return;
   }
 

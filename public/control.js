@@ -99,12 +99,12 @@ function applyPayload(payload) {
 }
 
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme === "halloween" ? "halloween" : "pinnacle";
-  const pinnacleBtn = document.getElementById("theme-pinnacle");
-  const halloweenBtn = document.getElementById("theme-halloween");
-  if (!pinnacleBtn || !halloweenBtn) return;
-  pinnacleBtn.classList.toggle("active", theme !== "halloween");
-  halloweenBtn.classList.toggle("active", theme === "halloween");
+  const name = theme === "halloween" || theme === "christmas" ? theme : "pinnacle";
+  document.documentElement.dataset.theme = name;
+  for (const id of ["pinnacle", "halloween", "christmas"]) {
+    const button = document.getElementById(`theme-${id}`);
+    if (button) button.classList.toggle("active", name === id);
+  }
 }
 
 function selectedBoard() {
@@ -700,12 +700,7 @@ function renderPresent() {
     share.className = "btn primary";
     share.textContent = "Browser share";
     share.addEventListener("click", () => startPresent({ source: "webrtc" }));
-    const airplay = document.createElement("button");
-    airplay.type = "button";
-    airplay.className = "btn";
-    airplay.textContent = "AirPlay";
-    airplay.addEventListener("click", () => startPresent({ source: "airplay" }));
-    sources.append(share, airplay);
+    sources.append(share);
     root.append(sources);
 
     const urlForm = document.createElement("form");
@@ -772,12 +767,6 @@ function renderPresent() {
   idleLabel.append(idle);
   root.append(idleLabel);
 
-  if (current.airplay && current.airplay.ready === false) {
-    const missing = document.createElement("p");
-    missing.className = "muted";
-    missing.textContent = "AirPlay helper is not installed on this PC yet. Browser share, URLs, and file upload still work. Setup is in PRESENTING.md.";
-    root.append(missing);
-  }
 }
 
 async function startPresent(body) {
@@ -793,11 +782,344 @@ async function startPresent(body) {
   }
 }
 
+function renderAirplay() {
+  const root = document.getElementById("airplay-root");
+  if (!root) return;
+  root.replaceChildren();
+  const air = current.airplay || {};
+  const status = document.createElement("p");
+  status.className = "muted";
+  if (air.ready === false) {
+    status.textContent = "UxPlay is not installed yet. On the wall PC run scripts\\install-airplay-windows.ps1. Browser share still works.";
+  } else if (air.active && air.target && air.target !== "off") {
+    status.textContent = air.target === "all"
+      ? "Mirroring to every screen. It returns to rotation when the iPhone disconnects."
+      : `Mirroring to ${displayLabel(air.target, current.displays?.count)}. It returns to rotation when the iPhone disconnects.`;
+  } else if (air.target && air.target !== "off") {
+    status.textContent = air.target === "all"
+      ? `Receiver ${air.serverName || "Pinball Land"} is ready for all screens. On the iPhone: Control Center → Screen Mirroring.`
+      : `Receiver ${air.serverName || "Pinball Land"} is ready for ${displayLabel(air.target, current.displays?.count)}. On the iPhone: Control Center → Screen Mirroring.`;
+  } else {
+    status.textContent = `Receiver ${air.running ? "is on" : "starts with the server"}. Tap a screen, then mirror to ${air.serverName || "Pinball Land"}.`;
+  }
+  root.append(status);
+
+  const row = document.createElement("div");
+  row.className = "choice-row";
+  const choices = [
+    ["1", displayLabel("1", current.displays?.count)],
+    ["2", displayLabel("2", current.displays?.count)],
+    ["3", displayLabel("3", current.displays?.count)],
+    ["all", "All three"],
+    ["off", "Off"],
+  ];
+  for (const [target, label] of choices) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `btn${air.target === target ? " active" : ""}${target === "off" ? "" : " primary"}`;
+    if (target === "off") button.classList.remove("primary");
+    button.textContent = label;
+    button.disabled = ["1", "2", "3"].includes(target) && !current.layout?.[target]?.enabled;
+    button.addEventListener("click", async () => {
+      applyPayload(await api("/api/airplay/target", { method: "PUT", body: { target } }));
+      toast(target === "off" ? "AirPlay target cleared" : "AirPlay target saved");
+    });
+    row.append(button);
+  }
+  root.append(row);
+}
+
+function renderPlugs() {
+  const root = document.getElementById("plugs-root");
+  if (!root) return;
+  root.replaceChildren();
+  const plugs = current.plugs || { assignments: {}, devices: [], schedule: {} };
+  const tools = document.createElement("div");
+  tools.className = "theme-toggle";
+  const discover = document.createElement("button");
+  discover.type = "button";
+  discover.className = "btn";
+  discover.textContent = "Find plugs";
+  discover.addEventListener("click", async () => {
+    applyPayload(await api("/api/plugs/discover", { method: "POST" }));
+    toast(current.plugs.devices.length ? `Found ${current.plugs.devices.length}` : "No plugs answered");
+  });
+  const allOn = document.createElement("button");
+  allOn.type = "button";
+  allOn.className = "btn primary";
+  allOn.textContent = "All on";
+  allOn.addEventListener("click", async () => {
+    applyPayload(await api("/api/plugs/power", { method: "POST", body: { on: true } }));
+    toast("Plugs on");
+  });
+  const allOff = document.createElement("button");
+  allOff.type = "button";
+  allOff.className = "btn danger";
+  allOff.textContent = "All off";
+  allOff.addEventListener("click", async () => {
+    applyPayload(await api("/api/plugs/power", { method: "POST", body: { on: false } }));
+    toast("Plugs off");
+  });
+  tools.append(discover, allOn, allOff);
+  root.append(tools);
+
+  for (const slot of ["1", "2", "3"]) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const title = document.createElement("p");
+    const assigned = plugs.assignments?.[slot];
+    const device = (plugs.devices || []).find((item) => item.id === assigned);
+    const state = device ? (device.on === true ? "On" : device.on === false ? "Off" : "—") : "No plug";
+    title.textContent = `${displayLabel(slot, current.displays?.count)} · ${state}`;
+    const select = document.createElement("select");
+    select.ariaLabel = `Plug for display ${slot}`;
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "No plug";
+    select.append(none);
+    for (const item of plugs.devices || []) {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.model ? `${item.name} (${item.model})` : item.name;
+      if (item.id === assigned) option.selected = true;
+      select.append(option);
+    }
+    select.addEventListener("change", async () => {
+      applyPayload(await api("/api/plugs/assignments", {
+        method: "PUT",
+        body: { [slot]: select.value || null },
+      }));
+      toast("Plug assignment saved");
+    });
+    const actions = document.createElement("div");
+    actions.className = "theme-toggle";
+    const on = document.createElement("button");
+    on.type = "button";
+    on.className = "btn";
+    on.textContent = "On";
+    on.disabled = !assigned;
+    on.addEventListener("click", async () => {
+      applyPayload(await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on: true } }));
+    });
+    const off = document.createElement("button");
+    off.type = "button";
+    off.className = "btn";
+    off.textContent = "Off";
+    off.disabled = !assigned;
+    off.addEventListener("click", async () => {
+      applyPayload(await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on: false } }));
+    });
+    actions.append(on, off);
+    card.append(title, select, actions);
+    root.append(card);
+  }
+
+  const schedule = plugs.schedule || {};
+  const form = document.createElement("form");
+  form.className = "add-row";
+  const enabled = document.createElement("input");
+  enabled.type = "checkbox";
+  enabled.checked = Boolean(schedule.enabled);
+  enabled.id = "plug-schedule";
+  const label = document.createElement("label");
+  label.htmlFor = "plug-schedule";
+  label.textContent = "Schedule";
+  const onTime = document.createElement("input");
+  onTime.type = "time";
+  onTime.value = schedule.onTime || "10:00";
+  onTime.ariaLabel = "Plugs on at";
+  const offTime = document.createElement("input");
+  offTime.type = "time";
+  offTime.value = schedule.offTime || "22:00";
+  offTime.ariaLabel = "Plugs off at";
+  const save = document.createElement("button");
+  save.className = "btn";
+  save.type = "submit";
+  save.textContent = "Save schedule";
+  form.append(enabled, label, onTime, offTime, save);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    applyPayload(await api("/api/plugs/schedule", {
+      method: "PUT",
+      body: { enabled: enabled.checked, onTime: onTime.value, offTime: offTime.value },
+    }));
+    toast("Plug schedule saved");
+  });
+  root.append(form);
+  const hint = document.createElement("p");
+  hint.className = "muted";
+  hint.textContent = "Example: on at open, off at close. The PC stays plugged into the wall, not a Kasa plug.";
+  root.append(hint);
+}
+
+function renderMedia() {
+  const root = document.getElementById("media-root");
+  if (!root) return;
+  root.replaceChildren();
+  const media = current.media || { videos: [], allAges: true };
+  const toggle = document.createElement("div");
+  toggle.className = "theme-toggle";
+  const agesOn = document.createElement("button");
+  agesOn.type = "button";
+  agesOn.className = `btn${media.allAges ? " active" : ""}`;
+  agesOn.textContent = "All-ages on";
+  agesOn.addEventListener("click", async () => {
+    applyPayload(await api("/api/media/settings", { method: "PUT", body: { allAges: true } }));
+  });
+  const agesOff = document.createElement("button");
+  agesOff.type = "button";
+  agesOff.className = `btn${media.allAges ? "" : " active"}`;
+  agesOff.textContent = "All-ages off";
+  agesOff.addEventListener("click", async () => {
+    applyPayload(await api("/api/media/settings", { method: "PUT", body: { allAges: false } }));
+  });
+  toggle.append(agesOn, agesOff);
+  root.append(toggle);
+
+  const form = document.createElement("form");
+  form.className = "stack";
+  const file = document.createElement("input");
+  file.type = "file";
+  file.accept = "video/mp4,video/webm,video/quicktime,.mp4,.m4v,.webm,.mov,.mkv";
+  file.required = true;
+  const title = document.createElement("input");
+  title.placeholder = "Title";
+  const folder = document.createElement("select");
+  for (const [value, label] of [["library", "Library"], ["halloween", "Halloween"], ["christmas", "Christmas"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    folder.append(option);
+  }
+  const tags = document.createElement("input");
+  tags.placeholder = "Tags, comma separated";
+  const upload = document.createElement("button");
+  upload.className = "btn primary";
+  upload.type = "submit";
+  upload.textContent = "Upload video";
+  form.append(file, title, folder, tags, upload);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const chosen = file.files?.[0];
+    if (!chosen) return;
+    upload.disabled = true;
+    try {
+      const res = await fetch("/api/media", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "content-type": chosen.type || "application/octet-stream",
+          "x-filename": chosen.name,
+          "x-title": title.value || chosen.name,
+          "x-folder": folder.value,
+          "x-tags": tags.value,
+          "x-all-ages": "true",
+          "x-in-rotation": "false",
+          "x-loop": "true",
+        },
+        body: chosen,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(data.error || "Upload failed");
+        return;
+      }
+      applyPayload(data);
+      form.reset();
+      toast("Video saved");
+    } finally {
+      upload.disabled = false;
+    }
+  });
+  root.append(form);
+
+  const playing = current.playback;
+  if (playing) {
+    const now = document.createElement("p");
+    now.className = "muted";
+    now.textContent = `Playing ${playing.title} (${playing.mode}) on ${playing.slots.join(", ")}.`;
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "btn danger";
+    stop.textContent = "Stop video";
+    stop.addEventListener("click", async () => {
+      applyPayload(await api("/api/media/stop", { method: "POST" }));
+      toast("Video stopped");
+    });
+    root.append(now, stop);
+  }
+
+  for (const video of media.videos || []) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const heading = document.createElement("p");
+    heading.textContent = `${video.title} · ${video.folder}${video.allAges ? "" : " · not all-ages"}`;
+    const tagLine = document.createElement("p");
+    tagLine.className = "muted";
+    tagLine.textContent = video.tags?.length ? video.tags.join(", ") : "No tags";
+    const flags = document.createElement("div");
+    flags.className = "theme-toggle";
+    const age = document.createElement("button");
+    age.type = "button";
+    age.className = `btn${video.allAges ? " active" : ""}`;
+    age.textContent = video.allAges ? "All-ages" : "Not all-ages";
+    age.addEventListener("click", async () => {
+      applyPayload(await api(`/api/media/${video.id}`, { method: "PUT", body: { allAges: !video.allAges } }));
+    });
+    const rotate = document.createElement("button");
+    rotate.type = "button";
+    rotate.className = `btn${video.inRotation ? " active" : ""}`;
+    rotate.textContent = video.inRotation ? "In rotation" : "Add to rotation";
+    rotate.addEventListener("click", async () => {
+      applyPayload(await api(`/api/media/${video.id}`, { method: "PUT", body: { inRotation: !video.inRotation } }));
+    });
+    flags.append(age, rotate);
+    const playRow = document.createElement("div");
+    playRow.className = "choice-row";
+    const playOne = document.createElement("button");
+    playOne.type = "button";
+    playOne.className = "btn primary";
+    playOne.textContent = "Play here";
+    playOne.addEventListener("click", async () => {
+      applyPayload(await api("/api/media/play", { method: "POST", body: { id: video.id, mode: "one", slot: presentSlot } }));
+      toast("Playing");
+    });
+    const playSync = document.createElement("button");
+    playSync.type = "button";
+    playSync.className = "btn";
+    playSync.textContent = "Sync all";
+    playSync.addEventListener("click", async () => {
+      applyPayload(await api("/api/media/play", { method: "POST", body: { id: video.id, mode: "sync" } }));
+    });
+    const playSpan = document.createElement("button");
+    playSpan.type = "button";
+    playSpan.className = "btn";
+    playSpan.textContent = "Span all";
+    playSpan.addEventListener("click", async () => {
+      applyPayload(await api("/api/media/play", { method: "POST", body: { id: video.id, mode: "span" } }));
+    });
+    playRow.append(playOne, playSync, playSpan);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn ghost compact";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      applyPayload(await api(`/api/media/${video.id}`, { method: "DELETE" }));
+      toast("Video deleted");
+    });
+    card.append(heading, tagLine, flags, playRow, remove);
+    root.append(card);
+  }
+}
+
 function render() {
   applyTheme(current.state?.theme);
   renderOffButton();
   renderPresent();
+  renderAirplay();
   renderDisplays();
+  renderPlugs();
+  renderMedia();
   renderRotation();
   renderOpdbHelp();
   renderSlots();
@@ -853,6 +1175,11 @@ document.getElementById("theme-pinnacle").addEventListener("click", async () => 
 document.getElementById("theme-halloween").addEventListener("click", async () => {
   applyPayload(await api("/api/theme", { method: "PUT", body: { theme: "halloween" } }));
   toast("Halloween theme on");
+});
+
+document.getElementById("theme-christmas").addEventListener("click", async () => {
+  applyPayload(await api("/api/theme", { method: "PUT", body: { theme: "christmas" } }));
+  toast("Christmas theme on");
 });
 
 document.getElementById("rotation-on").addEventListener("click", async () => {

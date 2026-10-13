@@ -14,7 +14,7 @@ const CONTENTS = [
   "leaderboard",
   "off",
 ];
-const THEMES = ["pinnacle", "halloween"];
+const THEMES = ["pinnacle", "halloween", "christmas"];
 const LEGACY_CONTENT = {
   arcade: "amenity-arcade",
   photos: "amenity-arcade",
@@ -238,7 +238,7 @@ class Store {
 
   async setTheme(theme) {
     if (!THEMES.includes(theme)) {
-      throw Object.assign(new Error("theme must be pinnacle or halloween"), { status: 400 });
+      throw Object.assign(new Error("theme must be pinnacle, halloween, or christmas"), { status: 400 });
     }
     this.state.theme = theme;
     return this.commit();

@@ -31,6 +31,23 @@
   "airplay": {
     "command": "",
     "args": [],
-    "windowTitle": "Pinball Land"
+    "windowTitle": "Pinball Land",
+    "target": "off"
+  },
+  "plugs": {
+    "assignments": {
+      "1": null,
+      "2": null,
+      "3": null
+    },
+    "devices": [],
+    "schedule": {
+      "enabled": false,
+      "onTime": "10:00",
+      "offTime": "22:00"
+    }
+  },
+  "media": {
+    "allAges": true
   }
 }

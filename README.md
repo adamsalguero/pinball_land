@@ -45,7 +45,7 @@ Venue always-on after a power blink: BIOS Auto Power On + Windows auto-logon + T
 ## Control page
 
 - Fat buttons, phone-sized, thumb-friendly.
-- Theme: **Pinnacle brand** (default, purple/charcoal/beige from the live site, **Lato** 400/700) or **Halloween party** (Ron toggles this; it is saved and does not follow the calendar).
+- Theme: **Pinnacle brand** (default, purple/charcoal/beige from the live site, **Lato** 400/700), **Halloween party**, or **Christmas**. Ron toggles these; they are saved and do not follow the calendar. Halloween and Christmas also rotate family clips from `media/halloween` and `media/christmas`. See **[MEDIA.md](MEDIA.md)**.
 - **Wall rotation is on by default.** Every TV shares one playlist (Pinnacle Group logo, Entertainment Center logo, three amenity cards, and each enabled leaderboard). Screens are staggered so neighbors are not on the same card. Interval defaults to 14 seconds.
 - Rotation on/off, interval, and per-item toggles live on the control page. Turning rotation off lets you assign each TV by hand.
 - **Off** blacks every screen immediately. **Resume wall** brings the playlist back. Off does not wipe the playlist.
@@ -54,7 +54,9 @@ Venue always-on after a power blink: BIOS Auto Power On + Windows auto-logon + T
 
 Change PIN, port, or OPDB token in `config.json` (`PORT`, `CONTROL_PIN`, `HTTPS_PORT`, and `OPDB_API_KEY` also work). Display count, per-screen layout, and presentation idle time are edited on the control page and saved in that same file.
 
-**Present** on the control page sends one screen to a guest share, an AirPlay mirror, a URL, or an uploaded PDF/image. The other screens keep rotating. Steps for each method: [PRESENTING.md](PRESENTING.md).
+**Present** on the control page sends one screen to a guest share, a URL, or an uploaded PDF/image. **AirPlay** is a separate one-tap target (one TV, or the same mirror on all three). The receiver stays running. Steps: [PRESENTING.md](PRESENTING.md).
+
+**Smart plugs** discover Kasa outlets on the LAN and map them to the three TVs. Do not put the PC on a plug. **Videos** upload into `media\` (large files stream to disk) and can play on one screen, synced, or spanned. Hardware decode is on in the kiosk. See [KIOSK.md](KIOSK.md) and [MEDIA.md](MEDIA.md).
 
 ## Logos and amenity photos
 

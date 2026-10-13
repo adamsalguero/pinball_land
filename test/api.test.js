@@ -7,6 +7,7 @@ const path = require("path");
 const { WebSocket } = require("ws");
 const { Store } = require("../src/store");
 const { createApp } = require("../src/app");
+const { PlugService } = require("../src/plugs");
 
 async function startServer(overrides = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-land-api-"));
@@ -443,6 +444,186 @@ test("uploads a PNG onto one screen and removes it when the presentation ends", 
     assert.equal(ended.data.presentations["1"], undefined);
     const gone = await fetch(`${origin}${session.fileUrl}`);
     assert.equal(gone.status, 404);
+  } finally {
+    server.close();
+  }
+});
+
+test("airplay target, mocked plugs, and a christmas video", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-land-follow-"));
+  const tv = {
+    host: "192.168.1.50",
+    alias: "Left TV",
+    model: "HS103",
+    deviceId: "plug-left",
+    on: false,
+    async getSysInfo() {
+      return { alias: this.alias, model: this.model, deviceId: this.deviceId };
+    },
+    async getPowerState() {
+      return this.on;
+    },
+    async setPowerState(value) {
+      this.on = Boolean(value);
+    },
+  };
+  const memory = {};
+  const plugs = new PlugService({
+    client: {
+      async discover() {
+        return [tv];
+      },
+      async getDevice(host) {
+        if (host !== tv.host) throw new Error("missing plug");
+        return tv;
+      },
+    },
+    getConfig: () => memory,
+    updateConfig: async (patch) => {
+      memory.plugs = patch.plugs;
+    },
+  });
+  const airplay = {
+    active: false,
+    ready() {
+      return { ok: true };
+    },
+    ensureRunning() {
+      return { ok: true, pid: 42 };
+    },
+    pid() {
+      return 42;
+    },
+    isActive() {
+      return this.active;
+    },
+    noteProbe(placed) {
+      const was = this.active;
+      this.active = Boolean(placed);
+      if (this.active && !was) return "start";
+      if (!this.active && was) return "end";
+      return null;
+    },
+    stop() {},
+  };
+  const { server, origin } = await startServer({
+    plugs,
+    airplay,
+    mediaDir: path.join(dir, "media"),
+    mediaCatalog: path.join(dir, "library.json"),
+  });
+  try {
+    const headers = { "x-pin": "1234" };
+    const denied = await json(origin, "/api/plugs/discover", { method: "POST" });
+    assert.equal(denied.res.status, 401);
+
+    const target = await json(origin, "/api/airplay/target", {
+      method: "PUT",
+      headers,
+      body: { target: "2" },
+    });
+    assert.equal(target.data.airplay.target, "2");
+    assert.equal(target.data.airplay.active, false);
+    assert.equal(target.data.presentations["2"], undefined);
+
+    const live = await json(origin, "/api/airplay/probe", { method: "POST", body: { placed: true } });
+    assert.equal(live.data.active, true);
+    const state = await json(origin, "/api/state");
+    assert.equal(state.data.presentations["2"].source, "airplay");
+    assert.equal(state.data.presentations["1"], undefined);
+    assert.equal(state.data.presentations["2"].helper.capture, false);
+
+    const all = await json(origin, "/api/airplay/target", {
+      method: "PUT",
+      headers,
+      body: { target: "all" },
+    });
+    assert.equal(all.data.presentations["1"].helper.capture, false);
+    assert.equal(all.data.presentations["2"].helper.capture, true);
+    assert.equal(all.data.presentations["3"].helper.capture, true);
+
+    const ended = await json(origin, "/api/airplay/probe", { method: "POST", body: { placed: false } });
+    assert.equal(ended.data.active, false);
+    const back = await json(origin, "/api/state");
+    assert.equal(back.data.presentations["1"], undefined);
+    assert.equal(back.data.presentations["2"], undefined);
+
+    const found = await json(origin, "/api/plugs/discover", { method: "POST", headers });
+    assert.equal(found.data.plugs.devices[0].name, "Left TV");
+    const assigned = await json(origin, "/api/plugs/assignments", {
+      method: "PUT",
+      headers,
+      body: { 1: "plug-left" },
+    });
+    assert.equal(assigned.data.plugs.assignments["1"], "plug-left");
+    const powered = await json(origin, "/api/plugs/1/power", {
+      method: "POST",
+      headers,
+      body: { on: true },
+    });
+    assert.equal(powered.data.plugs.devices[0].on, true);
+    assert.equal(tv.on, true);
+    await json(origin, "/api/plugs/power", { method: "POST", headers, body: { on: false } });
+    assert.equal(tv.on, false);
+
+    const uploaded = await fetch(`${origin}/api/media`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "video/mp4",
+        "x-filename": "snow.mp4",
+        "x-title": "Snow loop",
+        "x-folder": "christmas",
+        "x-tags": "snow,christmas",
+        "x-all-ages": "true",
+      },
+      body: Buffer.from("fake-mp4"),
+    });
+    const library = await uploaded.json();
+    assert.equal(uploaded.status, 200);
+    const video = library.media.videos[0];
+    assert.equal(video.title, "Snow loop");
+    assert.equal(video.allAges, true);
+    assert.equal(library.playlist.some((card) => card.type === "video"), false);
+    const themed = await json(origin, "/api/theme", {
+      method: "PUT",
+      headers,
+      body: { theme: "christmas" },
+    });
+    assert.equal(themed.data.state.theme, "christmas");
+    assert.ok(themed.data.playlist.some((card) => card.id === video.id && card.type === "video"));
+    const file = await fetch(`${origin}${video.url}`);
+    assert.equal(file.status, 200);
+
+    const played = await json(origin, "/api/media/play", {
+      method: "POST",
+      headers,
+      body: { id: video.id, mode: "span" },
+    });
+    assert.equal(played.data.playback.mode, "span");
+    assert.deepEqual(played.data.playback.slots, ["1", "2", "3"]);
+    const stopped = await json(origin, "/api/media/stop", { method: "POST", headers });
+    assert.equal(stopped.data.playback, null);
+
+    const mature = await json(origin, `/api/media/${video.id}`, {
+      method: "PUT",
+      headers,
+      body: { allAges: false },
+    });
+    assert.equal(mature.data.playlist.some((card) => card.id === video.id), false);
+    const blocked = await json(origin, "/api/media/play", {
+      method: "POST",
+      headers,
+      body: { id: video.id, mode: "one", slot: "1" },
+    });
+    assert.equal(blocked.res.status, 400);
+
+    const control = await fetch(`${origin}/`);
+    const html = await control.text();
+    assert.match(html, /Christmas/);
+    assert.match(html, /Never put the PC on a plug/);
+    const script = await (await fetch(`${origin}/control.js`)).text();
+    assert.match(script, /All three/);
   } finally {
     server.close();
   }

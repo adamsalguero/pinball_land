@@ -50,6 +50,20 @@
   --primary-text: #1a0a00;
 }
 
+[data-theme="christmas"] {
+  --bg: #07140c;
+  --card: #12261a;
+  --line: #1f7a3a;
+  --text: #f4efe4;
+  --muted: #d4c4a8;
+  --accent: #e8c872;
+  --danger: #c8102e;
+  --active: #c8102e;
+  --active-text: #fff8ee;
+  --primary: #1f7a3a;
+  --primary-text: #f4efe4;
+}
+
 * {
   box-sizing: border-box;
 }
