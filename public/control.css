@@ -301,3 +301,30 @@ select {
   text-align: left;
   font-weight: 400;
 }
+
+.callout {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #241820;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.screen-card.dimmed {
+  opacity: 0.55;
+}
+
+.present-code-inline {
+  font-size: 28px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  margin: 0;
+}
+
+.choice-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}

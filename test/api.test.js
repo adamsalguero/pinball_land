@@ -54,7 +54,13 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
     const logoText = await logo.text();
     assert.match(controlText, /Kiosk control/);
     assert.match(controlText, /Outdoor Oasis/);
+    assert.match(controlText, /Displays/);
+    assert.match(controlText, /isn't practical/);
+    assert.match(controlText, /Chromecast/);
     assert.doesNotMatch(controlText, /\bpool\b/i);
+    const present = await fetch(`${origin}/present`);
+    assert.equal(present.status, 200);
+    assert.match(await present.text(), /iPhone and iPad Safari cannot share/);
     assert.match(displayText, /Pinball Land display/);
     assert.match(logo.headers.get("content-type") || "", /image\/svg\+xml/);
     assert.doesNotMatch(logoText, /PLACEHOLDER LOGO/);
@@ -240,6 +246,203 @@ test("OPDB search uses injected fetch and caches art when a token is present", a
     const cached = await fs.readdir(path.join(dir, "opdb", "GTEST-M1"));
     assert.ok(cached.includes("machine.json"));
     assert.ok(cached.some((name) => name.startsWith("art")));
+  } finally {
+    server.close();
+  }
+});
+
+function opened(socket) {
+  return new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+}
+
+test("display settings, restart, and monitor order are PIN protected and live", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const headers = { "x-pin": "1234" };
+    const denied = await json(origin, "/api/displays", { method: "PUT", body: { count: 1 } });
+    assert.equal(denied.res.status, 401);
+
+    const updated = await json(origin, "/api/displays", {
+      method: "PUT",
+      headers,
+      body: {
+        count: 2,
+        mirror: true,
+        screens: { 1: { content: "pinnacle" }, 2: { content: "off" } },
+      },
+    });
+    assert.equal(updated.data.displays.count, 2);
+    assert.equal(updated.data.displays.mirror, true);
+    assert.equal(updated.data.displays.screens["2"].content, "off");
+    assert.equal(updated.data.layout["2"].content, "pinnacle");
+    assert.equal(updated.data.layout["2"].staggerIndex, 0);
+    assert.equal(updated.data.layout["3"].enabled, false);
+
+    const monitors = await json(origin, "/api/kiosk/monitors", {
+      method: "POST",
+      body: {
+        displays: [
+          { id: "right", bounds: { x: 1920, y: 0, width: 1920, height: 1080 } },
+          { id: "left", bounds: { x: 0, y: 0, width: 1280, height: 720 } },
+        ],
+      },
+    });
+    assert.equal(monitors.res.status, 200);
+    const state = await json(origin, "/api/state");
+    assert.deepEqual(state.data.kiosk.monitors.map((item) => item.id), ["left", "right"]);
+    assert.deepEqual(state.data.kiosk.planned.map((item) => item.slot), [1, 2]);
+
+    const ordered = await json(origin, "/api/displays", {
+      method: "PUT",
+      headers,
+      body: { order: ["right", "left"] },
+    });
+    assert.equal(ordered.data.kiosk.planned[0].id, "right");
+
+    const restarted = await json(origin, "/api/kiosk/restart", { method: "POST", headers });
+    assert.equal(restarted.data.kiosk.restartToken, 1);
+    const idle = await json(origin, "/api/presentation", {
+      method: "PUT",
+      headers,
+      body: { idleMinutes: 12 },
+    });
+    assert.equal(idle.data.presentation.idleMinutes, 12);
+  } finally {
+    server.close();
+  }
+});
+
+test("one screen can present while the others stay in rotation", async () => {
+  const { server, origin, port } = await startServer();
+  try {
+    const headers = { "x-pin": "1234" };
+    const denied = await json(origin, "/api/present/1/start", {
+      method: "POST",
+      body: { source: "webrtc" },
+    });
+    assert.equal(denied.res.status, 401);
+
+    const badUrl = await json(origin, "/api/present/1/start", {
+      method: "POST",
+      headers,
+      body: { source: "url", url: "javascript:alert(1)" },
+    });
+    assert.equal(badUrl.res.status, 400);
+
+    await json(origin, "/api/displays", {
+      method: "PUT",
+      headers,
+      body: { screens: { 3: { enabled: false } } },
+    });
+    const disabled = await json(origin, "/api/present/3/start", {
+      method: "POST",
+      headers,
+      body: { source: "url", url: "https://example.com" },
+    });
+    assert.equal(disabled.res.status, 400);
+
+    const started = await json(origin, "/api/present/2/start", {
+      method: "POST",
+      headers,
+      body: { source: "webrtc" },
+    });
+    const session = started.data.presentations["2"];
+    assert.equal(started.data.presentations["1"], undefined);
+    assert.equal(started.data.layout["1"].content, "rotation");
+    assert.match(session.code, /^\d{4}$/);
+    assert.equal(session.token, undefined);
+    assert.equal(session.helper, null);
+
+    const joined = await json(origin, "/api/present/join", {
+      method: "POST",
+      body: { code: session.code },
+    });
+    assert.equal(joined.res.status, 200);
+    const wrong = await json(origin, "/api/present/join", {
+      method: "POST",
+      body: { code: "9999" },
+    });
+    assert.equal(wrong.res.status, 401);
+
+    const viewer = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const sharer = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    await Promise.all([opened(viewer), opened(sharer)]);
+    const gotOffer = new Promise((resolve, reject) => {
+      viewer.on("message", (raw) => {
+        const message = JSON.parse(raw.toString());
+        if (message.type === "present-signal" && message.payload?.kind === "offer") resolve(message);
+      });
+      setTimeout(() => reject(new Error("timed out waiting for the share offer")), 3000);
+    });
+    const viewerReady = new Promise((resolve, reject) => {
+      sharer.on("message", (raw) => {
+        const message = JSON.parse(raw.toString());
+        if (message.type === "present-viewer-ready") resolve(message);
+      });
+      setTimeout(() => reject(new Error("timed out waiting for the display")), 3000);
+    });
+    viewer.send(JSON.stringify({ type: "present-hello", presentationId: session.id, role: "viewer" }));
+    sharer.send(JSON.stringify({
+      type: "present-hello",
+      presentationId: session.id,
+      role: "sharer",
+      token: joined.data.token,
+    }));
+    await viewerReady;
+    sharer.send(JSON.stringify({
+      type: "present-signal",
+      presentationId: session.id,
+      token: joined.data.token,
+      payload: { kind: "offer", sdp: { type: "offer", sdp: "v=0" } },
+    }));
+    const offer = await gotOffer;
+    assert.equal(offer.from, "sharer");
+    assert.equal(offer.payload.sdp.sdp, "v=0");
+    viewer.close();
+    sharer.close();
+
+    const ended = await json(origin, "/api/present/2/end", { method: "POST", headers });
+    assert.equal(ended.data.presentations["2"], undefined);
+    assert.equal(ended.data.layout["1"].content, "rotation");
+  } finally {
+    server.close();
+  }
+});
+
+test("uploads a PNG onto one screen and removes it when the presentation ends", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const headers = { "x-pin": "1234" };
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64"
+    );
+    const uploaded = await fetch(`${origin}/api/present/1/file`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "image/png",
+        "x-filename": "guest slide.png",
+      },
+      body: png,
+    });
+    const data = await uploaded.json();
+    assert.equal(uploaded.status, 200);
+    const session = data.presentations["1"];
+    assert.equal(session.source, "file");
+    assert.equal(session.fileKind, "image");
+    assert.equal(data.presentations["2"], undefined);
+    const file = await fetch(`${origin}${session.fileUrl}`);
+    assert.equal(file.status, 200);
+    assert.match(file.headers.get("content-type") || "", /image\/png/);
+
+    const ended = await json(origin, "/api/present/1/end", { method: "POST", headers });
+    assert.equal(ended.data.presentations["1"], undefined);
+    const gone = await fetch(`${origin}${session.fileUrl}`);
+    assert.equal(gone.status, 404);
   } finally {
     server.close();
   }

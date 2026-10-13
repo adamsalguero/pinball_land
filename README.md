@@ -1,6 +1,6 @@
 # Pinball Land kiosk
 
-Local web app for the triple-screen wall at Pinball Land (Pinnacle Entertainment Center). One Node process serves three display pages plus a phone/iPad control page on the same WiFi.
+Local web app for the screen wall at Pinball Land (Pinnacle Entertainment Center). One Node process serves up to three display pages plus a phone/iPad control page on the same WiFi. The wall can run 1, 2, or 3 screens. Guests can present on one of them. See **[PRESENTING.md](PRESENTING.md)**.
 
 **Venue PC:** Beelink SER5, **Windows 11**, BIOS Auto Power On after AC loss. **Home PC:** Windows, `npm start` only. Ron drives it from an iPad. See **[KIOSK.md](KIOSK.md)** for the numbered always-on checklist.
 
@@ -31,14 +31,14 @@ Use the printed **Phone / iPad** address on Ron’s device. Default PIN is `1234
 
 Open one display URL per monitor yourself when using `npm start`. You do not need three screens.
 
-## Wall mode (every attached monitor)
+## Wall mode (enabled monitors)
 
 ```bash
 npm install
 npm run kiosk
 ```
 
-This starts the server if it is not already running, then opens a frameless fullscreen window on each attached display, mapped **left-to-right** to `/display/1`, `/display/2`, `/display/3`. Extra monitors beyond three are ignored. The control page is **not** opened on the TVs. Mouse cursor is hidden on the display windows. Running kiosk again replaces previous display windows instead of stacking duplicates.
+This starts the server if it is not already running, then opens a frameless fullscreen window for each **enabled** display, mapped **left-to-right** to `/display/1`, `/display/2`, `/display/3`. The control page’s **Displays** section sets the count (1–3), which screens are on, what each one shows, and an optional mirror of screen 1 onto the others. A manual monitor order is there too. Extra monitors beyond the count are ignored. If a configured screen has no monitor, that window is skipped and the terminal says so. The control page is **not** opened on the TVs. Mouse cursor is hidden on the display windows. Running kiosk again replaces previous display windows instead of stacking duplicates. Count and order apply live; **Restart kiosk windows** forces a reopen.
 
 Venue always-on after a power blink: BIOS Auto Power On + Windows auto-logon + Task Scheduler. Details in [KIOSK.md](KIOSK.md). Also set BenQ **Switch on state = On** so the TVs wake with AC.
 
@@ -52,7 +52,9 @@ Venue always-on after a power blink: BIOS Auto Power On + Windows auto-logon + T
 - Amenities (site wording, never “pool”): **2-story arcade**, **Outdoor Oasis**, **Flexible Event Options**. Photos stay in a small frame on the brand background.
 - Named events, typed-in scores, pinball machines from OPDB (or by name). PIN default `1234`. Displays do not use the PIN.
 
-Change PIN, port, or OPDB token in `config.json` (`PORT`, `CONTROL_PIN`, and `OPDB_API_KEY` also work).
+Change PIN, port, or OPDB token in `config.json` (`PORT`, `CONTROL_PIN`, `HTTPS_PORT`, and `OPDB_API_KEY` also work). Display count, per-screen layout, and presentation idle time are edited on the control page and saved in that same file.
+
+**Present** on the control page sends one screen to a guest share, an AirPlay mirror, a URL, or an uploaded PDF/image. The other screens keep rotating. Steps for each method: [PRESENTING.md](PRESENTING.md).
 
 ## Logos and amenity photos
 

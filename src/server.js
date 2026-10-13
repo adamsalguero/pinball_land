@@ -1,11 +1,16 @@
 const http = require("http");
+const https = require("https");
+const fs = require("fs");
 const path = require("path");
 const { createApp } = require("./app");
-const { loadConfig } = require("./config");
+const { createConfigStore } = require("./config");
 const { Store } = require("./store");
 const { getLanIPv4s } = require("./lan");
+const { ensureCertificate } = require("./certs");
+const { slotLabel } = require("./displays");
 
-function printBanner(port) {
+function printBanner(config, httpsReady) {
+  const port = config.port;
   console.log("");
   console.log("Pinball Land kiosk is running");
   console.log("--------------------------------");
@@ -18,20 +23,60 @@ function printBanner(port) {
   } else {
     console.log("Phone / iPad:        (no LAN IPv4 found — connect to WiFi and restart)");
   }
-  console.log(`Left display:        http://localhost:${port}/display/1`);
-  console.log(`Center display:      http://localhost:${port}/display/2`);
-  console.log(`Right display:       http://localhost:${port}/display/3`);
+  for (let slot = 1; slot <= config.displays.count; slot += 1) {
+    const label = slotLabel(slot, config.displays.count);
+    console.log(`${label} display:`.padEnd(21) + `http://localhost:${port}/display/${slot}`);
+  }
   console.log(`Control PIN:         set in config.json (default 1234)`);
+  if (httpsReady) {
+    console.log(`Browser share:       https://<this-pc>:${config.httpsPort}/present`);
+    console.log("                     Guests must accept the certificate warning once.");
+  } else {
+    console.log("Browser share:       HTTPS did not start. Screen share needs it. See PRESENTING.md.");
+  }
   console.log("--------------------------------");
   console.log("Listening on 0.0.0.0 so other devices on this WiFi can connect.");
-  console.log("Wall TVs:            npm run kiosk   (fullscreen on every attached monitor)");
+  console.log("Wall TVs:            npm run kiosk   (windows for enabled displays)");
   console.log("");
+}
+
+async function startHttps({ app, attachWebSocket, config, certDir }) {
+  if (!config.httpsPort || config.httpsPort === config.port) {
+    console.warn("HTTPS port disabled. Browser screen share will not work until HTTPS is on.");
+    return null;
+  }
+  const hosts = ["localhost", "127.0.0.1", ...getLanIPv4s()];
+  const cert = await ensureCertificate({ certDir, hosts });
+  if (cert.error || !cert.certPath) {
+    console.warn(`Browser share needs HTTPS, and the certificate was not created (${cert.error || "unknown error"}).`);
+    console.warn("Control and rotation still work over HTTP. See PRESENTING.md.");
+    return null;
+  }
+  const server = https.createServer(
+    {
+      cert: fs.readFileSync(cert.certPath),
+      key: fs.readFileSync(cert.keyPath),
+    },
+    app
+  );
+  attachWebSocket(server);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(config.httpsPort, "0.0.0.0", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  console.log(`HTTPS for browser share is on port ${config.httpsPort}.`);
+  return server;
 }
 
 async function startServer() {
   const root = path.join(__dirname, "..");
-  const config = loadConfig(path.join(root, "config.json"));
+  const configStore = createConfigStore(path.join(root, "config.json"));
+  const config = configStore.get();
   const store = await Store.load(path.join(root, "data", "state.json"));
+  let httpsReady = false;
   const { app, attachWebSocket } = createApp({
     store,
     pin: config.pin,
@@ -40,6 +85,9 @@ async function startServer() {
     photosDir: path.join(root, "public", "photos"),
     opdbApiKey: config.opdbApiKey,
     cacheDir: path.join(root, "data", "opdb"),
+    uploadsDir: path.join(root, "data", "uploads"),
+    configStore,
+    isHttpsReady: () => httpsReady,
   });
 
   const server = http.createServer(app);
@@ -49,12 +97,24 @@ async function startServer() {
     server.once("error", reject);
     server.listen(config.port, "0.0.0.0", () => {
       server.removeListener("error", reject);
-      printBanner(config.port);
       resolve();
     });
   });
 
-  return { server, port: config.port, config };
+  try {
+    const httpsServer = await startHttps({
+      app,
+      attachWebSocket,
+      config,
+      certDir: path.join(root, "data", "certs"),
+    });
+    httpsReady = Boolean(httpsServer);
+  } catch (err) {
+    console.warn(`HTTPS did not start (${err.message}). Browser screen share needs it. See PRESENTING.md.`);
+  }
+
+  printBanner(config, httpsReady);
+  return { server, port: config.port, config, httpsReady };
 }
 
 if (require.main === module) {

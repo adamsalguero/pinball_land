@@ -2,7 +2,7 @@
 
 Supported venue PC: **Beelink SER5** running **Windows 11** (the image it ships with). Adam’s home PC is also Windows. Do **not** install Linux for this wall.
 
-`npm start` is server-only (home testing). `npm run kiosk` starts the server if needed and opens a frameless fullscreen window on every attached monitor, left-to-right: `/display/1`, `/display/2`, `/display/3`. The control page stays on the phone/iPad.
+`npm start` is server-only (home testing). `npm run kiosk` starts the server if needed and opens a frameless fullscreen window for each **enabled** display, left to right: `/display/1`, then `/display/2`, then `/display/3`. The control page stays on the phone/iPad. How many screens are in use (1, 2, or 3) is set under **Displays** on that page and saved in `config.json`.
 
 The wall **auto-rotates by default**: logos, three amenity cards, and every enabled leaderboard, staggered across TVs. Interval and playlist toggles are on the control page. **Off** still blacks every screen immediately.
 
@@ -52,7 +52,7 @@ No Assigned Access / Windows Kiosk Mode is required.
    npm run kiosk
    ```
 
-   Confirm a fullscreen display window on each monitor, left to right. Control from a phone at the printed LAN URL (`http://<pc-ip>:3000/`, PIN `1234`).
+   Confirm a fullscreen display window on each enabled monitor, left to right. Control from a phone at the printed LAN URL (`http://<pc-ip>:3000/`, PIN `1234`). The first start also creates a local HTTPS certificate so guests can share a browser tab (see [PRESENTING.md](PRESENTING.md)).
 4. Keep Windows awake (the install script does this too):
 
    ```bat
@@ -76,11 +76,14 @@ No Assigned Access / Windows Kiosk Mode is required.
    powershell -ExecutionPolicy Bypass -File scripts\uninstall-kiosk-windows.ps1
    ```
 
-8. Firewall: when Windows asks, **allow Node.js** on private networks, port **3000**. Or:
+8. Firewall: when Windows asks, **allow Node.js** on private networks, ports **3000** (control and TVs) and **3443** (browser share). Or:
 
    ```powershell
    netsh advfirewall firewall add rule name="Pinball Land kiosk" dir=in action=allow protocol=TCP localport=3000
+   netsh advfirewall firewall add rule name="Pinball Land browser share" dir=in action=allow protocol=TCP localport=3443
    ```
+
+   AirPlay also needs the UxPlay program allowed on private networks the first time it runs. Details are in [PRESENTING.md](PRESENTING.md).
 
 9. Tests:
    - Sign out and back in: kiosk windows should appear without clicking anything.
@@ -100,7 +103,32 @@ npm install
 npm start
 ```
 
-Open `http://localhost:3000/display/1` (and `/display/2` on a second monitor if you have one). Control from `/` or a phone on the same WiFi. Optional: `npm run kiosk` if you want to try auto-fullscreen on the monitors you have.
+Open `http://localhost:3000/display/1` (and `/display/2` on a second monitor if you have one). Control from `/` or a phone on the same WiFi. Optional: `npm run kiosk` if you want to try auto-fullscreen on the monitors you have. With fewer monitors than **Displays** says are active, the kiosk skips the missing ones and prints that in the terminal.
+
+---
+
+## 5. Displays (1, 2, or 3)
+
+On the control page, **Displays**:
+
+- **1 / 2 / 3 screens** — how many TVs this wall is using. Adam can test with 3 now and drop to 1 or 2 later without a code change.
+- **Enabled / Disabled** on each screen. A disabled screen does not get a kiosk window.
+- **What that screen shows** — Rotation, a logo, an amenity card, a leaderboard, or black. A screen set to something other than Rotation stays there while the others keep rotating.
+- **Mirror one layout to all** — every enabled screen uses screen 1’s layout, including the same rotation card at the same time.
+- **Monitor order** — after `npm run kiosk` is running, the iPad lists the monitors Windows reported. Up/Down overrides left-to-right. **Reset to left-to-right** clears that override.
+- **Restart kiosk windows** — closes and reopens the TV windows. Count, enable, and order also apply on their own within a few seconds. Content changes show up immediately and do not reopen the windows.
+
+Saved in `config.json` under `displays` (and `presentation.idleMinutes`). If Windows has fewer monitors than the count, those slots are skipped and the terminal says so. Extra monitors past the count are ignored.
+
+---
+
+## 6. Presenting on one screen
+
+Guests can take one TV for a presentation. The other TVs keep rotating. End it from the iPad, or it ends itself after the idle minutes (default 10). **Off** still blacks every screen.
+
+Browser share, AirPlay, a web address, and an uploaded PDF or image are covered step by step in **[PRESENTING.md](PRESENTING.md)**. Google Cast does not run on this PC. Chrome users use browser share. A Chromecast or Google TV dongle on a spare HDMI input is the hardware option, also in that doc.
+
+Control stays PIN-protected. The guest page (`/present`) is only for devices on this WiFi, and it asks for the 4-digit code shown on the TV.
 
 ---
 

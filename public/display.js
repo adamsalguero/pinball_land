@@ -19,9 +19,25 @@ const boardEmpty = document.getElementById("board-empty");
 const machineArtWrap = document.getElementById("machine-art-wrap");
 const machineArt = document.getElementById("machine-art");
 const machineVideo = document.getElementById("machine-video");
+const presentPanel = document.getElementById("present");
+const presentWaiting = document.getElementById("present-waiting");
+const presentHeading = document.getElementById("present-heading");
+const presentCode = document.getElementById("present-code");
+const presentInstructions = document.getElementById("present-instructions");
+const presentVideo = document.getElementById("present-video");
+const presentImage = document.getElementById("present-image");
+const presentFrame = document.getElementById("present-frame");
 
 let payload = null;
 let lastKey = "";
+let socket = null;
+let pc = null;
+let iceQueue = [];
+let signalChain = Promise.resolve();
+let shownPresentId = null;
+let shownPresentSource = null;
+let helloId = null;
+const pendingMessages = [];
 
 function formatScore(score) {
   return Number(score || 0).toLocaleString("en-US");
@@ -37,16 +53,38 @@ function setMode(mode) {
   logoPanel.hidden = mode !== "logo";
   amenityPanel.hidden = mode !== "amenity";
   boardPanel.hidden = mode !== "board";
+  presentPanel.hidden = mode !== "present";
+}
+
+function teardownPresent() {
+  if (pc) {
+    pc.ontrack = null;
+    pc.onicecandidate = null;
+    pc.close();
+    pc = null;
+  }
+  iceQueue = [];
+  helloId = null;
+  shownPresentId = null;
+  shownPresentSource = null;
+  presentVideo.srcObject = null;
+  presentVideo.hidden = true;
+  presentImage.hidden = true;
+  presentImage.removeAttribute("src");
+  presentFrame.hidden = true;
+  presentFrame.src = "about:blank";
 }
 
 function showOff() {
   setMode("off");
   stopVideo();
+  teardownPresent();
 }
 
 function showLogo(url, label) {
   setMode("logo");
   stopVideo();
+  teardownPresent();
   logoImage.alt = label;
   logoFallback.textContent = `${label} — add the file in public/logos`;
   if (url) {
@@ -68,6 +106,7 @@ logoImage.addEventListener("error", () => {
 function showAmenity(amenity, photos) {
   setMode("amenity");
   stopVideo();
+  teardownPresent();
   amenityHeadline.textContent = amenity?.headline || "";
   amenityBody.textContent = amenity?.body || "";
   if (amenity?.eventTypes) {
@@ -121,6 +160,7 @@ function renderRows(rows) {
 
 function showBoard(board) {
   setMode("board");
+  teardownPresent();
   boardTitle.textContent = board?.name || "Leaderboard";
   const meta = [board?.manufacturer, board?.year].filter(Boolean).join(" · ");
   boardMeta.hidden = !meta;
@@ -174,6 +214,17 @@ function slotIndex() {
   return Number.isFinite(n) && n > 0 ? n - 1 : 0;
 }
 
+function cardFromContent(content, leaderboardId) {
+  if (!content || content === "off" || content === "rotation") return { type: "off" };
+  if (content === "pinnacle") return { type: "logo", key: "pinnacle" };
+  if (content === "pinball-land") return { type: "logo", key: "pinball-land" };
+  if (content === "amenity-arcade") return { type: "amenity", id: "arcade" };
+  if (content === "amenity-oasis") return { type: "amenity", id: "oasis" };
+  if (content === "amenity-events") return { type: "amenity", id: "events" };
+  if (content === "leaderboard") return { type: "leaderboard", id: leaderboardId };
+  return { type: "off" };
+}
+
 function cardFromSlot(state) {
   const slot = state.slots?.[SLOT];
   if (!slot || slot.content === "off") return { type: "off" };
@@ -191,8 +242,15 @@ function cardFromSlot(state) {
 function resolveCard() {
   const state = payload?.state;
   if (!state || state.blackout) return { type: "off" };
+  const presentation = payload.presentations?.[SLOT];
+  if (presentation?.source) return { type: "present", presentation };
+  const layout = payload.layout?.[SLOT];
+  if (layout && layout.content && layout.content !== "rotation") {
+    return cardFromContent(layout.content, layout.leaderboardId);
+  }
+  const stagger = Number.isInteger(layout?.staggerIndex) ? layout.staggerIndex : slotIndex();
   if (state.rotation?.enabled) {
-    return cardForSlot(payload.playlist, currentTick(state.rotation.startedAt, state.rotation.intervalSec), slotIndex())
+    return cardForSlot(payload.playlist, currentTick(state.rotation.startedAt, state.rotation.intervalSec), stagger)
       || { type: "off" };
   }
   return cardFromSlot(state);
@@ -200,6 +258,10 @@ function resolveCard() {
 
 function cardKey(card) {
   if (!card) return "off";
+  if (card.type === "present") {
+    const item = card.presentation;
+    return `present:${item.id}:${item.source}:${item.url || ""}:${item.fileUrl || ""}:${item.code || ""}:${item.helper?.ok}:${item.helper?.error || ""}`;
+  }
   if (card.type === "logo") return `logo:${card.key}`;
   if (card.type === "amenity") return `amenity:${card.id}`;
   if (card.type === "leaderboard") return `board:${card.id}`;
@@ -230,6 +292,10 @@ function renderCard(card) {
     showOff();
     return;
   }
+  if (card.type === "present") {
+    showPresent(card.presentation);
+    return;
+  }
   if (card.type === "logo") {
     const label = card.key === "pinnacle"
       ? "Pinnacle Group Financial Services"
@@ -246,6 +312,156 @@ function renderCard(card) {
   showBoard(board);
 }
 
+function shareLines() {
+  const share = payload?.share;
+  if (!share) return "Open /present on this WiFi";
+  const host = share.hosts?.[0] || location.hostname;
+  const protocol = share.secure ? "https" : "http";
+  return `${protocol}://${host}:${share.port}${share.path || "/present"}`;
+}
+
+function sendPresent(message) {
+  const data = JSON.stringify(message);
+  if (socket && socket.readyState === 1) socket.send(data);
+  else pendingMessages.push(data);
+}
+
+function flushPending() {
+  if (!socket || socket.readyState !== 1) return;
+  while (pendingMessages.length) socket.send(pendingMessages.shift());
+}
+
+function helloViewer(presentation) {
+  if (helloId === presentation.id) return;
+  helloId = presentation.id;
+  sendPresent({ type: "present-hello", presentationId: presentation.id, role: "viewer" });
+}
+
+function openViewerPeer(presentation) {
+  if (pc) {
+    pc.ontrack = null;
+    pc.onicecandidate = null;
+    pc.close();
+  }
+  iceQueue = [];
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.ontrack = (event) => {
+    const [stream] = event.streams;
+    if (!stream) return;
+    presentVideo.srcObject = stream;
+    presentVideo.hidden = false;
+    presentWaiting.hidden = true;
+    presentVideo.play().catch(() => {});
+    sendPresent({ type: "present-live", presentationId: presentation.id });
+  };
+  pc.onicecandidate = (event) => {
+    if (!event.candidate) return;
+    sendPresent({
+      type: "present-signal",
+      presentationId: presentation.id,
+      payload: { kind: "ice", candidate: event.candidate },
+    });
+  };
+}
+
+async function acceptSignal(presentation, signal) {
+  if (!signal) return;
+  if (signal.kind === "offer" && signal.sdp) {
+    openViewerPeer(presentation);
+    await pc.setRemoteDescription(signal.sdp);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendPresent({
+      type: "present-signal",
+      presentationId: presentation.id,
+      payload: { kind: "answer", sdp: pc.localDescription },
+    });
+    const queued = iceQueue;
+    iceQueue = [];
+    for (const candidate of queued) {
+      await pc.addIceCandidate(candidate).catch(() => {});
+    }
+    return;
+  }
+  if (signal.kind === "ice" && signal.candidate) {
+    if (!pc || !pc.remoteDescription) {
+      iceQueue.push(signal.candidate);
+      return;
+    }
+    await pc.addIceCandidate(signal.candidate).catch(() => {});
+  }
+}
+
+function showPresent(presentation) {
+  setMode("present");
+  stopVideo();
+  const same = shownPresentId === presentation.id && shownPresentSource === presentation.source;
+  if (!same) {
+    if (pc) {
+      pc.close();
+      pc = null;
+    }
+    iceQueue = [];
+    helloId = null;
+    presentVideo.srcObject = null;
+    presentVideo.hidden = true;
+    presentImage.hidden = true;
+    presentImage.removeAttribute("src");
+    presentFrame.hidden = true;
+    presentFrame.src = "about:blank";
+    shownPresentId = presentation.id;
+    shownPresentSource = presentation.source;
+  }
+
+  if (presentation.source === "webrtc") {
+    presentFrame.hidden = true;
+    presentImage.hidden = true;
+    presentHeading.textContent = "Share to this screen";
+    presentCode.hidden = false;
+    presentCode.textContent = presentation.code || "";
+    presentInstructions.textContent = `On a laptop or Android phone, open\n${shareLines()}\nand enter this code.\n\niPhone and iPad cannot share from Safari. Use AirPlay and choose ${payload?.airplay?.serverName || "Pinball Land"}.`;
+    if (!presentVideo.srcObject) presentWaiting.hidden = false;
+    helloViewer(presentation);
+    return;
+  }
+
+  if (presentation.source === "airplay") {
+    presentVideo.hidden = true;
+    presentImage.hidden = true;
+    presentFrame.hidden = true;
+    presentCode.hidden = true;
+    presentWaiting.hidden = false;
+    const name = payload?.airplay?.serverName || "Pinball Land";
+    presentHeading.textContent = presentation.helper?.ok === false ? "AirPlay needs setup" : "AirPlay to this screen";
+    presentInstructions.textContent = presentation.helper?.ok === false
+      ? `${presentation.helper.error || "UxPlay is not running."}\n\nInstall the helper on the wall PC, then try again. Steps are in PRESENTING.md.`
+      : `On iPhone or Mac: Control Center → Screen Mirroring → ${name}.\n\nThis screen stays up until the mirror connects.`;
+    return;
+  }
+
+  presentWaiting.hidden = true;
+  presentCode.hidden = true;
+  presentVideo.hidden = true;
+  if (presentation.source === "file" && presentation.fileKind === "image") {
+    presentFrame.hidden = true;
+    presentFrame.src = "about:blank";
+    presentImage.hidden = false;
+    presentImage.alt = presentation.fileName || "Presentation";
+    if (presentation.fileUrl && presentImage.getAttribute("src") !== presentation.fileUrl) {
+      presentImage.src = presentation.fileUrl;
+    }
+    return;
+  }
+
+  const frameUrl = presentation.source === "url" ? presentation.url : presentation.fileUrl;
+  presentImage.hidden = true;
+  presentImage.removeAttribute("src");
+  presentFrame.hidden = false;
+  if (frameUrl && presentFrame.src !== new URL(frameUrl, location.href).href) {
+    presentFrame.src = frameUrl;
+  }
+}
+
 function tick() {
   if (!payload) return;
   applyTheme(payload.state?.theme);
@@ -260,14 +476,28 @@ function applyPayload(next) {
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${proto}://${location.host}/ws`);
+  socket = new WebSocket(`${proto}://${location.host}/ws`);
+  socket.addEventListener("open", () => {
+    helloId = null;
+    flushPending();
+    const presentation = payload?.presentations?.[SLOT];
+    if (presentation?.source === "webrtc") helloViewer(presentation);
+  });
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (message.type === "state") {
       applyPayload(message);
+      return;
+    }
+    if (message.type === "present-signal" && message.payload) {
+      const presentation = payload?.presentations?.[SLOT];
+      if (presentation?.source === "webrtc" && presentation.id === message.presentationId) {
+        signalChain = signalChain.then(() => acceptSignal(presentation, message.payload)).catch(() => {});
+      }
     }
   });
   socket.addEventListener("close", () => {
+    socket = null;
     setTimeout(connect, 1000);
   });
 }

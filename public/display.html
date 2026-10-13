@@ -10,6 +10,17 @@
   <body>
     <main id="screen" class="screen" data-mode="off" aria-live="polite">
       <div id="off" class="panel off-panel" hidden></div>
+      <div id="present" class="panel present-panel" hidden>
+        <div id="present-waiting" class="present-waiting">
+          <p class="present-kicker">Pinball Land</p>
+          <h1 id="present-heading">Share to this screen</h1>
+          <p id="present-code" class="present-code" hidden></p>
+          <p id="present-instructions" class="present-instructions"></p>
+        </div>
+        <video id="present-video" autoplay playsinline hidden></video>
+        <img id="present-image" alt="" hidden />
+        <iframe id="present-frame" title="Presentation" hidden></iframe>
+      </div>
       <div id="logo" class="panel logo-panel" hidden>
         <p id="logo-fallback" class="logo-fallback" hidden></p>
         <img id="logo-image" alt="" hidden />

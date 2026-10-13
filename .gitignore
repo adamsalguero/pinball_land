@@ -2,6 +2,9 @@ node_modules/
 data/state.json
 data/state.json.tmp
 data/opdb/
+data/certs/
+data/uploads/
+tools/*.exe
 .DS_Store
 *.log
 .env
