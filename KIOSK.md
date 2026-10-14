@@ -1,6 +1,6 @@
 # Kiosk wall (Windows 11 + BIOS)
 
-Supported venue PC: **Beelink SER5** running **Windows 11** (the image it ships with). Adam’s home PC is also Windows. Do **not** install Linux for this wall.
+Supported venue PC: **Beelink SER5** running **Windows 11** (the image it ships with). Adam’s home PC is also Windows. Do **not** install Linux for this wall. The short install is [QUICKSTART.md](QUICKSTART.md).
 
 `npm start` is server-only (home testing). `npm run kiosk` starts the server if needed and opens a frameless fullscreen window for each **enabled** display, left to right: `/display/1`, then `/display/2`, then `/display/3`. The control page stays on the phone/iPad. How many screens are in use (1, 2, or 3) is set under **Displays** on that page and saved in `config.json`.
 
@@ -157,7 +157,7 @@ Control stays PIN-protected. The guest page (`/present`) is only for devices on 
 
 - BIOS **Restore on AC Power** (or Auto Power On) = On. See section 1.
 - Windows auto-logon is set with `netplwiz`.
-- `powershell -File scripts\install-kiosk-windows.ps1` registers the Node server at startup and the Electron kiosk at logon, restarts them after a crash, turns off sleep and the screensaver, and sets Windows Update active hours (9:00–23:00) so the PC does not reboot during open hours.
+- `powershell -File scripts\install-kiosk-windows.ps1` registers the Node server at logon and the Electron kiosk 20 seconds later, restarts them after a crash, turns off sleep and the screensaver, and sets Windows Update active hours (9:00–23:00) so the PC does not reboot during open hours. The one-command path is [QUICKSTART.md](QUICKSTART.md).
 - Check the tasks with `powershell -File scripts\install-kiosk-windows.ps1 -Verify`.
 - The kiosk keeps replacing windows until every enabled display has a monitor. TVs on Kasa plugs can finish booting after the PC.
 - Reset a forgotten admin PIN from the kiosk tray (**Reset PIN to default**) or with `npm run reset-pin`. Default is `2224`.

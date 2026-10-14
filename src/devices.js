@@ -87,7 +87,14 @@ class DeviceStore {
   find(token) {
     if (!token) return null;
     const hashed = hashToken(token);
-    return this.data.devices.find((device) => safeEqual(device.tokenHash, hashed)) || null;
+    const device = this.data.devices.find((item) => safeEqual(item.tokenHash, hashed)) || null;
+    if (!device) return null;
+    if (Date.now() - device.createdAt > DEVICE_MAX_AGE_MS) {
+      this.revoke(device.id);
+      this.save().catch((err) => console.error(err));
+      return null;
+    }
+    return device;
   }
 
   touch(id) {

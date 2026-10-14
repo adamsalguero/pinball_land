@@ -62,12 +62,22 @@ function normalizeMotion(raw) {
   return ["off", "subtle", "full"].includes(value) ? value : "subtle";
 }
 
+function httpBaseUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) return "";
+    return url.toString().replace(/\/$/, "").slice(0, 200);
+  } catch {
+    return "";
+  }
+}
+
 function normalizePhotos(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   const eventName = String(incoming.eventName || "Tonight").trim().slice(0, 60);
   return {
     autoApprove: Boolean(incoming.autoApprove),
-    publicBaseUrl: String(incoming.publicBaseUrl || "").trim().slice(0, 200),
+    publicBaseUrl: httpBaseUrl(incoming.publicBaseUrl),
     style: incoming.style === "collage" ? "collage" : "pinboard",
     span: incoming.span !== false,
     eventName: eventName || "Tonight",
@@ -82,7 +92,9 @@ function normalizeUpdates(raw) {
     intervalMin: Number.isFinite(interval) ? Math.min(1440, Math.max(5, interval)) : 30,
     channel: incoming.channel === "preview" ? "preview" : "stable",
     branch: String(incoming.branch || "main").trim() || "main",
-    repo: String(incoming.repo || "adamsalguero/pinball_land").trim() || "adamsalguero/pinball_land",
+    repo: /^[\w.-]+\/[\w.-]+$/.test(String(incoming.repo || "").trim())
+      ? String(incoming.repo).trim()
+      : "adamsalguero/pinball_land",
     quietStart: String(incoming.quietStart || "02:00"),
     quietEnd: String(incoming.quietEnd || "06:00"),
   };

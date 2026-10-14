@@ -173,7 +173,11 @@ async function loadScores() {
     for (const row of board.rows || []) {
       const line = document.createElement("div");
       line.className = "score-card";
-      line.innerHTML = `<span>${row.name || "—"}</span><strong>${Number(row.score || 0).toLocaleString("en-US")}</strong>`;
+      const name = document.createElement("span");
+      name.textContent = row.name || "—";
+      const points = document.createElement("strong");
+      points.textContent = Number(row.score || 0).toLocaleString("en-US");
+      line.append(name, points);
       wrap.append(line);
     }
     scores.append(wrap);

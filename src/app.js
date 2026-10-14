@@ -11,7 +11,7 @@ const { buildPlaylist } = require("./playlist");
 const { createOpdb, manufacturerName, manufactureYear, safeId } = require("./opdb");
 const { createConfigStore } = require("./config");
 const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
-const { getLanIPv4s, lanRequired, loopbackRequired } = require("./lan");
+const { getLanIPv4s, isLanAddress, forwardedAddress, lanRequired, loopbackRequired } = require("./lan");
 const { Presentations } = require("./presentations");
 const { DISPLAY_CONTENTS, layoutForDisplays, mapDisplaysToSlots } = require("./displays");
 const { PlugService, createTplinkClient } = require("./plugs");
@@ -20,7 +20,8 @@ const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, 
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards } = require("./catalog");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
-const { selectRelease, planApply, inQuietWindow } = require("./updater");
+const { selectRelease } = require("./updater");
+const { isInside } = require("./paths");
 const pkg = require("../package.json");
 
 const UPLOAD_TYPES = {
@@ -91,7 +92,6 @@ function createApp({
   now,
 }) {
   const app = express();
-  const sessions = new Set();
   const opdb = createOpdb({
     apiKey: opdbApiKey,
     cacheDir,
@@ -278,15 +278,35 @@ function createApp({
     };
   }
 
-  function sendAll(message) {
-    const data = JSON.stringify(message);
-    for (const client of clients) {
-      if (client.readyState === 1) client.send(data);
-    }
+  function publicPayload(full) {
+    return {
+      state: full.state,
+      logos: full.logos,
+      photos: full.photos,
+      amenities: full.amenities,
+      guest: {
+        path: full.guest.path,
+        eventName: full.guest.eventName,
+        style: full.guest.style,
+        photos: full.guest.photos,
+        events: full.guest.events,
+      },
+      serverNow: full.serverNow,
+      version: full.version,
+      motion: full.motion,
+    };
+  }
+
+  function stateFor(trusted) {
+    const full = payload();
+    return trusted ? full : publicPayload(full);
   }
 
   broadcast = () => {
-    sendAll({ type: "state", ...payload() });
+    for (const client of clients) {
+      if (client.readyState !== 1) continue;
+      client.send(JSON.stringify({ type: "state", ...stateFor(client.trusted !== false) }));
+    }
   };
 
   function assertOpen(slot) {
@@ -424,49 +444,98 @@ function createApp({
     return cookies[COOKIE_NAME] || req.get("x-device-token") || "";
   }
 
-  function isAuthed(req) {
-    if (devices.find(presentedToken(req))) return true;
-    const headerPin = req.get("x-pin");
-    return Boolean(headerPin && headerPin === currentPin());
+  function pinMatches(submitted) {
+    const given = Buffer.from(String(submitted || ""));
+    const expected = Buffer.from(String(currentPin()));
+    if (given.length !== expected.length || given.length === 0) return false;
+    return crypto.timingSafeEqual(given, expected);
   }
 
-  function setDeviceCookie(res, token) {
+  const loginFailures = new Map();
+  const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  const LOGIN_LIMIT = 8;
+
+  function recentFailures(ip) {
+    const now = Date.now();
+    const hits = (loginFailures.get(ip) || []).filter((stamp) => now - stamp < LOGIN_WINDOW_MS);
+    if (hits.length) loginFailures.set(ip, hits);
+    else loginFailures.delete(ip);
+    return hits;
+  }
+
+  function isAuthed(req) {
+    if (devices.find(presentedToken(req))) return true;
+    return pinMatches(req.get("x-pin"));
+  }
+
+  function setDeviceCookie(req, res, token) {
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: "lax",
+      secure: Boolean(req.secure),
       path: "/",
       maxAge: SESSION_MAX_AGE_MS,
     });
   }
 
   function requirePin(req, res, next) {
-    if (isAuthed(req)) {
+    if (!isLanAddress(forwardedAddress(req))) {
+      return sendJson(res, 403, { error: "Admin controls stay on the venue network." });
+    }
+    const device = devices.find(presentedToken(req));
+    if (device) {
+      if (Date.now() - device.lastSeen > 60 * 1000) {
+        devices.touch(device.id);
+        devices.save().catch((err) => console.error(err));
+      } else {
+        devices.touch(device.id);
+      }
       return next();
     }
-    sendJson(res, 401, { error: "PIN required" });
+    const ip = forwardedAddress(req);
+    if (recentFailures(ip).length >= LOGIN_LIMIT) {
+      return sendJson(res, 429, { error: "Too many PIN attempts. Wait 15 minutes." });
+    }
+    if (!pinMatches(req.get("x-pin"))) {
+      if (req.get("x-pin")) {
+        const hits = recentFailures(ip);
+        hits.push(Date.now());
+        loginFailures.set(ip, hits);
+      }
+      return sendJson(res, 401, { error: "PIN required" });
+    }
+    loginFailures.delete(ip);
+    return next();
   }
 
   app.get("/api/health", (_req, res) => {
     sendJson(res, 200, { ok: true });
   });
 
-  app.get("/api/state", (_req, res) => {
-    sendJson(res, 200, payload());
+  app.get("/api/state", (req, res) => {
+    sendJson(res, 200, stateFor(isLanAddress(forwardedAddress(req))));
   });
 
   app.get("/api/auth", (req, res) => {
     sendJson(res, 200, { ok: isAuthed(req) });
   });
 
-  app.post("/api/login", async (req, res, next) => {
+  app.post("/api/login", lanRequired, async (req, res, next) => {
     try {
-      const submitted = String(req.body?.pin || "");
-      if (submitted !== currentPin()) {
+      const ip = forwardedAddress(req);
+      if (recentFailures(ip).length >= LOGIN_LIMIT) {
+        return sendJson(res, 429, { error: "Too many PIN attempts. Wait 15 minutes." });
+      }
+      if (!pinMatches(req.body?.pin)) {
+        const hits = recentFailures(ip);
+        hits.push(Date.now());
+        loginFailures.set(ip, hits);
         return sendJson(res, 401, { error: "Wrong PIN" });
       }
+      loginFailures.delete(ip);
       const issued = devices.issue(req.body?.name);
       await devices.save();
-      setDeviceCookie(res, issued.token);
+      setDeviceCookie(req, res, issued.token);
       sendJson(res, 200, { ok: true, token: issued.token, device: issued.device });
     } catch (err) {
       next(err);
@@ -707,7 +776,7 @@ function createApp({
     }
     const filePath = path.join(cacheDir, board.artFile);
     const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(path.resolve(cacheDir))) {
+    if (!isInside(cacheDir, resolved)) {
       return res.status(404).send("No machine art");
     }
     if (!fs.existsSync(resolved)) {
@@ -769,7 +838,10 @@ function createApp({
 
   app.post("/api/kiosk/monitors", loopbackRequired, (req, res) => {
     rememberMonitors(req.body?.displays);
-    sendAll({ type: "kiosk", kiosk: payload().kiosk });
+    const message = JSON.stringify({ type: "kiosk", kiosk: payload().kiosk });
+    for (const client of clients) {
+      if (client.readyState === 1 && client.trusted !== false) client.send(message);
+    }
     sendJson(res, 200, { ok: true, count: monitors.length });
   });
 
@@ -1032,12 +1104,11 @@ function createApp({
     });
   });
 
-  app.get("/media/videos/:id", (req, res) => {
+  app.get("/media/videos/:id", lanRequired, (req, res) => {
     const item = library.get(String(req.params.id || ""));
     if (!item) return res.status(404).send("Not found");
     const filePath = path.resolve(library.filePath(item));
-    const folderRoot = path.resolve(mediaRoot, item.folder);
-    if (filePath !== folderRoot && !filePath.startsWith(`${folderRoot}${path.sep}`)) {
+    if (!isInside(path.join(mediaRoot, item.folder), filePath)) {
       return res.status(404).send("Not found");
     }
     if (!fs.existsSync(filePath)) return res.status(404).send("Not found");
@@ -1285,7 +1356,7 @@ function createApp({
     res.type("jpeg").sendFile(filePath);
   });
 
-  app.get("/media/starter/:id", (req, res) => {
+  app.get("/media/starter/:id", lanRequired, (req, res) => {
     const item = catalogItems.find((entry) => entry.id === req.params.id);
     const filePath = item ? starterFile(mediaRoot, item) : null;
     if (!filePath) return res.status(404).send("Not downloaded");
@@ -1320,14 +1391,14 @@ function createApp({
     }
   });
 
-  app.post("/api/admin/join", async (req, res, next) => {
+  app.post("/api/admin/join", lanRequired, async (req, res, next) => {
     try {
       if (!devices.joinMatches(req.body?.token)) {
         return sendJson(res, 401, { error: "That admin link is no longer valid." });
       }
       const issued = devices.issue(req.body?.name || "Joined iPad");
       await devices.save();
-      setDeviceCookie(res, issued.token);
+      setDeviceCookie(req, res, issued.token);
       sendJson(res, 200, { ok: true, token: issued.token, device: issued.device });
     } catch (err) {
       next(err);
@@ -1443,28 +1514,25 @@ function createApp({
   app.post("/api/updates/now", requirePin, async (req, res, next) => {
     try {
       const updates = currentConfig().updates;
-      if (process.env.NODE_TEST_CONTEXT) {
-        return sendJson(res, 200, {
-          version: pkg.version,
-          plan: "keep",
-          dataDir: "kept",
-          latest: null,
-        });
-      }
       let latest = null;
-      const response = await fetch(`https://api.github.com/repos/${updates.repo}/releases?per_page=5`, {
-        headers: { accept: "application/vnd.github+json", "user-agent": "pinball-land" },
-      });
-      if (response.ok) {
-        const release = selectRelease(await response.json(), updates);
-        latest = release ? release.tag_name : null;
+      if (!process.env.NODE_TEST_CONTEXT) {
+        const response = await fetch(`https://api.github.com/repos/${updates.repo}/releases?per_page=5`, {
+          headers: { accept: "application/vnd.github+json", "user-agent": "pinball-land" },
+        });
+        if (response.ok) {
+          const release = selectRelease(await response.json(), updates);
+          latest = release ? release.tag_name : null;
+        }
       }
-      const quiet = inQuietWindow(new Date(), updates.quietStart, updates.quietEnd);
+      const updateAvailable = Boolean(latest && latest !== `v${pkg.version}` && latest !== pkg.version);
       sendJson(res, 200, {
         version: pkg.version,
         latest,
-        plan: planApply({ stagingOk: Boolean(latest), inQuiet: quiet, force: true }),
-        dataDir: "kept",
+        updateAvailable,
+        applied: false,
+        note: updateAvailable
+          ? `Version ${latest} is on GitHub. Download it on the kiosk PC and restart. This button does not install it.`
+          : `Version ${pkg.version}. No install was started. The data folder stays put.`,
       });
     } catch (err) {
       next(err);
@@ -1484,7 +1552,7 @@ function createApp({
     res.sendFile(path.join(publicDir, "admin-sw.js"));
   });
 
-  app.get("/media/uploads/:file", (req, res) => {
+  app.get("/media/uploads/:file", lanRequired, (req, res) => {
     const name = String(req.params.file || "");
     if (!/^[0-9a-f-]{36}\.(jpg|png|webp|gif|pdf)$/i.test(name)) {
       return res.status(404).send("Not found");
@@ -1589,6 +1657,10 @@ function createApp({
         socket.send(JSON.stringify({ type: "present-error", error: "That presentation has ended." }));
         return;
       }
+      if (role === "viewer" && socket.trusted === false) {
+        socket.send(JSON.stringify({ type: "present-error", error: "That screen is only on the venue network." }));
+        return;
+      }
       if (role === "sharer" && !presentations.authorizeSharer(presentationId, message.token)) {
         socket.send(JSON.stringify({ type: "present-error", error: "Share session was rejected." }));
         return;
@@ -1668,10 +1740,11 @@ function createApp({
 
   function attachWebSocket(server) {
     const wss = new WebSocketServer({ server, path: "/ws" });
-    wss.on("connection", (socket) => {
+    wss.on("connection", (socket, req) => {
+      socket.trusted = isLanAddress(forwardedAddress(req));
       clients.add(socket);
       socket.on("close", () => clients.delete(socket));
-      socket.send(JSON.stringify({ type: "state", ...payload() }));
+      socket.send(JSON.stringify({ type: "state", ...stateFor(socket.trusted) }));
       socket.on("message", (raw) => {
         handleClientMessage(socket, raw).catch((err) => console.error(err));
       });
@@ -1679,7 +1752,7 @@ function createApp({
     return wss;
   }
 
-  return { app, attachWebSocket, sessions, presentations };
+  return { app, attachWebSocket, presentations };
 }
 
 module.exports = { createApp };

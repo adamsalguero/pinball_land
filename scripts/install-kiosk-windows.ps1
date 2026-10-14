@@ -35,16 +35,15 @@ Write-Host "Registering scheduled task '$taskName' to run at logon..."
 
 $action = New-ScheduledTaskAction -Execute $cmdPath -WorkingDirectory $RepoRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-
+$trigger.Delay = "PT20S"
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 
 $serverAction = New-ScheduledTaskAction -Execute "node.exe" -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
-$serverTrigger = New-ScheduledTaskTrigger -AtStartup
+$serverTrigger = New-ScheduledTaskTrigger -AtLogOn
 Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
-Write-Host "Registered '$serverTask' at startup and '$taskName' at logon with restart-on-failure."
+Write-Host "Registered '$serverTask' at logon and '$taskName' 20 seconds later, with restart-on-failure."
 
 Write-Host "Hiding notifications, the screensaver, and update reboots during open hours..."
 New-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications" -Force | Out-Null

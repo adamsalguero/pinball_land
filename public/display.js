@@ -730,7 +730,9 @@ function showYoutube(card) {
 }
 
 window.addEventListener("message", (event) => {
-  if (!String(event.origin || "").includes("youtube")) return;
+  let host = "";
+  try { host = new URL(event.origin).hostname; } catch { return; }
+  if (!["www.youtube.com", "youtube.com", "www.youtube-nocookie.com", "youtube-nocookie.com"].includes(host)) return;
   let data = event.data;
   if (typeof data === "string") {
     try { data = JSON.parse(data); } catch { return; }

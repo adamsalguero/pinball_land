@@ -12,7 +12,7 @@ The QR on the Live Pinboard screen points here. If phones are on cellular, set a
 
 ## Pinball Land Admin
 
-Open `http://<kiosk>:3000/admin`. The default PIN is `2224`. Change it under Settings. It is a convenience gate, not a lock.
+Open `http://<kiosk>:3000/admin` on the venue WiFi. The default PIN is `2224`. Change it under Settings. It is a convenience gate, not a lock. Admin actions from the public internet are refused, including when a guest tunnel is pointed at this server.
 
 Entering the PIN once creates a long-lived device token. The browser stores it in an httpOnly cookie and in localStorage, so a Home Screen app opens without asking again. Settings lists every signed-in device and can revoke one, or sign out all of them. Signing out all devices also rotates the install link.
 

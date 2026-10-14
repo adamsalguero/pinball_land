@@ -17,8 +17,14 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm test
+      - name: Tag matches package.json
+        run: node -e "const v=require('./package.json').version; const t=process.env.GITHUB_REF_NAME.replace(/^v/,''); if(v!==t){console.error('Tag v'+t+' does not match package version '+v); process.exit(1)}"
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            Pinball Land kiosk. Install on the Beelink with the one command in QUICKSTART.md.
+            Mutable data stays in C:\ProgramData\PinballLand and is not overwritten by this release.
           files: media/catalog.json

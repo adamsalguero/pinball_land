@@ -135,6 +135,53 @@ test("guest upload needs no PIN, admin actions need a device token", async () =>
   }
 });
 
+test("internet clients can post a photo but cannot run admin or read share codes", async () => {
+  const { server, origin } = await startServer();
+  const remote = { "x-forwarded-for": "8.8.8.8" };
+  try {
+    const state = await json(origin, "/api/state", { headers: remote });
+    assert.equal(state.res.status, 200);
+    assert.ok(state.data.state.leaderboards);
+    assert.equal(state.data.presentations, undefined);
+    assert.equal(state.data.plugs, undefined);
+    assert.equal(state.data.airplay, undefined);
+    const blocked = await json(origin, "/api/off", { method: "POST", headers: { ...remote, "x-pin": "2224" } });
+    assert.equal(blocked.res.status, 403);
+    const login = await json(origin, "/api/login", { method: "POST", headers: remote, body: { pin: "2224" } });
+    assert.equal(login.res.status, 403);
+    const jpeg = await sharp({
+      create: { width: 400, height: 300, channels: 3, background: "#2d4c32" },
+    }).jpeg().toBuffer();
+    const uploaded = await fetch(`${origin}/api/guest-photos`, {
+      method: "POST",
+      headers: { "content-type": "image/jpeg", "x-forwarded-for": "8.8.8.8", "x-guest-name": "Sam" },
+      body: jpeg,
+    });
+    assert.equal(uploaded.status, 200);
+  } finally {
+    server.close();
+  }
+});
+
+test("repeated wrong PINs lock login, and expired device tokens stop working", async () => {
+  const { DeviceStore } = require("../src/devices");
+  const { server, origin, dir } = await startServer();
+  try {
+    for (let i = 0; i < 8; i += 1) {
+      const wrong = await json(origin, "/api/login", { method: "POST", body: { pin: "0000" } });
+      assert.equal(wrong.res.status, 401);
+    }
+    const locked = await json(origin, "/api/login", { method: "POST", body: { pin: "2224" } });
+    assert.equal(locked.res.status, 429);
+    const store = new DeviceStore(path.join(dir, "devices.json"));
+    const issued = store.issue("Old iPad");
+    store.data.devices[0].createdAt = Date.now() - (401 * 24 * 60 * 60 * 1000);
+    assert.equal(store.find(issued.token), null);
+  } finally {
+    server.close();
+  }
+});
+
 test("migration copies once and never overwrites the data dir", async () => {
   const appRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-app-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-data-"));
@@ -217,4 +264,8 @@ test("catalog and youtube inputs are explicit", () => {
   assert.equal(classifyImage({ width: 200, height: 100, guest: true }).ok, false);
   assert.equal(classifyImage({ width: 1920, height: 1080 }).mode, "full");
   assert.equal(classifyImage({ width: 800, height: 600 }).mode, "collage");
+  assert.equal(parseYoutubeInput('https://youtu.be/abc"><script>'), null);
+  const { normalizePhotos } = require("../src/config");
+  assert.equal(normalizePhotos({ publicBaseUrl: "javascript:alert(1)" }).publicBaseUrl, "");
+  assert.equal(normalizePhotos({ publicBaseUrl: "https://photos.example.com" }).publicBaseUrl, "https://photos.example.com");
 });

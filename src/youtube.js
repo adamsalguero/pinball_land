@@ -1,3 +1,10 @@
+function acceptYoutube(kind, id) {
+  const value = String(id || "");
+  if (kind === "video" && /^[A-Za-z0-9_-]{11}$/.test(value)) return { kind, id: value };
+  if (kind === "playlist" && /^[A-Za-z0-9_-]{12,80}$/.test(value)) return { kind, id: value };
+  return null;
+}
+
 function parseYoutubeInput(input) {
   const text = String(input || "").trim();
   if (!text) return null;
@@ -11,20 +18,15 @@ function parseYoutubeInput(input) {
     const host = url.hostname.replace(/^www\./, "");
     const list = url.searchParams.get("list");
     const video = url.searchParams.get("v");
-    if ((host === "youtube.com" || host === "youtube-nocookie.com" || host === "m.youtube.com") && list && !video) {
-      return { kind: "playlist", id: list };
-    }
-    if ((host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") && video) {
-      return { kind: "video", id: video };
-    }
+    const youtubeHost = host === "youtube.com" || host === "youtube-nocookie.com" || host === "m.youtube.com";
+    if (youtubeHost && list && !video) return acceptYoutube("playlist", list);
+    if (youtubeHost && video) return acceptYoutube("video", video);
     const parts = url.pathname.split("/").filter(Boolean);
-    if (host === "youtu.be" && parts[0]) return { kind: "video", id: parts[0].slice(0, 32) };
-    if (parts[0] === "embed" && parts[1] && parts[1] !== "videoseries") return { kind: "video", id: parts[1] };
-    if (parts[0] === "playlist" && list) return { kind: "playlist", id: list };
+    if (host === "youtu.be" && parts[0]) return acceptYoutube("video", parts[0]);
+    if (parts[0] === "embed" && parts[1] && parts[1] !== "videoseries") return acceptYoutube("video", parts[1]);
+    if (parts[0] === "playlist" && list) return acceptYoutube("playlist", list);
   }
-  if (/^PL[\w-]{8,}$/.test(text) || /^OLAK5uy[\w-]{8,}$/.test(text)) return { kind: "playlist", id: text };
-  if (/^[\w-]{11}$/.test(text)) return { kind: "video", id: text };
-  return null;
+  return acceptYoutube("playlist", text) || acceptYoutube("video", text);
 }
 
 function embedSrc(item) {
@@ -50,13 +52,11 @@ function embedSrc(item) {
 function normalizeYoutubeItem(raw) {
   if (!raw || typeof raw !== "object") return null;
   const parsed = parseYoutubeInput(raw.id) || parseYoutubeInput(raw.url);
-  const kind = raw.kind === "playlist" || raw.kind === "video" ? raw.kind : parsed?.kind;
-  const id = String(raw.id || parsed?.id || "").trim();
-  if (!kind || !id || id.length > 80) return null;
+  if (!parsed) return null;
   return {
-    id,
-    kind,
-    title: String(raw.title || (kind === "playlist" ? "Playlist" : "Video")).trim().slice(0, 80) || "Video",
+    id: parsed.id,
+    kind: parsed.kind,
+    title: String(raw.title || (parsed.kind === "playlist" ? "Playlist" : "Video")).trim().slice(0, 80) || "Video",
   };
 }
 

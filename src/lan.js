@@ -51,8 +51,17 @@ function clientAddress(req) {
   return req.socket?.remoteAddress || req.ip || "";
 }
 
+function forwardedAddress(req) {
+  const peer = normalizeIp(clientAddress(req));
+  if (!isLoopback(peer)) return peer;
+  const header = req.headers?.["cf-connecting-ip"] || req.headers?.["x-forwarded-for"] || "";
+  const first = String(header).split(",")[0].trim();
+  if (!first) return peer;
+  return normalizeIp(first);
+}
+
 function lanRequired(req, res, next) {
-  if (isLanAddress(clientAddress(req))) return next();
+  if (isLanAddress(forwardedAddress(req))) return next();
   const message = "Presenting is only available on this local network.";
   if (String(req.path || "").startsWith("/api/")) {
     return res.status(403).json({ error: message });
@@ -61,7 +70,7 @@ function lanRequired(req, res, next) {
 }
 
 function loopbackRequired(req, res, next) {
-  if (isLoopback(clientAddress(req))) return next();
+  if (isLoopback(forwardedAddress(req))) return next();
   return res.status(403).json({ error: "This endpoint is only available on the kiosk PC." });
 }
 
@@ -70,6 +79,8 @@ module.exports = {
   normalizeIp,
   isLoopback,
   isLanAddress,
+  clientAddress,
+  forwardedAddress,
   lanRequired,
   loopbackRequired,
 };

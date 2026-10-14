@@ -1468,7 +1468,7 @@ document.getElementById("revoke-all").addEventListener("click", async () => {
 });
 document.getElementById("update-now").addEventListener("click", async () => {
   const result = await api("/api/updates/now", { method: "POST" });
-  toast(result.latest ? `Update ${result.latest}` : `Version ${result.version}. Data folder stays put.`);
+  toast(result.note || `Version ${result.version}`);
 });
 
 const installHint = document.getElementById("install-hint");

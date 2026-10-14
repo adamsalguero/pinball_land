@@ -6,6 +6,6 @@ The Live Pinboard is the default wall card. New photos drop, tilt, and glow. Col
 
 Auto-approve is off until an admin turns it on. Approve and reject are on the Photos tab. Download a zip of an event, or clear that event, from the photo API.
 
-A public base URL is optional for a Cloudflare Tunnel when guest phones are not on the venue WiFi. The wall QR uses that URL when it is set.
+A public base URL is optional for a Cloudflare Tunnel when guest phones are not on the venue WiFi. Use the `https://` origin with no path. The wall QR uses that URL when it is set. The tunnel must send `CF-Connecting-IP` or `X-Forwarded-For`. Guest upload stays open. Admin, the PIN, plugs, and share codes stay on the venue network.
 
 Guest photos are stored in the data directory, not in the app folder.

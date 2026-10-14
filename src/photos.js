@@ -6,6 +6,7 @@ const { classifyImage } = require("./resolution");
 
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_PER_WINDOW = 30;
+const MAX_STORED = 400;
 
 function cleanText(value, max) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -81,6 +82,9 @@ class GuestAlbum {
       throw Object.assign(new Error("Too many photos from this phone. Wait a few minutes."), { status: 429 });
     }
     const body = Buffer.isBuffer(buffer) ? buffer : Buffer.alloc(0);
+    if (this.photos.length >= MAX_STORED) {
+      throw Object.assign(new Error("The wall is full. Ask the host to clear an event."), { status: 429 });
+    }
     if (!body.length) throw Object.assign(new Error("That photo is empty."), { status: 400 });
     if (body.length > 25 * 1024 * 1024) {
       throw Object.assign(new Error("That photo is over 25 MB."), { status: 400 });
@@ -175,7 +179,10 @@ class GuestAlbum {
     this.photos = this.photos.filter((photo) => photo.eventId !== eventId);
     this.events = this.events.filter((item) => item.id !== eventId);
     await this.save();
-    await Promise.all(doomed.map((photo) => fsp.unlink(path.join(this.filesDir, photo.file)).catch(() => {})));
+    await Promise.all(doomed.map((photo) => {
+      const target = this.filePath(photo);
+      return target ? fsp.unlink(target).catch(() => {}) : Promise.resolve();
+    }));
     return { cleared: doomed.length };
   }
 
@@ -191,11 +198,13 @@ class GuestAlbum {
     });
     archive.pipe(res);
     for (const photo of photos) {
-      const filePath = path.join(this.filesDir, photo.file);
-      if (fs.existsSync(filePath)) archive.file(filePath, { name: `${photo.guestName || "guest"}-${photo.id}.jpg` });
+      const filePath = this.filePath(photo);
+      if (!filePath || !fs.existsSync(filePath)) continue;
+      const safeName = String(photo.guestName || "guest").replace(/[^\w.-]+/g, "-").slice(0, 40) || "guest";
+      archive.file(filePath, { name: `${safeName}-${photo.id}.jpg` });
     }
     await archive.finalize();
   }
 }
 
-module.exports = { GuestAlbum, WINDOW_MS, MAX_PER_WINDOW };
+module.exports = { GuestAlbum, WINDOW_MS, MAX_PER_WINDOW, MAX_STORED };

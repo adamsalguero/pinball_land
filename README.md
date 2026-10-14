@@ -1,6 +1,6 @@
 # Pinball Land kiosk
 
-Local web app for the screen wall at Pinball Land (Pinnacle Entertainment Center). One Node process serves up to three display pages plus a phone/iPad control page on the same WiFi. The wall can run 1, 2, or 3 screens. Guests can present on one of them. See **[PRESENTING.md](PRESENTING.md)**.
+Local web app for the screen wall at Pinball Land (Pinnacle Entertainment Center). One Node process serves up to three display pages, a guest app, and an admin app on the same WiFi. The wall can run 1, 2, or 3 screens. Guests can present on one of them. The Beelink path is **[QUICKSTART.md](QUICKSTART.md)**. Presenting is **[PRESENTING.md](PRESENTING.md)**.
 
 **Venue PC:** Beelink SER5, **Windows 11**, BIOS Auto Power On after AC loss. **Home PC:** Windows, `npm start` only. Ron drives it from an iPad. See **[KIOSK.md](KIOSK.md)** for the numbered always-on checklist.
 
@@ -62,10 +62,10 @@ Change PIN, port, or OPDB token in `config.json` (`PORT`, `CONTROL_PIN`, `HTTPS_
 
 From [Pinnacle Group Financial Services](https://www.pinnaclegroupfinancial.com/) and [Pinnacle Entertainment Center](https://www.pinnaclegroupfinancial.com/pinnacle-entertainment-center):
 
-- `public/logos/pinnacle.svg` (PNG fallback: `pinnacle.png`) — Pinnacle Group Financial Services
-- `public/logos/pinball-land.svg` (PNG fallback: `pinball-land.png`) — Pinnacle Entertainment Center
+- `public/logos/pinnacle.svg` — Pinnacle Group Financial Services
+- `public/logos/pinball-land.svg` — Pinnacle Entertainment Center
 - `public/photos/arcade.jpg` — 2-story arcade
-- `public/photos/oasis.png` — Outdoor Oasis (the waterfall/garden photo; not a pool)
+- `public/photos/oasis.jpg` — Outdoor Oasis (the waterfall/garden photo; not a pool)
 
 Displays prefer the SVG lockups. Lettering is converted to paths so the wall does not need those mark fonts installed. UI copy uses Lato.
 
