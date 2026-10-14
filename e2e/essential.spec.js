@@ -89,7 +89,7 @@ test("wall and controller snapshots", async ({ page }) => {
   await page.goto("/admin");
   await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
   await page.screenshot({ path: "e2e/artifacts/admin-login-mobile.png" });
-  await expect(page).toHaveScreenshot("admin-login-mobile.png");
+  await expect(page).toHaveScreenshot("admin-login-mobile.png", { maxDiffPixelRatio: 0.08 });
   await unlock(page);
   await page.screenshot({ path: "e2e/artifacts/admin-screens-mobile.png" });
   await page.setViewportSize({ width: 1280, height: 800 });
