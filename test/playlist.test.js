@@ -44,6 +44,8 @@ test("playlist stagger keeps neighboring TVs on different cards", () => {
       "amenity:arcade",
       "amenity:oasis",
       "amenity:events",
+      "clock:clock",
+      "pinboard:pinboard",
       "leaderboard:evt",
       "leaderboard:mach",
     ]
@@ -82,6 +84,6 @@ test("currentTick advances by interval and disabled boards drop out", () => {
   });
   assert.deepEqual(
     playlist.map((card) => card.type + ":" + (card.key || card.id)),
-    ["logo:pinball-land", "leaderboard:shown"]
+    ["logo:pinball-land", "clock:clock", "pinboard:pinboard", "leaderboard:shown"]
   );
 });

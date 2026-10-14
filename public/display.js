@@ -29,6 +29,17 @@ const presentImage = document.getElementById("present-image");
 const presentFrame = document.getElementById("present-frame");
 const videoPanel = document.getElementById("video-panel");
 const wallVideo = document.getElementById("wall-video");
+const clockPanel = document.getElementById("clock");
+const clockTime = document.getElementById("clock-time");
+const clockEvent = document.getElementById("clock-event");
+const pinboardPanel = document.getElementById("pinboard");
+const pinWall = document.getElementById("pin-wall");
+const collagePanel = document.getElementById("collage");
+const collageGrid = document.getElementById("collage-grid");
+const youtubePanel = document.getElementById("youtube");
+const motionCanvas = document.getElementById("motion");
+const wipe = document.getElementById("wipe");
+const podium = document.getElementById("podium");
 
 let payload = null;
 let lastKey = "";
@@ -59,6 +70,11 @@ function setMode(mode) {
   boardPanel.hidden = mode !== "board";
   presentPanel.hidden = mode !== "present";
   videoPanel.hidden = mode !== "video";
+  clockPanel.hidden = mode !== "clock";
+  pinboardPanel.hidden = mode !== "pinboard";
+  collagePanel.hidden = mode !== "collage";
+  youtubePanel.hidden = mode !== "youtube";
+  if (mode !== "youtube") youtubePanel.replaceChildren();
 }
 
 function clearSync() {
@@ -159,27 +175,40 @@ function stopVideo() {
 
 function renderRows(rows) {
   boardRows.replaceChildren();
+  podium.replaceChildren();
+  const top = rows.slice(0, 3);
+  const rest = rows.slice(3);
+  podium.hidden = top.length === 0;
   boardEmpty.hidden = rows.length > 0;
-  boardRows.hidden = rows.length === 0;
-  rows.forEach((row, index) => {
+  boardRows.hidden = rest.length === 0 && top.length > 0 ? true : rows.length === 0;
+  if (top.length) {
+    const order = [top[1], top[0], top[2]].filter(Boolean);
+    order.forEach((row) => {
+      const place = top.indexOf(row) + 1;
+      const card = document.createElement("article");
+      card.className = `podium-card place-${place}`;
+      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who"></span><span class="points"></span>`;
+      card.querySelector(".who").textContent = row.name || "—";
+      card.querySelector(".points").textContent = formatScore(row.score);
+      podium.append(card);
+    });
+  }
+  rest.forEach((row, index) => {
     const li = document.createElement("li");
     li.className = "board-row";
-
     const rank = document.createElement("span");
     rank.className = "rank";
-    rank.textContent = String(index + 1).padStart(2, "0");
-
+    rank.textContent = String(index + 4).padStart(2, "0");
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = row.name || "—";
-
     const score = document.createElement("span");
     score.className = "score";
     score.textContent = formatScore(row.score);
-
     li.append(rank, name, score);
     boardRows.append(li);
   });
+  if (top.length && !rest.length) boardRows.hidden = true;
 }
 
 function showBoard(board) {
@@ -264,12 +293,28 @@ function cardFromSlot(state) {
   return { type: "leaderboard", id: slot.leaderboardId };
 }
 
+function previewCard() {
+  const preview = new URLSearchParams(location.search).get("preview");
+  if (!preview || !payload) return null;
+  if (preview === "logo") return { type: "logo", key: "pinnacle" };
+  if (preview === "amenity") return { type: "amenity", id: "arcade" };
+  if (preview === "board") return { type: "leaderboard", id: payload.state?.leaderboards?.[0]?.id };
+  if (preview === "pinboard" || preview === "collage" || preview === "clock") return { type: preview, span: true };
+  if (preview === "video") return { type: "video", id: "preview", url: payload.photos?.arcade, title: "Preview", loop: true, mode: "card" };
+  return null;
+}
+
 function resolveCard() {
+  const forced = previewCard();
+  if (forced) return forced;
   const state = payload?.state;
   if (!state || state.blackout) return { type: "off" };
   const presentation = payload.presentations?.[SLOT];
   if (presentation?.source) return { type: "present", presentation };
   const playback = payload.playback;
+  if (playback?.kind === "youtube" && Array.isArray(playback.slots) && playback.slots.map(String).includes(String(SLOT))) {
+    return { type: "youtube", id: playback.videoId, embed: playback.embed, title: playback.title };
+  }
   if (playback?.url && Array.isArray(playback.slots) && playback.slots.map(String).includes(String(SLOT))) {
     return {
       type: "video",
@@ -288,8 +333,12 @@ function resolveCard() {
   }
   const stagger = Number.isInteger(layout?.staggerIndex) ? layout.staggerIndex : slotIndex();
   if (state.rotation?.enabled) {
-    return cardForSlot(payload.playlist, currentTick(state.rotation.startedAt, state.rotation.intervalSec), stagger)
-      || { type: "off" };
+    const tick = currentTick(state.rotation.startedAt, state.rotation.intervalSec);
+    const shared = cardForSlot(payload.playlist, tick, 0);
+    if (payload.guest?.span && (shared?.type === "pinboard" || shared?.type === "collage")) {
+      return { ...shared, span: true, slotIndex: stagger };
+    }
+    return cardForSlot(payload.playlist, tick, stagger) || { type: "off" };
   }
   return cardFromSlot(state);
 }
@@ -306,6 +355,12 @@ function cardKey(card) {
   if (card.type === "video") {
     return `video:${card.id}:${card.mode}:${card.startedAt || ""}:${(card.slots || []).join(",")}`;
   }
+  if (card.type === "pinboard" || card.type === "collage") {
+    const ids = (payload?.guest?.photos || []).map((photo) => photo.id).join(",");
+    return `${card.type}:${ids}`;
+  }
+  if (card.type === "youtube") return `youtube:${card.id}:${card.embed || ""}`;
+  if (card.type === "clock") return "clock";
   return card.type || "off";
 }
 
@@ -351,6 +406,22 @@ function renderCard(card) {
   }
   if (card.type === "video") {
     showVideo(card);
+    return;
+  }
+  if (card.type === "clock") {
+    showClock();
+    return;
+  }
+  if (card.type === "pinboard") {
+    showPinboard(card);
+    return;
+  }
+  if (card.type === "collage") {
+    showCollage();
+    return;
+  }
+  if (card.type === "youtube") {
+    showYoutube(card);
     return;
   }
   const board = (payload.state.leaderboards || []).find((item) => item.id === card.id);
@@ -576,16 +647,156 @@ function showPresent(presentation) {
   }
 }
 
+function showClock() {
+  setMode("clock");
+  stopVideo();
+  stopWallVideo();
+  teardownPresent();
+  paintClock();
+}
+
+function paintClock() {
+  const now = new Date(Date.now() - clockSkew);
+  clockTime.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const event = (payload?.state?.leaderboards || []).find((board) => board.kind !== "machine");
+  clockEvent.textContent = event?.name || payload?.guest?.eventName || "Tonight";
+}
+
+function placePhotos(target, card) {
+  const photos = payload?.guest?.photos || [];
+  const enabled = payload?.layout ? Object.values(payload.layout).filter((slot) => slot.enabled).length : 3;
+  const screens = card?.span ? Math.max(1, enabled) : 1;
+  const slot = card?.span ? (Number.isInteger(card.slotIndex) ? card.slotIndex : slotIndex()) : 0;
+  if (target === pinWall) {
+    pinWall.style.width = `${screens * 100}%`;
+    pinWall.style.transform = screens > 1 ? `translateX(-${slot * 100}%)` : "";
+  }
+  const positions = window.PinballMotion ? window.PinballMotion.pinPositions(photos.length, screens) : [];
+  target.replaceChildren();
+  photos.forEach((photo, index) => {
+    const pos = positions[index] || { x: 10, y: 10, tilt: 0 };
+    if (target === collageGrid) {
+      const img = document.createElement("img");
+      img.src = photo.url;
+      img.alt = photo.caption || "Guest photo";
+      target.append(img);
+      return;
+    }
+    const el = document.createElement("article");
+    el.className = `pin-card${Date.now() - Number(photo.createdAt) < 20000 ? " is-new" : ""}`;
+    el.style.left = `${pos.x}%`;
+    el.style.top = `${pos.y}%`;
+    el.style.transform = `rotate(${pos.tilt}deg)`;
+    const img = document.createElement("img");
+    img.src = photo.url;
+    img.alt = photo.caption || "Guest photo";
+    const cap = document.createElement("span");
+    cap.textContent = [photo.guestName, photo.caption].filter(Boolean).join(" — ");
+    el.append(img, cap);
+    target.append(el);
+  });
+}
+
+function showPinboard(card) {
+  setMode("pinboard");
+  stopVideo();
+  stopWallVideo();
+  teardownPresent();
+  placePhotos(pinWall, card);
+}
+
+function showCollage() {
+  setMode("collage");
+  stopVideo();
+  stopWallVideo();
+  teardownPresent();
+  placePhotos(collageGrid, { span: false });
+}
+
+function showYoutube(card) {
+  setMode("youtube");
+  stopVideo();
+  stopWallVideo();
+  teardownPresent();
+  const frame = document.createElement("iframe");
+  frame.src = card.embed || "";
+  frame.title = card.title || "Video";
+  frame.allow = "autoplay; encrypted-media; picture-in-picture";
+  frame.referrerPolicy = "strict-origin-when-cross-origin";
+  youtubePanel.replaceChildren(frame);
+  frame.addEventListener("load", () => {
+    frame.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: 1, channel: "widget" }), "*");
+  });
+}
+
+window.addEventListener("message", (event) => {
+  if (!String(event.origin || "").includes("youtube")) return;
+  let data = event.data;
+  if (typeof data === "string") {
+    try { data = JSON.parse(data); } catch { return; }
+  }
+  const code = Number(data?.info);
+  const ended = data?.event === "onStateChange" && code === 0;
+  const failed = data?.event === "onError" && [100, 101, 150].includes(code);
+  if (!ended && !failed) return;
+  if (String(SLOT) !== "1" && payload?.playback?.slots?.[0] && String(payload.playback.slots[0]) !== String(SLOT)) return;
+  fetch("/api/media/next", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+});
+
+let clockSkew = 0;
+
+function paintMotion() {
+  if (!motionCanvas || document.documentElement.classList.contains("is-shot")) {
+    if (wipe) wipe.hidden = true;
+    return;
+  }
+  const mode = payload?.motion || "subtle";
+  const ctx = motionCanvas.getContext("2d");
+  const width = motionCanvas.width = window.innerWidth;
+  const height = motionCanvas.height = window.innerHeight;
+  ctx.clearRect(0, 0, width, height);
+  if (!window.PinballMotion || mode === "off") {
+    wipe.hidden = true;
+    return;
+  }
+  const now = Date.now() - clockSkew;
+  const screens = payload?.guest?.span ? Math.max(1, Object.values(payload.layout || {}).filter((slot) => slot.enabled).length || 1) : 1;
+  const theme = payload?.state?.theme;
+  const kind = mode === "subtle" && theme !== "pinnacle" ? "subtle" : mode;
+  for (const part of window.PinballMotion.particlesForSlot({
+    now,
+    mode: kind,
+    theme,
+    slotIndex: slotIndex(),
+    screenCount: Math.max(screens, 3),
+  })) {
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--particle") || "rgba(248,248,245,0.4)";
+    ctx.beginPath();
+    ctx.arc(part.x * width, part.y * height, Math.max(1.5, part.size / 3), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const phase = window.PinballMotion.wallPhase(now);
+  wipe.hidden = mode === "off";
+  wipe.style.transform = `translateX(${(phase * Math.max(screens, 3) - slotIndex()) * 100}vw)`;
+}
+
 function tick() {
   if (!payload) return;
   applyTheme(payload.state?.theme);
   renderCard(resolveCard());
+  if (screen.dataset.mode === "clock") paintClock();
+  paintMotion();
 }
 
 function applyPayload(next) {
   payload = next;
+  clockSkew = Date.now() - (Number(next?.serverNow) || Date.now());
   lastKey = "";
   tick();
+}
+
+if (new URLSearchParams(location.search).has("shot")) {
+  document.documentElement.classList.add("is-shot");
 }
 
 function connect() {

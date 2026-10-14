@@ -6,11 +6,24 @@
   Re-runnable. Does not enable auto-logon (do that with netplwiz). Does not change BIOS.
 #>
 param(
-  [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+  [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+  [switch]$Verify
 )
 
 $ErrorActionPreference = "Stop"
 $taskName = "PinballLandKiosk"
+$serverTask = "PinballLandServer"
+
+if ($Verify) {
+  $kiosk = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  $server = Get-ScheduledTask -TaskName $serverTask -ErrorAction SilentlyContinue
+  $scheme = powercfg /q SCHEME_CURRENT SUB_SLEEP STANDBYIDLE
+  Write-Host "Kiosk task:  $(if ($kiosk) { 'present' } else { 'MISSING' })"
+  Write-Host "Server task: $(if ($server) { 'present' } else { 'MISSING' })"
+  if (-not $kiosk -or -not $server) { exit 1 }
+  Write-Host "Power query answered. See KIOSK.md if the display still sleeps."
+  exit 0
+}
 $cmdPath = Join-Path $RepoRoot "scripts\start-kiosk.cmd"
 
 if (-not (Test-Path $cmdPath)) {
@@ -25,7 +38,23 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+
+$serverAction = New-ScheduledTaskAction -Execute "node.exe" -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
+$serverTrigger = New-ScheduledTaskTrigger -AtStartup
+Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
+Write-Host "Registered '$serverTask' at startup and '$taskName' at logon with restart-on-failure."
+
+Write-Host "Hiding notifications, the screensaver, and update reboots during open hours..."
+New-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications" -Force | Out-Null
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications" -Name "ToastEnabled" -Value 0
+New-Item -Path "HKCU:\Control Panel\Desktop" -Force | Out-Null
+Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "ScreenSaveActive" -Value "0"
+# Active hours: Windows Update should not reboot while the venue is open. Adjust in Settings if close time changes.
+New-Item -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursStart" -Value 9 -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursEnd" -Value 23 -ErrorAction SilentlyContinue
 
 Write-Host "Setting AC power: never sleep, never turn off display..."
 powercfg /change standby-timeout-ac 0 | Out-Null

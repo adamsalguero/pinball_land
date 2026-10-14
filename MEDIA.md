@@ -1,6 +1,6 @@
 # Videos on the wall
 
-The kiosk plays files you put in `media/`. It does not download movies, cartoons, or music videos, and this repository does not ship any.
+The kiosk plays files you put in `media/`. The repository does not ship video files. `media/catalog.json` lists verified public-domain films with direct stream URLs. `scripts/download-starter-media.js` (and the PowerShell wrapper) can download those into the holiday folders, with resume, and skips files over the size cap. If a title is not downloaded, the wall streams the catalog URL. Night of the Living Dead is marked not all-ages. Low-resolution and non-commercial copies were left out.
 
 Upload from the iPad (**Videos** on the control page), or copy files into:
 

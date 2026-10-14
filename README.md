@@ -27,7 +27,7 @@ Left display:        http://localhost:3000/display/1
 ...
 ```
 
-Use the printed **Phone / iPad** address on Ron’s device. Default PIN is `1234`. Leave the terminal open. Ctrl+C stops it.
+Use the printed **Admin** address on Ron’s device (`/admin`). Default PIN is `2224`. Guests use `/` with no PIN. Leave the terminal open. Ctrl+C stops it.
 
 Open one display URL per monitor yourself when using `npm start`. You do not need three screens.
 
@@ -50,7 +50,7 @@ Venue always-on after a power blink: BIOS Auto Power On + Windows auto-logon + T
 - Rotation on/off, interval, and per-item toggles live on the control page. Turning rotation off lets you assign each TV by hand.
 - **Off** blacks every screen immediately. **Resume wall** brings the playlist back. Off does not wipe the playlist.
 - Amenities (site wording, never “pool”): **2-story arcade**, **Outdoor Oasis**, **Flexible Event Options**. Photos stay in a small frame on the brand background.
-- Named events, typed-in scores, pinball machines from OPDB (or by name). PIN default `1234`. Displays do not use the PIN.
+- Named events, typed-in scores, pinball machines from OPDB (or by name). Admin PIN default `2224`. Displays and the guest app do not use the PIN.
 
 Change PIN, port, or OPDB token in `config.json` (`PORT`, `CONTROL_PIN`, `HTTPS_PORT`, and `OPDB_API_KEY` also work). Display count, per-screen layout, and presentation idle time are edited on the control page and saved in that same file.
 

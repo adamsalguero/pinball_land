@@ -16,6 +16,12 @@ const { Presentations } = require("./presentations");
 const { DISPLAY_CONTENTS, layoutForDisplays, mapDisplaysToSlots } = require("./displays");
 const { PlugService, createTplinkClient } = require("./plugs");
 const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./media");
+const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
+const { GuestAlbum } = require("./photos");
+const { loadCatalog, starterFile, starterCards } = require("./catalog");
+const { embedSrc, parseYoutubeInput } = require("./youtube");
+const { selectRelease, planApply, inQuietWindow } = require("./updater");
+const pkg = require("../package.json");
 
 const UPLOAD_TYPES = {
   "image/jpeg": { ext: ".jpg", kind: "image" },
@@ -25,8 +31,8 @@ const UPLOAD_TYPES = {
   "application/pdf": { ext: ".pdf", kind: "pdf" },
 };
 
-const COOKIE_NAME = "pl_session";
-const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const COOKIE_NAME = DEVICE_COOKIE;
+const SESSION_MAX_AGE_MS = DEVICE_MAX_AGE_MS;
 
 function parseCookies(header) {
   const out = {};
@@ -79,6 +85,9 @@ function createApp({
   plugs = null,
   mediaDir = null,
   mediaCatalog = null,
+  devicesPath = null,
+  guestPhotosDir = null,
+  catalogPath = null,
   now,
 }) {
   const app = express();
@@ -88,7 +97,9 @@ function createApp({
     cacheDir,
     fetchImpl,
   });
+  const externalConfig = Boolean(configStore);
   const localStore = configStore || createConfigStore(path.join(os.tmpdir(), `pinball-land-${crypto.randomUUID()}`, "config.json"));
+  let activePin = pin;
   const uploadRoot = uploadsDir || path.join(os.tmpdir(), `pinball-land-uploads-${crypto.randomUUID()}`);
   const presentations = new Presentations({
     idleMinutes: localStore.get().presentation.idleMinutes,
@@ -119,11 +130,31 @@ function createApp({
     catalogPath: mediaCatalog || path.join(mediaRoot, "library.json"),
   });
   const plugService = plugs || new PlugService({
-    client: createTplinkClient(),
+    client: process.env.PINBALL_PLUG_MOCK === "1" ? require("./plugs").createMockPlugClient() : createTplinkClient(),
     getConfig: () => localStore.get(),
     updateConfig: (patch) => localStore.update(patch),
   });
+  const deviceFile = devicesPath || path.join(path.dirname(uploadRoot), "devices.json");
+  const devices = new DeviceStore(deviceFile);
+  const album = new GuestAlbum({
+    root: guestPhotosDir || path.join(path.dirname(uploadRoot), "guest-photos"),
+  });
+  const catalogItems = loadCatalog(catalogPath || path.join(__dirname, "..", "media", "catalog.json"));
   let playback = null;
+
+  function currentPin() {
+    if (externalConfig) return localStore.get().pin;
+    return activePin;
+  }
+
+  async function changePin(next) {
+    if (!pinIsValid(next)) {
+      throw Object.assign(new Error("PIN must be 4 to 12 digits"), { status: 400 });
+    }
+    activePin = String(next);
+    await localStore.update({ pin: activePin });
+    return activePin;
+  }
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "200kb" }));
@@ -182,6 +213,15 @@ function createApp({
       playlist: buildPlaylist(state, {
         videos: library.list(),
         allAges: config.media.allAges,
+        starters: starterCards(catalogItems, {
+          theme: state.theme,
+          allAges: config.media.allAges,
+          mediaRoot: mediaRoot,
+          urlFor: (id) => `/media/starter/${id}`,
+        }),
+        youtube: config.youtube?.[state.theme] || [],
+        photoStyle: config.photos.style,
+        photoSpan: config.photos.span,
       }),
       opdb: { configured: opdb.configured },
       displays,
@@ -205,6 +245,27 @@ function createApp({
         videos: library.list(),
       },
       playback: publicPlayback(),
+      motion: config.motion,
+      serverNow: Date.now(),
+      version: pkg.version,
+      youtube: config.youtube,
+      guest: {
+        path: "/app",
+        publicUrl: config.photos.publicBaseUrl ? `${config.photos.publicBaseUrl.replace(/\/$/, "")}/app` : null,
+        eventName: config.photos.eventName,
+        style: config.photos.style,
+        span: config.photos.span,
+        autoApprove: config.photos.autoApprove,
+        photos: album.feed(),
+        events: album.events.map((event) => ({ id: event.id, name: event.name, createdAt: event.createdAt })),
+      },
+      updates: {
+        enabled: config.updates.enabled,
+        channel: config.updates.channel,
+        intervalMin: config.updates.intervalMin,
+        quietStart: config.updates.quietStart,
+        quietEnd: config.updates.quietEnd,
+      },
       kiosk: {
         restartToken,
         monitors: mapped.arranged.map((display) => ({
@@ -252,10 +313,22 @@ function createApp({
 
   function publicPlayback() {
     if (!playback) return null;
+    if (playback.kind === "youtube") {
+      return {
+        kind: "youtube",
+        videoId: playback.videoId,
+        title: playback.title,
+        mode: playback.mode,
+        slots: playback.slots,
+        startedAt: playback.startedAt,
+        embed: embedSrc({ id: playback.videoId, kind: playback.youtubeKind || "video" }),
+      };
+    }
     const video = library.get(playback.videoId);
     if (!video) return null;
     const pub = library.toPublic(video);
     return {
+      kind: "file",
       videoId: video.id,
       title: pub.title,
       url: pub.url,
@@ -346,13 +419,24 @@ function createApp({
     throw Object.assign(new Error("Playback is one screen, sync, or span"), { status: 400 });
   }
 
-  function isAuthed(req) {
+  function presentedToken(req) {
     const cookies = parseCookies(req.headers.cookie);
-    if (sessions.has(cookies[COOKIE_NAME])) {
-      return true;
-    }
+    return cookies[COOKIE_NAME] || req.get("x-device-token") || "";
+  }
+
+  function isAuthed(req) {
+    if (devices.find(presentedToken(req))) return true;
     const headerPin = req.get("x-pin");
-    return Boolean(headerPin && headerPin === pin);
+    return Boolean(headerPin && headerPin === currentPin());
+  }
+
+  function setDeviceCookie(res, token) {
+    res.cookie(COOKIE_NAME, token, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_MAX_AGE_MS,
+    });
   }
 
   function requirePin(req, res, next) {
@@ -374,27 +458,31 @@ function createApp({
     sendJson(res, 200, { ok: isAuthed(req) });
   });
 
-  app.post("/api/login", (req, res) => {
-    const submitted = String(req.body?.pin || "");
-    if (submitted !== pin) {
-      return sendJson(res, 401, { error: "Wrong PIN" });
+  app.post("/api/login", async (req, res, next) => {
+    try {
+      const submitted = String(req.body?.pin || "");
+      if (submitted !== currentPin()) {
+        return sendJson(res, 401, { error: "Wrong PIN" });
+      }
+      const issued = devices.issue(req.body?.name);
+      await devices.save();
+      setDeviceCookie(res, issued.token);
+      sendJson(res, 200, { ok: true, token: issued.token, device: issued.device });
+    } catch (err) {
+      next(err);
     }
-    const token = crypto.randomBytes(24).toString("hex");
-    sessions.add(token);
-    res.cookie(COOKIE_NAME, token, {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: SESSION_MAX_AGE_MS,
-    });
-    sendJson(res, 200, { ok: true });
   });
 
-  app.post("/api/logout", (req, res) => {
-    const cookies = parseCookies(req.headers.cookie);
-    sessions.delete(cookies[COOKIE_NAME]);
-    res.clearCookie(COOKIE_NAME, { path: "/" });
-    sendJson(res, 200, { ok: true });
+  app.post("/api/logout", async (req, res, next) => {
+    try {
+      const device = devices.find(presentedToken(req));
+      if (device) devices.revoke(device.id);
+      await devices.save();
+      res.clearCookie(COOKIE_NAME, { path: "/" });
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.put("/api/slots/:id", requirePin, async (req, res, next) => {
@@ -1072,6 +1160,330 @@ function createApp({
     return mapped.windows.find((item) => String(item.slot) === String(slot))?.bounds || null;
   }
 
+  function safeHeader(value) {
+    try {
+      return decodeURIComponent(value || "");
+    } catch {
+      return String(value || "");
+    }
+  }
+
+  function guestPublicUrl(req) {
+    const configured = currentConfig().photos.publicBaseUrl;
+    if (configured) return `${configured.replace(/\/$/, "")}/app`;
+    const host = getLanIPv4s()[0];
+    if (host) return `http://${host}:${currentConfig().port}/app`;
+    return `${req.protocol}://${req.get("host")}/app`;
+  }
+
+  app.get("/api/guest-qr", async (req, res, next) => {
+    try {
+      const QRCode = require("qrcode");
+      const png = await QRCode.toBuffer(guestPublicUrl(req), {
+        margin: 1,
+        width: 480,
+        color: { dark: "#1a1916", light: "#f8f8f5" },
+      });
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "no-store");
+      res.send(png);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/guest-photos/feed", (_req, res) => {
+    sendJson(res, 200, { photos: album.feed(), events: album.events });
+  });
+
+  app.post(
+    "/api/guest-photos",
+    express.raw({ limit: "25mb", type: () => true }),
+    async (req, res, next) => {
+      try {
+        const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+        if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mime)) {
+          return sendJson(res, 400, { error: "Upload a JPEG, PNG, or WEBP photo." });
+        }
+        const photo = await album.ingest(req.body, {
+          caption: safeHeader(req.get("x-caption")),
+          guestName: safeHeader(req.get("x-guest-name")),
+          eventName: currentConfig().photos.eventName,
+          autoApprove: currentConfig().photos.autoApprove,
+          ip: req.socket?.remoteAddress || "",
+        });
+        broadcast();
+        sendJson(res, 200, { photo });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  app.get("/api/guest-photos", requirePin, (_req, res) => {
+    sendJson(res, 200, { photos: album.list(), events: album.events, settings: currentConfig().photos });
+  });
+
+  app.put("/api/guest-photos/settings", requirePin, async (req, res, next) => {
+    try {
+      await localStore.update({ photos: req.body || {} });
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/guest-photos/:id/approve", requirePin, async (req, res, next) => {
+    try {
+      const photo = await album.setStatus(req.params.id, "approved");
+      broadcast();
+      sendJson(res, 200, { photo });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/guest-photos/:id/reject", requirePin, async (req, res, next) => {
+    try {
+      const photo = await album.setStatus(req.params.id, "rejected");
+      broadcast();
+      sendJson(res, 200, { photo });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/guest-photos/events/:id/clear", requirePin, async (req, res, next) => {
+    try {
+      const result = await album.clearEvent(req.params.id);
+      broadcast();
+      sendJson(res, 200, result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/guest-photos/events/:id/zip", requirePin, async (req, res, next) => {
+    try {
+      await album.zipEvent(req.params.id, res);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/media/guest/:file", (req, res) => {
+    const name = String(req.params.file || "");
+    if (!/^[0-9a-f-]{36}\.jpg$/i.test(name)) return res.status(404).send("Not found");
+    const id = name.slice(0, -4);
+    const photo = album.photos.find((item) => item.id === id);
+    if (!photo) return res.status(404).send("Not found");
+    if (photo.status !== "approved" && !isAuthed(req)) return res.status(404).send("Not found");
+    const filePath = album.filePath(photo);
+    if (!filePath || !fs.existsSync(filePath)) return res.status(404).send("Not found");
+    res.setHeader("Cache-Control", "no-store");
+    res.type("jpeg").sendFile(filePath);
+  });
+
+  app.get("/media/starter/:id", (req, res) => {
+    const item = catalogItems.find((entry) => entry.id === req.params.id);
+    const filePath = item ? starterFile(mediaRoot, item) : null;
+    if (!filePath) return res.status(404).send("Not downloaded");
+    res.sendFile(filePath);
+  });
+
+  app.get("/api/admin/bootstrap", requirePin, (req, res) => {
+    const host = `${req.protocol}://${req.get("host")}`;
+    sendJson(res, 200, {
+      version: pkg.version,
+      pinHint: "PIN is a convenience gate. This device stays signed in.",
+      devices: devices.list(),
+      joinUrl: `${host}/admin/join?token=${devices.data.joinToken}`,
+      defaultPin: DEFAULT_PIN,
+    });
+  });
+
+  app.get("/api/admin/join-qr", requirePin, async (req, res, next) => {
+    try {
+      const QRCode = require("qrcode");
+      const host = `${req.protocol}://${req.get("host")}`;
+      const png = await QRCode.toBuffer(`${host}/admin/join?token=${devices.data.joinToken}`, {
+        margin: 1,
+        width: 480,
+        color: { dark: "#1a1916", light: "#f8f8f5" },
+      });
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "no-store");
+      res.send(png);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/admin/join", async (req, res, next) => {
+    try {
+      if (!devices.joinMatches(req.body?.token)) {
+        return sendJson(res, 401, { error: "That admin link is no longer valid." });
+      }
+      const issued = devices.issue(req.body?.name || "Joined iPad");
+      await devices.save();
+      setDeviceCookie(res, issued.token);
+      sendJson(res, 200, { ok: true, token: issued.token, device: issued.device });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete("/api/devices/:id", requirePin, async (req, res, next) => {
+    try {
+      devices.revoke(req.params.id);
+      await devices.save();
+      sendJson(res, 200, { devices: devices.list() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/devices/revoke-all", requirePin, async (req, res, next) => {
+    try {
+      devices.revokeAll();
+      await devices.save();
+      res.clearCookie(COOKIE_NAME, { path: "/" });
+      sendJson(res, 200, { ok: true, devices: [] });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.put("/api/pin", requirePin, async (req, res, next) => {
+    try {
+      const nextPin = await changePin(req.body?.pin);
+      sendJson(res, 200, { ok: true, pin: nextPin });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/pin/reset", requirePin, async (req, res, next) => {
+    try {
+      await changePin(DEFAULT_PIN);
+      sendJson(res, 200, { ok: true, pin: DEFAULT_PIN });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.put("/api/motion", requirePin, async (req, res, next) => {
+    try {
+      await localStore.update({ motion: req.body?.motion });
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/youtube", requirePin, async (req, res, next) => {
+    try {
+      const theme = ["pinnacle", "halloween", "christmas"].includes(req.body?.theme) ? req.body.theme : null;
+      const parsed = parseYoutubeInput(req.body?.input || req.body?.url || req.body?.id);
+      if (!theme || !parsed) {
+        return sendJson(res, 400, { error: "Paste a YouTube link or playlist id for a theme." });
+      }
+      const current = currentConfig().youtube;
+      const list = current[theme].filter((item) => !(item.id === parsed.id && item.kind === parsed.kind));
+      list.push({
+        id: parsed.id,
+        kind: parsed.kind,
+        title: String(req.body?.title || "").trim().slice(0, 80) || (parsed.kind === "playlist" ? "Playlist" : "Video"),
+      });
+      await localStore.update({ youtube: { ...current, [theme]: list } });
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete("/api/youtube", requirePin, async (req, res, next) => {
+    try {
+      const theme = req.body?.theme;
+      const current = currentConfig().youtube;
+      if (!current[theme]) return sendJson(res, 400, { error: "Unknown theme" });
+      const list = current[theme].filter((item) => !(item.id === req.body?.id && item.kind === req.body?.kind));
+      await localStore.update({ youtube: { ...current, [theme]: list } });
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/youtube/play", requirePin, async (req, res, next) => {
+    try {
+      const parsed = parseYoutubeInput(req.body?.input || req.body?.id);
+      if (!parsed) return sendJson(res, 400, { error: "That is not a YouTube link." });
+      const slots = slotsForPlayback(req.body?.mode || "sync", req.body?.slot);
+      playback = {
+        kind: "youtube",
+        videoId: parsed.id,
+        youtubeKind: parsed.kind,
+        title: String(req.body?.title || "YouTube").slice(0, 80),
+        mode: req.body?.mode || "sync",
+        slots,
+        startedAt: Date.now(),
+      };
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/updates/now", requirePin, async (req, res, next) => {
+    try {
+      const updates = currentConfig().updates;
+      if (process.env.NODE_TEST_CONTEXT) {
+        return sendJson(res, 200, {
+          version: pkg.version,
+          plan: "keep",
+          dataDir: "kept",
+          latest: null,
+        });
+      }
+      let latest = null;
+      const response = await fetch(`https://api.github.com/repos/${updates.repo}/releases?per_page=5`, {
+        headers: { accept: "application/vnd.github+json", "user-agent": "pinball-land" },
+      });
+      if (response.ok) {
+        const release = selectRelease(await response.json(), updates);
+        latest = release ? release.tag_name : null;
+      }
+      const quiet = inQuietWindow(new Date(), updates.quietStart, updates.quietEnd);
+      sendJson(res, 200, {
+        version: pkg.version,
+        latest,
+        plan: planApply({ stagingOk: Boolean(latest), inQuiet: quiet, force: true }),
+        dataDir: "kept",
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/sw.js", (_req, res) => {
+    res.setHeader("Content-Type", "application/javascript");
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(path.join(publicDir, "sw.js"));
+  });
+
+  app.get("/admin/sw.js", (_req, res) => {
+    res.setHeader("Content-Type", "application/javascript");
+    res.setHeader("Service-Worker-Allowed", "/admin");
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(path.join(publicDir, "admin-sw.js"));
+  });
+
   app.get("/media/uploads/:file", (req, res) => {
     const name = String(req.params.file || "");
     if (!/^[0-9a-f-]{36}\.(jpg|png|webp|gif|pdf)$/i.test(name)) {
@@ -1098,8 +1510,20 @@ function createApp({
     res.sendFile(path.join(publicDir, "display.html"));
   });
 
-  app.get(["/", "/control"], (_req, res) => {
+  app.get(["/", "/app"], (_req, res) => {
+    res.sendFile(path.join(publicDir, "guest.html"));
+  });
+
+  app.get("/admin/join", (_req, res) => {
+    res.sendFile(path.join(publicDir, "join.html"));
+  });
+
+  app.get("/admin", (_req, res) => {
     res.sendFile(path.join(publicDir, "control.html"));
+  });
+
+  app.get("/control", (_req, res) => {
+    res.redirect(302, "/admin");
   });
 
   app.use(express.static(publicDir, { fallthrough: true }));

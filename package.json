@@ -1,22 +1,33 @@
 {
   "name": "pinball-land",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Kiosk app for the triple-screen wall at Pinball Land",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "kiosk": "electron src/kiosk.js",
-    "test": "node --test"
+    "lint": "node scripts/lint.js",
+    "test": "node --test",
+    "e2e": "playwright test",
+    "reset-pin": "node scripts/reset-pin.js",
+    "electron-smoke": "electron scripts/electron-smoke.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "archiver": "^8.0.0",
     "electron": "^33.4.5",
     "express": "^4.21.2",
+    "qrcode": "^1.5.4",
     "selfsigned": "^2.4.1",
+    "sharp": "^0.35.5",
     "tplink-smarthome-api": "^4.2.0",
     "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "eslint": "^10.12.0"
   }
 }

@@ -64,6 +64,32 @@ function normalizePlugs(raw) {
   };
 }
 
+function createMockPlugClient() {
+  const power = new Map();
+  const device = {
+    host: "10.0.0.50",
+    alias: "Screen 1",
+    model: "HS103",
+    async getSysInfo() {
+      return { deviceId: "mock-1", alias: "Screen 1", model: "HS103", host: "10.0.0.50" };
+    },
+    async getPowerState() {
+      return Boolean(power.get("mock-1"));
+    },
+    async setPowerState(on) {
+      power.set("mock-1", Boolean(on));
+    },
+  };
+  return {
+    async discover() {
+      return [device];
+    },
+    getDevice() {
+      return device;
+    },
+  };
+}
+
 function createTplinkClient({ Client, timeoutMs = 4000 } = {}) {
   let Impl = Client;
   if (!Impl) {
@@ -317,5 +343,6 @@ module.exports = {
   isOpen,
   normalizePlugs,
   createTplinkClient,
+  createMockPlugClient,
   PlugService,
 };

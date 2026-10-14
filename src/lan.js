@@ -37,6 +37,11 @@ function isLanAddress(address) {
     const second = Number(v4[1]);
     if (second >= 16 && second <= 31) return true;
   }
+  const tailscale = ip.match(/^100\.(\d+)\./);
+  if (tailscale) {
+    const second = Number(tailscale[1]);
+    if (second >= 64 && second <= 127) return true;
+  }
   if (ip.startsWith("fe80:")) return true;
   if (ip.startsWith("fc") || ip.startsWith("fd")) return true;
   return false;

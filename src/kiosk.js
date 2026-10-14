@@ -1,13 +1,17 @@
-const { app, BrowserWindow, screen, session, desktopCapturer } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, screen, session, desktopCapturer } = require("electron");
 
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+const fs = require("fs");
 const { spawn } = require("child_process");
 const path = require("path");
-const { loadConfig } = require("./config");
+const { loadConfig, writeDefaultPin } = require("./config");
+const { DEFAULT_PIN } = require("./devices");
 const { startServer } = require("./server");
 const { mapDisplaysToSlots, windowLayoutKey } = require("./displays");
+const { placementDecision, expectedMonitorCount, monitorSignature } = require("./watchdog");
+const { defaultDataDir, dataLayout } = require("./paths");
 const { buildPlacementScript } = require("./airplay");
 
 const gotLock = app.requestSingleInstanceLock();
@@ -17,11 +21,13 @@ if (!gotLock) {
 
 let port = null;
 let layoutKey = "";
+let lastMonitors = "";
 let displaysConfig = null;
 const windows = new Map();
 let pollTimer = null;
 let placing = false;
 let captureDisplayId = null;
+let operatorTray = null;
 
 function closeWindows() {
   for (const win of windows.values()) {
@@ -66,6 +72,14 @@ function openDisplayWindows() {
     win.setMenuBarVisibility(false);
     win.setFullScreen(true);
     win.loadURL(`http://127.0.0.1:${port}/display/${item.slot}`);
+    win.on("unresponsive", () => {
+      console.warn(`Display ${item.slot} is unresponsive. Reloading.`);
+      if (!win.isDestroyed()) win.reload();
+    });
+    win.webContents.on("render-process-gone", (_event, details) => {
+      console.warn(`Display ${item.slot} renderer ${details?.reason || "gone"}. Reloading.`);
+      if (!win.isDestroyed()) win.loadURL(`http://127.0.0.1:${port}/display/${item.slot}`);
+    });
     win.on("closed", () => {
       if (windows.get(item.slot) === win) windows.delete(item.slot);
     });
@@ -180,9 +194,23 @@ async function refreshKiosk() {
     .getAllDisplays()
     .map((display) => `${display.id}:${display.bounds?.x}:${display.bounds?.y}:${display.bounds?.width}:${display.bounds?.height}`)
     .join("|");
+  const seen = screen.getAllDisplays().length;
+  const expected = expectedMonitorCount(data.displays);
+  const monitorsNow = monitorSignature(screen.getAllDisplays());
+  const decision = placementDecision({
+    seen,
+    expected,
+    signature: monitorsNow,
+    previousSignature: lastMonitors,
+    windowCount: windows.size,
+  });
+  if (decision.waiting) {
+    console.warn(`Waiting for ${expected} monitor(s); ${seen} connected. TVs on Kasa plugs can wake after the PC.`);
+  }
   const signature = `${windowLayoutKey(data.displays, data.kiosk?.restartToken)}|${physical}`;
-  if (signature !== layoutKey) {
+  if (signature !== layoutKey || decision.reopen) {
     layoutKey = signature;
+    lastMonitors = monitorsNow;
     openDisplayWindows();
   }
   await placeAirplay(data);
@@ -203,7 +231,8 @@ async function waitForHealth(targetPort, tries = 40) {
 }
 
 async function ensureServer() {
-  const config = loadConfig(path.join(__dirname, "..", "config.json"));
+  const paths = dataLayout(defaultDataDir());
+  const config = loadConfig(fs.existsSync(paths.config) ? paths.config : path.join(__dirname, "..", "config.json"));
   try {
     const res = await fetch(`http://127.0.0.1:${config.port}/api/health`);
     if (res.ok) {
@@ -217,11 +246,37 @@ async function ensureServer() {
   return started.port;
 }
 
+function installOperatorTray() {
+  try {
+    const icon = nativeImage
+      .createFromPath(path.join(__dirname, "..", "public", "icons", "admin-180.png"))
+      .resize({ width: 16, height: 16 });
+    operatorTray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
+    operatorTray.setToolTip("Pinball Land");
+    operatorTray.setContextMenu(Menu.buildFromTemplate([
+      {
+        label: "Reset PIN to default",
+        click() {
+          const configPath = dataLayout(defaultDataDir()).config;
+          writeDefaultPin(configPath);
+          console.log(`PIN reset to ${DEFAULT_PIN} in ${configPath}`);
+        },
+      },
+      { type: "separator" },
+      { label: "Quit kiosk", click: () => app.quit() },
+    ]));
+    console.log("Tray: right-click the Pinball Land icon to reset the PIN.");
+  } catch (err) {
+    console.warn(`Tray is unavailable (${err.message}). Reset the PIN with: npm run reset-pin`);
+  }
+}
+
 function scheduleRefresh() {
   refreshKiosk().catch((err) => console.error(err));
 }
 
 async function boot() {
+  installOperatorTray();
   installCaptureHandler();
   port = await ensureServer();
   await waitForHealth(port);
@@ -250,6 +305,13 @@ app.whenReady().then(() => boot().catch((err) => {
 
 app.on("window-all-closed", () => {
   // Keep running so a display unplug/replug or a config change can recreate windows.
+});
+
+app.on("child-process-gone", (_event, details) => {
+  if (details?.type !== "GPU") return;
+  console.warn("GPU process ended. Reopening the wall.");
+  layoutKey = "";
+  scheduleRefresh();
 });
 
 app.on("before-quit", () => {

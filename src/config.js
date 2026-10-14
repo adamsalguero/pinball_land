@@ -3,10 +3,12 @@ const fsp = require("fs/promises");
 const path = require("path");
 const { normalizeDisplays } = require("./displays");
 const { normalizePlugs } = require("./plugs");
+const { normalizeYoutubeLists } = require("./youtube");
+const { pinIsValid, DEFAULT_PIN } = require("./devices");
 
 const DEFAULTS = {
   port: 3000,
-  pin: "1234",
+  pin: DEFAULT_PIN,
   opdbApiKey: "",
   httpsPort: 3443,
 };
@@ -55,6 +57,37 @@ function normalizeMediaSettings(raw) {
   };
 }
 
+function normalizeMotion(raw) {
+  const value = String(raw || "subtle");
+  return ["off", "subtle", "full"].includes(value) ? value : "subtle";
+}
+
+function normalizePhotos(raw) {
+  const incoming = raw && typeof raw === "object" ? raw : {};
+  const eventName = String(incoming.eventName || "Tonight").trim().slice(0, 60);
+  return {
+    autoApprove: Boolean(incoming.autoApprove),
+    publicBaseUrl: String(incoming.publicBaseUrl || "").trim().slice(0, 200),
+    style: incoming.style === "collage" ? "collage" : "pinboard",
+    span: incoming.span !== false,
+    eventName: eventName || "Tonight",
+  };
+}
+
+function normalizeUpdates(raw) {
+  const incoming = raw && typeof raw === "object" ? raw : {};
+  const interval = Number.parseInt(incoming.intervalMin, 10);
+  return {
+    enabled: incoming.enabled !== false,
+    intervalMin: Number.isFinite(interval) ? Math.min(1440, Math.max(5, interval)) : 30,
+    channel: incoming.channel === "preview" ? "preview" : "stable",
+    branch: String(incoming.branch || "main").trim() || "main",
+    repo: String(incoming.repo || "adamsalguero/pinball_land").trim() || "adamsalguero/pinball_land",
+    quietStart: String(incoming.quietStart || "02:00"),
+    quietEnd: String(incoming.quietEnd || "06:00"),
+  };
+}
+
 function normalizePresentation(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   return {
@@ -85,6 +118,10 @@ function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
     airplay: normalizeAirplay(fileConfig.airplay),
     plugs: normalizePlugs(fileConfig.plugs),
     media: normalizeMediaSettings(fileConfig.media),
+    motion: normalizeMotion(fileConfig.motion),
+    photos: normalizePhotos(fileConfig.photos),
+    youtube: normalizeYoutubeLists(fileConfig.youtube),
+    updates: normalizeUpdates(fileConfig.updates),
   };
 }
 
@@ -111,6 +148,16 @@ async function writeConfigFile(configPath, data) {
   const tmp = `${configPath}.tmp`;
   await fsp.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   await fsp.rename(tmp, configPath);
+}
+
+function writeDefaultPin(configPath) {
+  const raw = readConfigFile(configPath);
+  raw.pin = DEFAULT_PIN;
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const tmp = `${configPath}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`);
+  fs.renameSync(tmp, configPath);
+  return configPath;
 }
 
 function createConfigStore(configPath) {
@@ -154,6 +201,20 @@ function createConfigStore(configPath) {
       } else if (!raw.media) {
         raw.media = normalizeMediaSettings(null);
       }
+      if (patch.motion !== undefined) raw.motion = normalizeMotion(patch.motion);
+      if (patch.photos) {
+        raw.photos = normalizePhotos({ ...normalizePhotos(raw.photos), ...patch.photos });
+      }
+      if (patch.youtube) raw.youtube = normalizeYoutubeLists(patch.youtube);
+      if (patch.updates) {
+        raw.updates = normalizeUpdates({ ...normalizeUpdates(raw.updates), ...patch.updates });
+      }
+      if (patch.pin !== undefined) {
+        if (!pinIsValid(patch.pin)) {
+          throw Object.assign(new Error("PIN must be 4 to 12 digits"), { status: 400 });
+        }
+        raw.pin = String(patch.pin);
+      }
       if (raw.port === undefined) raw.port = DEFAULTS.port;
       if (raw.pin === undefined) raw.pin = DEFAULTS.pin;
       if (raw.httpsPort === undefined) raw.httpsPort = DEFAULTS.httpsPort;
@@ -167,9 +228,13 @@ module.exports = {
   loadConfig,
   createConfigStore,
   readConfigFile,
+  writeDefaultPin,
   DEFAULTS,
   clampIdle,
   normalizeAirplay,
   normalizePresentation,
   normalizeMediaSettings,
+  normalizeMotion,
+  normalizePhotos,
+  normalizeUpdates,
 };

@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const LOGO_EXTENSIONS = [".svg", ".png", ".jpg", ".jpeg", ".webp"];
+const LOGO_EXTENSIONS = [".svg"];
 const PHOTO_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
 const LOGO_KEYS = ["pinnacle", "pinball-land"];
 const PHOTO_KEYS = ["arcade", "oasis"];

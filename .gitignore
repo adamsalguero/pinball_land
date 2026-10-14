@@ -10,10 +10,16 @@ tools/*.exe
 tools/uxplay-windows/
 media/**
 !media/.gitkeep
+!media/catalog.json
 !media/halloween/
 !media/halloween/.gitkeep
 !media/christmas/
 !media/christmas/.gitkeep
+tools/realesrgan/
 .DS_Store
 *.log
 .env
+e2e-data/
+e2e/artifacts/
+test-results/
+playwright-report/

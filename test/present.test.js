@@ -56,7 +56,7 @@ test("share code join is rate limited and does not leak the token on failure", (
 test("display config and idle minutes persist in config.json", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-config-"));
   const configPath = path.join(dir, "config.json");
-  await fs.writeFile(configPath, JSON.stringify({ port: 3000, pin: "1234", note: "keep" }));
+  await fs.writeFile(configPath, JSON.stringify({ port: 3000, pin: "5555", note: "keep" }));
   const store = createConfigStore(configPath);
   await store.update({
     displays: {
@@ -69,7 +69,7 @@ test("display config and idle minutes persist in config.json", async () => {
   });
   const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
   assert.equal(saved.note, "keep");
-  assert.equal(saved.pin, "1234");
+  assert.equal(saved.pin, "5555");
   assert.equal(saved.displays.count, 2);
   assert.equal(saved.displays.mirror, true);
   assert.equal(saved.displays.screens["2"].enabled, false);

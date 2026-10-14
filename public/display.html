@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>Pinball Land display</title>
+    <link rel="stylesheet" href="/design-tokens.css" />
     <link rel="stylesheet" href="/display.css" />
+    <link rel="stylesheet" href="/wall.css" />
   </head>
   <body>
     <main id="screen" class="screen" data-mode="off" aria-live="polite">
@@ -54,9 +56,29 @@
           </header>
           <ol id="board-rows" class="board-rows"></ol>
           <p id="board-empty" class="board-empty" hidden>No scores yet</p>
+          <div id="podium" class="podium" hidden></div>
         </div>
       </div>
+      <div id="clock" class="panel clock-panel" hidden>
+        <p class="clock-kicker">Pinnacle Entertainment Center</p>
+        <p id="clock-time" class="clock-time">00:00</p>
+        <p id="clock-event" class="clock-event"></p>
+      </div>
+      <div id="pinboard" class="panel pinboard" hidden>
+        <div id="pin-wall" class="pin-wall"></div>
+        <div class="pin-qr">
+          <img id="pin-qr" alt="QR code to post a photo" src="/api/guest-qr" />
+          <p>Post a photo</p>
+        </div>
+      </div>
+      <div id="collage" class="panel collage-panel" hidden>
+        <div id="collage-grid" class="collage-grid"></div>
+      </div>
+      <div id="youtube" class="panel yt-panel" hidden></div>
     </main>
+    <canvas id="motion"></canvas>
+    <div id="wipe"></div>
+    <script src="/motion.js"></script>
     <script src="/display.js"></script>
   </body>
 </html>

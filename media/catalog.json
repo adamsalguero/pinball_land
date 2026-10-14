@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "verified": "2026-10-14",
+  "notes": "Direct URLs were checked with HTTP HEAD. Licenses were read from the hosting item. Low-resolution and non-commercial copies were left out. Nothing here is committed as a video file.",
+  "items": [
+    {
+      "id": "skeleton-dance-1929",
+      "title": "The Skeleton Dance",
+      "holiday": "halloween",
+      "allAges": true,
+      "year": 1929,
+      "license": "Public domain. U.S. publication 1929. The Internet Archive item carries a CC public-domain mark.",
+      "sourceUrl": "https://archive.org/details/the-skeleton-dance-1929-tmdbid-88018",
+      "streamUrl": "https://archive.org/download/the-skeleton-dance-1929-tmdbid-88018/the-skeleton-dance-%281929%29-%5Btmdbid-88018%5D-1080p-av1-2.0ch-opus.webm",
+      "durationSec": 311,
+      "width": 1920,
+      "height": 1080,
+      "bytes": 446303412
+    },
+    {
+      "id": "swing-you-sinners-1930",
+      "title": "Swing You Sinners!",
+      "holiday": "halloween",
+      "allAges": true,
+      "year": 1930,
+      "license": "Public domain as of 2026. U.S. publication 1930. The Internet Archive item carries a CC public-domain mark.",
+      "sourceUrl": "https://archive.org/details/swing-you-sinners-1930",
+      "streamUrl": "https://archive.org/download/swing-you-sinners-1930/Swing_You_Sinners%21_by_Fleischer_Studios_%281930%29.webm",
+      "durationSec": 468,
+      "width": 1920,
+      "height": 1080,
+      "bytes": 616595860
+    },
+    {
+      "id": "night-of-the-living-dead-1968",
+      "title": "Night of the Living Dead",
+      "holiday": "halloween",
+      "allAges": false,
+      "year": 1968,
+      "license": "Public domain. Wikimedia Commons marks the file public domain. Not all-ages.",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Night_of_the_Living_Dead_(1968).webm",
+      "streamUrl": "https://upload.wikimedia.org/wikipedia/commons/2/24/Night_of_the_Living_Dead_%281968%29.webm",
+      "durationSec": 5760,
+      "width": 1440,
+      "height": 1080,
+      "bytes": 4093040711
+    },
+    {
+      "id": "a-christmas-carol-1910",
+      "title": "A Christmas Carol",
+      "holiday": "christmas",
+      "allAges": true,
+      "year": 1910,
+      "license": "Public domain. Edison film, 1910. Wikimedia Commons marks the file public domain.",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:A_Christmas_Carol_(1910).webm",
+      "streamUrl": "https://upload.wikimedia.org/wikipedia/commons/3/35/A_Christmas_Carol_%281910%29.webm",
+      "durationSec": 600,
+      "width": 1464,
+      "height": 1080,
+      "bytes": 218548126
+    }
+  ]
+}

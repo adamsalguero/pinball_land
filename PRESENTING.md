@@ -1,6 +1,6 @@
 # Presenting on a Pinball Land screen
 
-Ron drives this from the iPad. Guests never install an app. Everything stays on the venue WiFi. The iPad is PIN-protected (`1234` until you change `config.json`). The guest page only works for devices on that same network.
+Ron drives this from the iPad. Guests never install an app. Everything stays on the venue WiFi. The admin app is PIN-protected (`2224` until you change it). Guests use the Pinball Land app with no PIN. See [CONTROL.md](CONTROL.md).
 
 One screen presents. The others keep rotating.
 

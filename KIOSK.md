@@ -52,7 +52,7 @@ No Assigned Access / Windows Kiosk Mode is required.
    npm run kiosk
    ```
 
-   Confirm a fullscreen display window on each enabled monitor, left to right. Control from a phone at the printed LAN URL (`http://<pc-ip>:3000/`, PIN `1234`). The first start also creates a local HTTPS certificate so guests can share a browser tab (see [PRESENTING.md](PRESENTING.md)).
+   Confirm a fullscreen display window on each enabled monitor, left to right. Control from a phone at the printed LAN URL (`http://<pc-ip>:3000/admin`, PIN `2224`). Guests use `http://<pc-ip>:3000/`. The first start also creates a local HTTPS certificate so guests can share a browser tab (see [PRESENTING.md](PRESENTING.md)).
 4. Keep Windows awake (the install script does this too):
 
    ```bat
@@ -152,6 +152,15 @@ Browser share, AirPlay, a web address, and an uploaded PDF or image are covered 
 Control stays PIN-protected. The guest page (`/present`) is only for devices on this WiFi, and it asks for the 4-digit code shown on the TV.
 
 ---
+
+## Boot checklist
+
+- BIOS **Restore on AC Power** (or Auto Power On) = On. See section 1.
+- Windows auto-logon is set with `netplwiz`.
+- `powershell -File scripts\install-kiosk-windows.ps1` registers the Node server at startup and the Electron kiosk at logon, restarts them after a crash, turns off sleep and the screensaver, and sets Windows Update active hours (9:00–23:00) so the PC does not reboot during open hours.
+- Check the tasks with `powershell -File scripts\install-kiosk-windows.ps1 -Verify`.
+- The kiosk keeps replacing windows until every enabled display has a monitor. TVs on Kasa plugs can finish booting after the PC.
+- Reset a forgotten admin PIN from the kiosk tray (**Reset PIN to default**) or with `npm run reset-pin`. Default is `2224`.
 
 ## Appendix: Ubuntu 24.04 (optional, not supported)
 

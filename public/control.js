@@ -52,6 +52,8 @@ const ROTATION_TOGGLES = [
   { id: "amenityArcade", label: "2-story arcade" },
   { id: "amenityOasis", label: "Outdoor Oasis" },
   { id: "amenityEvents", label: "Flexible Event Options" },
+  { id: "clock", label: "Clock and next event" },
+  { id: "pinboard", label: "Live pinboard" },
 ];
 
 let current = {
@@ -74,9 +76,15 @@ function toast(message) {
   }, 1800);
 }
 
+function deviceToken() {
+  return localStorage.getItem("pl-admin-device") || "";
+}
+
 async function api(url, options = {}) {
+  const headers = { "content-type": "application/json", ...(options.headers || {}) };
+  if (deviceToken()) headers["x-device-token"] = deviceToken();
   const res = await fetch(url, {
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
+    headers,
     credentials: "same-origin",
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -1125,6 +1133,9 @@ function render() {
   renderSlots();
   renderBoardSelect();
   renderBoardEditor();
+  renderYoutube();
+  renderPhotos();
+  renderAdmin();
 }
 
 function showApp() {
@@ -1132,20 +1143,35 @@ function showApp() {
   appEl.hidden = false;
 }
 
+function showTab(name) {
+  if (navigator.vibrate) navigator.vibrate(8);
+  for (const button of document.querySelectorAll("[data-tab]")) {
+    button.classList.toggle("active", button.dataset.tab === name);
+  }
+  for (const panel of document.querySelectorAll("[data-panel]")) {
+    panel.hidden = panel.dataset.panel !== name;
+  }
+  localStorage.setItem("pl-admin-tab", name);
+  if (name === "photos") renderPhotos();
+  if (name === "settings") renderAdmin();
+}
+
 async function boot() {
   const auth = await api("/api/auth");
   if (!auth.ok) return;
-  applyPayload(await api("/api/state"));
   showApp();
+  applyPayload(await api("/api/state"));
+  showTab(localStorage.getItem("pl-admin-tab") || "screens");
 }
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   loginError.hidden = true;
   try {
-    await api("/api/login", { method: "POST", body: { pin: pinInput.value } });
-    applyPayload(await api("/api/state"));
+    const session = await api("/api/login", { method: "POST", body: { pin: pinInput.value, name: "Admin iPad" } });
+    if (session.token) localStorage.setItem("pl-admin-device", session.token);
     showApp();
+    applyPayload(await api("/api/state"));
   } catch {
     loginError.hidden = false;
   }
@@ -1153,6 +1179,7 @@ loginForm.addEventListener("submit", async (event) => {
 
 document.getElementById("logout").addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" });
+  localStorage.removeItem("pl-admin-device");
   loginEl.hidden = false;
   appEl.hidden = true;
   pinInput.value = "";
@@ -1287,6 +1314,168 @@ function connect() {
     }
   });
   socket.addEventListener("close", () => setTimeout(connect, 1000));
+}
+
+function renderYoutube() {
+  const root = document.getElementById("youtube-root");
+  if (!root || !current.youtube) return;
+  const theme = current.state?.theme || "pinnacle";
+  root.replaceChildren();
+  for (const item of current.youtube[theme] || []) {
+    const row = document.createElement("div");
+    row.className = "card";
+    row.textContent = `${item.title} (${item.kind})`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn ghost compact";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      applyPayload(await api("/api/youtube", { method: "DELETE", body: { theme, id: item.id, kind: item.kind } }));
+    });
+    row.append(remove);
+    root.append(row);
+  }
+}
+
+async function renderPhotos() {
+  const root = document.getElementById("photos-root");
+  if (!root || document.getElementById("app").hidden) return;
+  let data = { photos: [], settings: current.guest || {} };
+  try {
+    data = await api("/api/guest-photos");
+  } catch {
+    return;
+  }
+  root.replaceChildren();
+  const auto = document.createElement("button");
+  auto.type = "button";
+  auto.className = `btn${data.settings?.autoApprove ? " active" : ""}`;
+  auto.textContent = data.settings?.autoApprove ? "Auto-approve on" : "Auto-approve off";
+  auto.addEventListener("click", async () => {
+    applyPayload(await api("/api/guest-photos/settings", { method: "PUT", body: { autoApprove: !data.settings?.autoApprove } }));
+    renderPhotos();
+  });
+  const style = document.createElement("button");
+  style.type = "button";
+  style.className = "btn";
+  style.textContent = data.settings?.style === "collage" ? "Collage mode" : "Pinboard mode";
+  style.addEventListener("click", async () => {
+    applyPayload(await api("/api/guest-photos/settings", {
+      method: "PUT",
+      body: { style: data.settings?.style === "collage" ? "pinboard" : "collage" },
+    }));
+  });
+  root.append(auto, style);
+  for (const photo of data.photos || []) {
+    if (photo.status === "rejected") continue;
+    const card = document.createElement("article");
+    card.className = "card";
+    const img = document.createElement("img");
+    img.src = photo.url;
+    img.alt = photo.caption || "Guest photo";
+    img.style.width = "120px";
+    const copy = document.createElement("p");
+    copy.textContent = `${photo.status}: ${[photo.guestName, photo.caption].filter(Boolean).join(" — ") || "No caption"}`;
+    card.append(img, copy);
+    if (photo.status === "pending") {
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "btn primary";
+      approve.textContent = "Approve";
+      approve.addEventListener("click", async () => {
+        await api(`/api/guest-photos/${photo.id}/approve`, { method: "POST" });
+        renderPhotos();
+      });
+      const reject = document.createElement("button");
+      reject.type = "button";
+      reject.className = "btn";
+      reject.textContent = "Reject";
+      reject.addEventListener("click", async () => {
+        await api(`/api/guest-photos/${photo.id}/reject`, { method: "POST" });
+        renderPhotos();
+      });
+      card.append(approve, reject);
+    }
+    root.append(card);
+  }
+}
+
+async function renderAdmin() {
+  const version = document.getElementById("version-line");
+  if (!version || document.getElementById("app").hidden) return;
+  version.textContent = `Version ${current.version || ""}`;
+  const qr = document.getElementById("join-qr");
+  if (qr && !qr.dataset.loaded) {
+    qr.src = "/api/admin/join-qr";
+    qr.dataset.loaded = "1";
+  }
+  try {
+    const info = await api("/api/admin/bootstrap");
+    document.getElementById("join-link").textContent = info.joinUrl;
+    const list = document.getElementById("device-list");
+    list.replaceChildren();
+    for (const device of info.devices || []) {
+      const row = document.createElement("div");
+      row.className = "card";
+      row.textContent = device.name;
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "btn ghost compact";
+      revoke.textContent = "Revoke";
+      revoke.addEventListener("click", async () => {
+        await api(`/api/devices/${device.id}`, { method: "DELETE" });
+        renderAdmin();
+      });
+      row.append(revoke);
+      list.append(row);
+    }
+  } catch {
+    // still locked
+  }
+}
+
+for (const button of document.querySelectorAll("[data-tab]")) {
+  button.addEventListener("click", () => showTab(button.dataset.tab));
+}
+for (const button of document.querySelectorAll("[data-motion]")) {
+  button.addEventListener("click", async () => {
+    applyPayload(await api("/api/motion", { method: "PUT", body: { motion: button.dataset.motion } }));
+    toast(`Motion ${button.dataset.motion}`);
+  });
+}
+document.getElementById("youtube-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = document.getElementById("youtube-input");
+  applyPayload(await api("/api/youtube", {
+    method: "POST",
+    body: { theme: current.state?.theme || "pinnacle", input: input.value },
+  }));
+  input.value = "";
+});
+document.getElementById("pin-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await api("/api/pin", { method: "PUT", body: { pin: document.getElementById("new-pin").value } });
+  toast("PIN changed");
+});
+document.getElementById("reset-pin").addEventListener("click", async () => {
+  await api("/api/pin/reset", { method: "POST" });
+  toast("PIN reset to 2224");
+});
+document.getElementById("revoke-all").addEventListener("click", async () => {
+  await api("/api/devices/revoke-all", { method: "POST" });
+  localStorage.removeItem("pl-admin-device");
+  location.reload();
+});
+document.getElementById("update-now").addEventListener("click", async () => {
+  const result = await api("/api/updates/now", { method: "POST" });
+  toast(result.latest ? `Update ${result.latest}` : `Version ${result.version}. Data folder stays put.`);
+});
+
+const installHint = document.getElementById("install-hint");
+const standalone = window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+if (installHint && !standalone) installHint.hidden = false;
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/admin/sw.js", { scope: "/admin" }).catch(() => {});
 }
 
 boot().catch(() => {});

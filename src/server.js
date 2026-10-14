@@ -8,26 +8,30 @@ const { Store } = require("./store");
 const { getLanIPv4s } = require("./lan");
 const { ensureCertificate } = require("./certs");
 const { slotLabel } = require("./displays");
+const { defaultDataDir, dataLayout, migrateData } = require("./paths");
 
 function printBanner(config, httpsReady) {
   const port = config.port;
   console.log("");
   console.log("Pinball Land kiosk is running");
   console.log("--------------------------------");
-  console.log(`This PC control:     http://localhost:${port}/`);
+  console.log(`Guest app:           http://localhost:${port}/`);
+  console.log(`Admin app:           http://localhost:${port}/admin`);
   const ips = getLanIPv4s();
   if (ips.length) {
     for (const ip of ips) {
-      console.log(`Phone / iPad:        http://${ip}:${port}/`);
+      console.log(`Guest phone:         http://${ip}:${port}/`);
+      console.log(`Admin iPad:          http://${ip}:${port}/admin`);
     }
   } else {
-    console.log("Phone / iPad:        (no LAN IPv4 found — connect to WiFi and restart)");
+    console.log("Phones:              (no LAN IPv4 found — connect to WiFi and restart)");
   }
   for (let slot = 1; slot <= config.displays.count; slot += 1) {
     const label = slotLabel(slot, config.displays.count);
     console.log(`${label} display:`.padEnd(21) + `http://localhost:${port}/display/${slot}`);
   }
-  console.log(`Control PIN:         set in config.json (default 1234)`);
+  console.log(`Admin PIN:           set in the data-dir config (default 2224)`);
+  console.log(`Reset PIN:           npm run reset-pin`);
   if (httpsReady) {
     console.log(`Browser share:       https://<this-pc>:${config.httpsPort}/present`);
     console.log("                     Guests must accept the certificate warning once.");
@@ -73,9 +77,14 @@ async function startHttps({ app, attachWebSocket, config, certDir }) {
 
 async function startServer() {
   const root = path.join(__dirname, "..");
-  const configStore = createConfigStore(path.join(root, "config.json"));
+  const migrated = await migrateData({ appRoot: root });
+  const paths = dataLayout(migrated.dataDir);
+  if (!fs.existsSync(paths.config)) {
+    await fs.promises.copyFile(path.join(root, "config.json"), paths.config);
+  }
+  const configStore = createConfigStore(paths.config);
   const config = configStore.get();
-  const store = await Store.load(path.join(root, "data", "state.json"));
+  const store = await Store.load(paths.state);
   let httpsReady = false;
   const { app, attachWebSocket } = createApp({
     store,
@@ -84,10 +93,13 @@ async function startServer() {
     logosDir: path.join(root, "public", "logos"),
     photosDir: path.join(root, "public", "photos"),
     opdbApiKey: config.opdbApiKey,
-    cacheDir: path.join(root, "data", "opdb"),
-    uploadsDir: path.join(root, "data", "uploads"),
-    mediaDir: path.join(root, "media"),
-    mediaCatalog: path.join(root, "data", "media-library.json"),
+    cacheDir: paths.opdb,
+    uploadsDir: paths.uploads,
+    mediaDir: paths.media,
+    mediaCatalog: paths.mediaCatalog,
+    devicesPath: paths.devices,
+    guestPhotosDir: paths.photos,
+    catalogPath: path.join(root, "media", "catalog.json"),
     configStore,
     isHttpsReady: () => httpsReady,
   });
@@ -108,7 +120,7 @@ async function startServer() {
       app,
       attachWebSocket,
       config,
-      certDir: path.join(root, "data", "certs"),
+      certDir: paths.certs,
     });
     httpsReady = Boolean(httpsServer);
   } catch (err) {

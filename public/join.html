@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Join Pinball Land Admin</title>
+    <link rel="stylesheet" href="/guest.css" />
+  </head>
+  <body>
+    <header class="guest-top">
+      <p class="eyebrow">Pinball Land</p>
+      <h1>Admin install</h1>
+    </header>
+    <p id="join-status" class="status">Linking this device…</p>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const token = params.get("token") || "";
+      const status = document.getElementById("join-status");
+      fetch("/api/admin/join", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ token, name: "Joined iPad" }),
+      })
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || "Link rejected");
+          localStorage.setItem("pl-admin-device", data.token);
+          location.replace("/admin");
+        })
+        .catch((err) => {
+          status.textContent = err.message;
+        });
+    </script>
+  </body>
+</html>

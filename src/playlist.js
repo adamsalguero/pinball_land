@@ -8,6 +8,8 @@ const ROTATION_ITEM_IDS = [
   "amenityArcade",
   "amenityOasis",
   "amenityEvents",
+  "clock",
+  "pinboard",
 ];
 
 const DEFAULT_ROTATION_ITEMS = Object.fromEntries(ROTATION_ITEM_IDS.map((id) => [id, true]));
@@ -55,10 +57,26 @@ function buildPlaylist(state, options = {}) {
   if (items.amenityEvents) {
     cards.push({ type: "amenity", id: "events" });
   }
+  if (items.clock) {
+    cards.push({ type: "clock", id: "clock" });
+  }
+  if (items.pinboard) {
+    cards.push({
+      type: options.photoStyle === "collage" ? "collage" : "pinboard",
+      id: "pinboard",
+      span: options.photoSpan !== false,
+    });
+  }
   for (const board of state?.leaderboards || []) {
     if (board.inRotation) {
       cards.push({ type: "leaderboard", id: board.id });
     }
+  }
+  const starters = Array.isArray(options.starters) ? options.starters : [];
+  for (const starter of starters) cards.push(starter);
+  const youtube = Array.isArray(options.youtube) ? options.youtube : [];
+  for (const item of youtube) {
+    cards.push({ type: "youtube", id: item.id, kind: item.kind, title: item.title });
   }
   const videos = Array.isArray(options.videos) ? options.videos : [];
   for (const video of videos) {

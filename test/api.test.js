@@ -15,7 +15,7 @@ async function startServer(overrides = {}) {
   const root = path.join(__dirname, "..");
   const { app, attachWebSocket } = createApp({
     store,
-    pin: "1234",
+    pin: "2224",
     publicDir: path.join(root, "public"),
     logosDir: path.join(root, "public", "logos"),
     photosDir: path.join(root, "public", "photos"),
@@ -42,7 +42,7 @@ async function json(origin, url, options = {}) {
 test("serves display, control, SVG logos, and oasis photo", async () => {
   const { server, origin } = await startServer();
   try {
-    const control = await fetch(`${origin}/`);
+    const control = await fetch(`${origin}/admin`);
     const display = await fetch(`${origin}/display/2`);
     const logo = await fetch(`${origin}/logos/pinnacle`);
     const photo = await fetch(`${origin}/photos/oasis`);
@@ -66,7 +66,7 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
     assert.match(logo.headers.get("content-type") || "", /image\/svg\+xml/);
     assert.doesNotMatch(logoText, /PLACEHOLDER LOGO/);
     assert.match(logoText, /Pinnacle Group Financial Services/);
-    assert.match(photo.headers.get("content-type") || "", /image\/png/);
+    assert.match(photo.headers.get("content-type") || "", /image\/(png|jpeg)/);
   } finally {
     server.close();
   }
@@ -78,7 +78,7 @@ test("PIN gates mutations; login cookie allows off and live WS update", async ()
     const denied = await json(origin, "/api/off", { method: "POST" });
     assert.equal(denied.res.status, 401);
 
-    const login = await json(origin, "/api/login", { method: "POST", body: { pin: "1234" } });
+    const login = await json(origin, "/api/login", { method: "POST", body: { pin: "2224" } });
     assert.equal(login.res.status, 200);
     const cookie = login.res.headers.get("set-cookie");
     assert.ok(cookie);
@@ -116,7 +116,7 @@ test("PIN gates mutations; login cookie allows off and live WS update", async ()
 test("rotation payload, amenity copy, theme, and machine enable", async () => {
   const { server, origin } = await startServer();
   try {
-    const headers = { "x-pin": "1234" };
+    const headers = { "x-pin": "2224" };
     const state = await json(origin, "/api/state");
     assert.equal(state.data.state.rotation.enabled, true);
     assert.ok(state.data.playlist.length >= 6);
@@ -164,7 +164,7 @@ test("can switch a slot and add a score with the PIN header", async () => {
   try {
     const state = await json(origin, "/api/state");
     const boardId = state.data.state.leaderboards[0].id;
-    const headers = { "x-pin": "1234" };
+    const headers = { "x-pin": "2224" };
     const slot = await json(origin, "/api/slots/1", {
       method: "PUT",
       headers,
@@ -230,7 +230,7 @@ test("OPDB search uses injected fetch and caches art when a token is present", a
     fetchImpl,
   });
   try {
-    const headers = { "x-pin": "1234" };
+    const headers = { "x-pin": "2224" };
     const search = await json(origin, "/api/opdb/search?q=Medieval", { headers });
     assert.equal(search.data.configured, true);
     assert.equal(search.data.results[0].name, "Medieval Madness");
@@ -262,7 +262,7 @@ function opened(socket) {
 test("display settings, restart, and monitor order are PIN protected and live", async () => {
   const { server, origin } = await startServer();
   try {
-    const headers = { "x-pin": "1234" };
+    const headers = { "x-pin": "2224" };
     const denied = await json(origin, "/api/displays", { method: "PUT", body: { count: 1 } });
     assert.equal(denied.res.status, 401);
 
@@ -319,7 +319,7 @@ test("display settings, restart, and monitor order are PIN protected and live", 
 test("one screen can present while the others stay in rotation", async () => {
   const { server, origin, port } = await startServer();
   try {
-    const headers = { "x-pin": "1234" };
+    const headers = { "x-pin": "2224" };
     const denied = await json(origin, "/api/present/1/start", {
       method: "POST",
       body: { source: "webrtc" },
@@ -416,7 +416,7 @@ test("one screen can present while the others stay in rotation", async () => {
 test("uploads a PNG onto one screen and removes it when the presentation ends", async () => {
   const { server, origin } = await startServer();
   try {
-    const headers = { "x-pin": "1234" };
+    const headers = { "x-pin": "2224" };
     const png = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
       "base64"
@@ -513,7 +513,7 @@ test("airplay target, mocked plugs, and a christmas video", async () => {
     mediaCatalog: path.join(dir, "library.json"),
   });
   try {
-    const headers = { "x-pin": "1234" };
+    const headers = { "x-pin": "2224" };
     const denied = await json(origin, "/api/plugs/discover", { method: "POST" });
     assert.equal(denied.res.status, 401);
 
@@ -618,7 +618,7 @@ test("airplay target, mocked plugs, and a christmas video", async () => {
     });
     assert.equal(blocked.res.status, 400);
 
-    const control = await fetch(`${origin}/`);
+    const control = await fetch(`${origin}/admin`);
     const html = await control.text();
     assert.match(html, /Christmas/);
     assert.match(html, /Never put the PC on a plug/);

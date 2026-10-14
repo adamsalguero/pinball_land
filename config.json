@@ -1,7 +1,7 @@
 {
   "port": 3000,
   "httpsPort": 3443,
-  "pin": "1234",
+  "pin": "2224",
   "opdbApiKey": "",
   "displays": {
     "count": 3,
