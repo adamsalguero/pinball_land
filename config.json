@@ -1,0 +1,53 @@
+{
+  "port": 3000,
+  "httpsPort": 3443,
+  "pin": "2224",
+  "opdbApiKey": "",
+  "displays": {
+    "count": 3,
+    "mirror": false,
+    "order": [],
+    "screens": {
+      "1": {
+        "enabled": true,
+        "content": "rotation",
+        "leaderboardId": null
+      },
+      "2": {
+        "enabled": true,
+        "content": "rotation",
+        "leaderboardId": null
+      },
+      "3": {
+        "enabled": true,
+        "content": "rotation",
+        "leaderboardId": null
+      }
+    }
+  },
+  "presentation": {
+    "idleMinutes": 10
+  },
+  "airplay": {
+    "command": "",
+    "args": [],
+    "windowTitle": "Pinball Land",
+    "target": "off"
+  },
+  "plugs": {
+    "assignments": {
+      "1": null,
+      "2": null,
+      "3": null
+    },
+    "devices": [],
+    "schedule": {
+      "enabled": false,
+      "onTime": "10:00",
+      "offTime": "22:00"
+    }
+  },
+  "media": {
+    "allAges": true
+  }
+}

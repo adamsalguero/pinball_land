@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PL Admin" />
+    <meta name="theme-color" content="#1a1916" />
+    <title>Pinball Land Admin</title>
+    <link rel="manifest" href="/admin.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/admin-180.png" />
+    <link rel="stylesheet" href="/design-tokens.css" />
+    <link rel="stylesheet" href="/control.css" />
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body>
+    <div id="login" class="login">
+      <form id="login-form" class="login-card">
+        <p class="eyebrow">Pinball Land</p>
+        <h1>Kiosk control</h1>
+        <p class="hint">Enter the PIN once. This iPad stays signed in. Default is 2224.</p>
+        <label>
+          PIN
+          <input id="pin-input" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="12" />
+        </label>
+        <button type="submit" class="btn primary">Unlock</button>
+        <p id="login-error" class="error" hidden>Wrong PIN</p>
+      </form>
+    </div>
+
+    <div id="app" hidden>
+      <p id="install-hint" class="install-hint" hidden>Add Pinball Land Admin to your Home Screen. The PIN is remembered on this device.</p>
+      <header class="top">
+        <div>
+          <p class="eyebrow">Pinball Land</p>
+          <h1>Kiosk control</h1>
+        </div>
+        <button id="logout" class="btn ghost compact" type="button">Lock</button>
+      </header>
+
+      <div class="tab-panels">
+        <div data-panel="screens">
+          <button id="off-all" class="btn danger huge" type="button">Off — black all screens</button>
+          <section id="displays-section">
+            <h2>Displays</h2>
+            <p class="muted">Use 1, 2, or 3 screens. The wall opens a window only for each enabled display, left to right. Changes apply live. Restart kiosk windows if a screen stays stuck.</p>
+            <div id="displays-root"></div>
+          </section>
+          <section>
+            <h2>Theme</h2>
+            <p class="muted">Ron turns a party theme on from this iPad. It does not follow the calendar. Halloween and Christmas also play family clips from those media folders.</p>
+            <div class="theme-toggle">
+              <button id="theme-pinnacle" class="btn" type="button">Pinnacle brand</button>
+              <button id="theme-halloween" class="btn" type="button">Halloween party</button>
+              <button id="theme-christmas" class="btn" type="button">Christmas</button>
+            </div>
+          </section>
+          <section>
+            <h2>Wall rotation</h2>
+            <p class="muted">On by default. Every TV shares one playlist — Pinnacle Group logo, Entertainment Center logo, 2-story arcade, Outdoor Oasis, Flexible Event Options, and enabled leaderboards — staggered so neighbors are not on the same card.</p>
+            <div class="theme-toggle">
+              <button id="rotation-on" class="btn" type="button">Rotation on</button>
+              <button id="rotation-off" class="btn" type="button">Rotation off</button>
+            </div>
+            <label class="interval-label">
+              Seconds per card
+              <input id="interval" type="number" min="3" max="180" step="1" />
+            </label>
+            <p class="choice-heading">Include in the playlist</p>
+            <div id="rotation-items" class="toggle-stack"></div>
+          </section>
+          <section id="manual-screens">
+            <h2>Manual screens</h2>
+            <p class="muted">Used only while rotation is off. Assign each TV yourself.</p>
+            <div id="slots" class="stack"></div>
+          </section>
+        </div>
+
+        <div data-panel="present" hidden>
+          <section id="present-section">
+            <h2>Present</h2>
+            <p class="muted">Pick one screen. The others keep rotating. End it from here, or it drops off after the idle time.</p>
+            <div id="present-root"></div>
+            <p class="callout">Google Cast: a true Cast receiver on this Windows PC isn't practical. Chrome laptops and Android phones should use Browser share. Optional hardware: plug a Chromecast or Google TV dongle into a spare HDMI input on the TV, cast to that dongle, then switch the TV back to the PC input when you are done.</p>
+          </section>
+          <section id="airplay-section">
+            <h2>AirPlay</h2>
+            <p class="muted">One tap picks the TV. The receiver stays ready. When an iPhone connects, that screen leaves rotation. It comes back when the mirror ends.</p>
+            <div id="airplay-root"></div>
+          </section>
+        </div>
+
+        <div data-panel="leaderboards" hidden>
+          <section>
+            <h2>Pinball collection</h2>
+            <p id="opdb-help" class="muted"></p>
+            <label>
+              Search OPDB
+              <input id="machine-search" type="search" placeholder="The Addams Family" autocomplete="off" />
+            </label>
+            <div id="machine-results" class="stack"></div>
+            <form id="manual-machine" class="add-row">
+              <input id="manual-machine-name" placeholder="Add a machine by name" required />
+              <button class="btn primary" type="submit">Add to collection</button>
+            </form>
+          </section>
+          <section>
+            <h2>Leaderboards</h2>
+            <p class="muted">Event boards and each enabled machine. Toggle “On the wall” to include it in rotation.</p>
+            <div class="row-actions">
+              <select id="board-select" aria-label="Choose board"></select>
+              <button id="new-board" class="btn" type="button">New event</button>
+            </div>
+            <div id="board-editor" class="card"></div>
+          </section>
+        </div>
+
+        <div data-panel="media" hidden>
+          <section id="media-section">
+            <h2>Videos</h2>
+            <p class="muted">Upload mp4, m4v, webm, mov, or mkv. Play one screen, the same clip in sync on every screen, or one picture spanned across the wall. Holiday folders join the rotation while that theme is on.</p>
+            <div id="media-root"></div>
+          </section>
+          <section id="youtube-section">
+            <h2>YouTube</h2>
+            <p class="muted">Only links you paste play. The wall uses the privacy embed, hides controls, and skips videos that cannot be embedded.</p>
+            <form id="youtube-form" class="add-row">
+              <input id="youtube-input" placeholder="YouTube link or playlist id" />
+              <button class="btn primary" type="submit">Add</button>
+            </form>
+            <div id="youtube-root" class="stack"></div>
+          </section>
+        </div>
+
+        <div data-panel="photos" hidden>
+          <section>
+            <h2>Live pinboard</h2>
+            <p class="muted">Guests post from the Pinball Land app with no PIN. Approve them here unless auto-approve is on.</p>
+            <div id="photos-root" class="stack"></div>
+          </section>
+        </div>
+
+        <div data-panel="settings" hidden>
+          <section id="plugs-section">
+            <h2>Smart plugs</h2>
+            <p class="muted">Kasa plugs on the TV power cords only. Set each BenQ Switch on state to On. Never put the PC on a plug.</p>
+            <div id="plugs-root"></div>
+          </section>
+          <section>
+            <h2>Wall motion</h2>
+            <div class="theme-toggle" id="motion-toggle">
+              <button class="btn" type="button" data-motion="subtle">Subtle</button>
+              <button class="btn" type="button" data-motion="full">Full</button>
+              <button class="btn" type="button" data-motion="off">Off</button>
+            </div>
+          </section>
+          <section>
+            <h2>This device</h2>
+            <p id="version-line" class="muted"></p>
+            <img id="join-qr" alt="Admin install QR" width="180" height="180" />
+            <p id="join-link" class="muted"></p>
+            <div id="device-list" class="stack"></div>
+            <button id="revoke-all" class="btn danger" type="button">Sign out all devices</button>
+            <button id="update-now" class="btn" type="button">Check for updates</button>
+          </section>
+          <section>
+            <h2>PIN</h2>
+            <form id="pin-form" class="add-row">
+              <input id="new-pin" inputmode="numeric" maxlength="12" placeholder="New PIN" />
+              <button class="btn primary" type="submit">Change PIN</button>
+            </form>
+            <button id="reset-pin" class="btn" type="button">Reset PIN to 2224</button>
+          </section>
+        </div>
+      </div>
+
+      <nav class="tabbar" aria-label="Admin">
+        <button type="button" data-tab="screens" class="active">Screens</button>
+        <button type="button" data-tab="present">Present</button>
+        <button type="button" data-tab="leaderboards">Boards</button>
+        <button type="button" data-tab="media">Media</button>
+        <button type="button" data-tab="photos">Photos</button>
+        <button type="button" data-tab="settings">Settings</button>
+      </nav>
+    </div>
+
+    <p id="toast" class="toast" hidden></p>
+    <script src="/control.js"></script>
+  </body>
+</html>

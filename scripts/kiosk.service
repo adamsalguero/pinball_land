@@ -1,0 +1,18 @@
+# Optional Ubuntu 24.04 kiosk unit (NOT the supported venue path).
+# Windows 11 on the Beelink SER5 is the default. See KIOSK.md appendix.
+
+[Unit]
+Description=Pinball Land kiosk (optional Ubuntu)
+After=network-online.target graphical-session.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pinball-land
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/npm run kiosk
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

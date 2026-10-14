@@ -1,0 +1,7 @@
+Amenity photos (small framed tiles on the brand background, never fullscreen).
+
+  arcade.jpg    2-story arcade
+  oasis.png     Outdoor Oasis (waterfall / garden / outdoor bar — not a pool)
+
+The Flexible Event Options card is typographic and does not use a photo.
+Drop in higher-resolution versions with the same names when you have them.

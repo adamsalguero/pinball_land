@@ -1,0 +1,65 @@
+:root {
+  --ink: #1a1916;
+  --charcoal: #504e50;
+  --beige: #f8f8f5;
+  --stone: #d8d8d6;
+  --lockup: #e5e2da;
+  --purple: #62006e;
+  --lavender: #a269a9;
+  --forest: #2d4c32;
+  --bg: var(--ink);
+  --panel: rgba(36, 28, 38, 0.72);
+  --text: var(--beige);
+  --muted: var(--stone);
+  --accent: var(--lavender);
+  --frame: var(--forest);
+  --kicker: var(--lavender);
+  --rank: var(--lavender);
+  --line: rgba(162, 105, 169, 0.35);
+  --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  --radius: 28px;
+  --space: clamp(28px, 4vw, 72px);
+  --type-display: clamp(64px, 7vw, 128px);
+  --type-title: clamp(42px, 4.6vw, 84px);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --font-wall: "Lato", "Avenir Next", "Segoe UI", sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", sans-serif;
+  --touch: 44px;
+  --particle: rgba(248, 248, 245, 0.45);
+  --cork: rgba(229, 226, 218, 0.14);
+  --pin: var(--purple);
+}
+
+[data-theme="halloween"] {
+  --bg: #100c09;
+  --panel: rgba(28, 16, 10, 0.78);
+  --text: #f6efe4;
+  --muted: #d7b89a;
+  --accent: #e07a3d;
+  --frame: #8a3b12;
+  --kicker: #e07a3d;
+  --rank: #e7c39a;
+  --line: rgba(224, 122, 61, 0.35);
+  --lockup: #1c100c;
+  --purple: #e07a3d;
+  --cork: rgba(62, 36, 18, 0.55);
+  --pin: #c4522a;
+  --particle: rgba(224, 122, 61, 0.35);
+}
+
+[data-theme="christmas"] {
+  --bg: #07140f;
+  --panel: rgba(12, 32, 24, 0.78);
+  --text: #f4efe4;
+  --muted: #d4c4a8;
+  --accent: #c8102e;
+  --frame: #1f7a3a;
+  --kicker: #e8c872;
+  --rank: #e8c872;
+  --line: rgba(232, 200, 114, 0.4);
+  --lockup: #102016;
+  --purple: #1f7a3a;
+  --cork: rgba(16, 42, 28, 0.55);
+  --pin: #c8102e;
+  --particle: rgba(244, 239, 228, 0.7);
+}
