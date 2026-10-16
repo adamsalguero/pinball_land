@@ -16,6 +16,10 @@
   "engines": {
     "node": ">=18"
   },
+  "allowScripts": {
+    "electron": true,
+    "electron@33.4.11": true
+  },
   "dependencies": {
     "archiver": "^8.0.0",
     "electron": "^33.4.5",

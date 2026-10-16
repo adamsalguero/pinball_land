@@ -27,9 +27,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
+      - run: node -v
+      - run: npm -v
       - run: npm ci
+      - name: Electron install script is allowed
+        shell: pwsh
+        run: |
+          node -e "const a=require('./package.json').allowScripts||{}; const ok=Object.keys(a).some(k => a[k]===true && (k==='electron' || k.startsWith('electron@'))); if(!ok){ console.error('allowScripts does not allow electron'); process.exit(1) } console.log(JSON.stringify(a))"
+      - name: Electron binary from npm ci
+        shell: pwsh
+        run: |
+          if (-not (Test-Path node_modules\electron\dist\electron.exe)) {
+            Write-Error "npm ci did not install the Electron binary. allowScripts must cover electron so its postinstall runs."
+            exit 1
+          }
       - name: PowerShell syntax
         shell: pwsh
         run: |
@@ -39,3 +52,6 @@ jobs:
             if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           }
       - run: npm run electron-smoke
+      - name: Installer dry run
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-beelink.ps1 -DryRun

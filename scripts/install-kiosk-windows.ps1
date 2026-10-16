@@ -2,73 +2,466 @@
 <#
 .SYNOPSIS
   Registers Pinball Land kiosk auto-start on Windows 11 (Task Scheduler at logon).
-.NOTES
-  Re-runnable. Does not enable auto-logon (do that with netplwiz). Does not change BIOS.
+.DESCRIPTION
+  Re-runnable. Does not change BIOS.
+  Registry tweaks are idempotent and non-critical: a failed notification, screensaver,
+  or active-hours write is a warning and does not stop firewall, power, or startup.
+  -AutoLogonUser sets AutoAdminLogon for a local passwordless account (for example Admin).
+  -DryRun applies the same machine setup except AutoAdminLogon, and is what CI runs.
+.PARAMETER AutoLogonUser
+  Local passwordless account to sign in automatically, for example Admin.
+.PARAMETER DryRun
+  Skip AutoAdminLogon. Still registers tasks, power, firewall, and the private network profile.
+.PARAMETER Verify
+  Print the verify summary and exit. Does not change the machine.
 #>
 param(
   [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-  [switch]$Verify
+  [switch]$Verify,
+  [switch]$DryRun,
+  [switch]$NoSummary,
+  [string]$AutoLogonUser
 )
 
 $ErrorActionPreference = "Stop"
 $taskName = "PinballLandKiosk"
 $serverTask = "PinballLandServer"
+$httpRule = "Pinball Land HTTP"
+$shareRule = "Pinball Land share"
+$httpPort = 3000
+$sharePort = 3443
 
-if ($Verify) {
+function Test-KioskAdmin {
+  $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = New-Object Security.Principal.WindowsPrincipal($current)
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Ensure-KioskRegistryKey {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (Test-Path -LiteralPath $Path) { return }
+  $parent = Split-Path -Parent $Path
+  if ($parent -and $parent -notmatch '^[A-Za-z]+:\\?$' -and -not (Test-Path -LiteralPath $parent)) {
+    Ensure-KioskRegistryKey -Path $parent
+  }
+  if (-not (Test-Path -LiteralPath $Path)) {
+    # Never -Force. -Force deletes the key first, and that throws
+    # "Cannot delete a subkey tree because the subkey does not exist"
+    # when the key (or one of its children) is already gone.
+    New-Item -Path $Path -ErrorAction Stop | Out-Null
+  }
+}
+
+function Set-KioskRegistryValue {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)]$Value
+  )
+  if (-not (Test-Path -LiteralPath $Path)) {
+    Ensure-KioskRegistryKey -Path $Path
+  }
+  Set-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -ErrorAction Stop
+}
+
+function Try-KioskRegistryValue {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)]$Value
+  )
+  try {
+    Set-KioskRegistryValue -Path $Path -Name $Name -Value $Value
+  } catch {
+    Write-Warning "Skipped registry tweak $Path ($Name): $($_.Exception.Message)"
+  }
+}
+
+function Invoke-RegistrySelfTest {
+  $root = "HKCU:\Software\PinballLandInstallerTest"
+  $path = "HKCU:\Software\PinballLandInstallerTest\MissingChild"
+  try {
+    if (Test-Path -LiteralPath $root) {
+      Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Set-KioskRegistryValue -Path $path -Name "Probe" -Value 1
+    $read = (Get-ItemProperty -LiteralPath $path -Name "Probe" -ErrorAction Stop).Probe
+    if ([int]$read -ne 1) { throw "Registry self-test read back '$read'." }
+    Set-KioskRegistryValue -Path $path -Name "Probe" -Value 2
+    $read = (Get-ItemProperty -LiteralPath $path -Name "Probe" -ErrorAction Stop).Probe
+    if ([int]$read -ne 2) { throw "Registry self-test update read back '$read'." }
+    Write-Host "Registry writes are idempotent (missing key created, then updated)."
+  } finally {
+    if (Test-Path -LiteralPath $root) {
+      Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+function Install-ElectronIfMissing {
+  $exe = Join-Path $RepoRoot "node_modules\electron\dist\electron.exe"
+  if (Test-Path -LiteralPath $exe) {
+    Write-Host "Electron binary present: $exe"
+    return
+  }
+  $installJs = Join-Path $RepoRoot "node_modules\electron\install.js"
+  if (-not (Test-Path -LiteralPath $installJs)) {
+    Write-Warning "Electron package is missing ($installJs). Run npm ci in $RepoRoot."
+    return
+  }
+  $node = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $node) {
+    Write-Warning "node is not on PATH, so the Electron binary was not downloaded."
+    return
+  }
+  Write-Host "Electron dist is missing. Running: node node_modules/electron/install.js"
+  Push-Location $RepoRoot
+  try {
+    & node "node_modules/electron/install.js"
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "node node_modules/electron/install.js exited $LASTEXITCODE."
+    }
+  } catch {
+    Write-Warning "Could not run electron install.js: $($_.Exception.Message)"
+  } finally {
+    Pop-Location
+  }
+  if (Test-Path -LiteralPath $exe) {
+    Write-Host "Electron binary present: $exe"
+  } else {
+    Write-Warning "Electron binary still missing: $exe"
+  }
+}
+
+function Invoke-KioskPowerCfg {
+  param([Parameter(Mandatory = $true)][string[]]$Arguments)
+  & powercfg.exe @Arguments | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "powercfg $($Arguments -join ' ') exited $LASTEXITCODE."
+  }
+}
+
+function Set-KioskPowerPlan {
+  Invoke-KioskPowerCfg -Arguments @("/change", "standby-timeout-ac", "0")
+  Invoke-KioskPowerCfg -Arguments @("/change", "monitor-timeout-ac", "0")
+  Invoke-KioskPowerCfg -Arguments @("/change", "hibernate-timeout-ac", "0")
+  Invoke-KioskPowerCfg -Arguments @("/SETACVALUEINDEX", "SCHEME_CURRENT", "SUB_SLEEP", "STANDBYIDLE", "0")
+  Invoke-KioskPowerCfg -Arguments @("/SETACVALUEINDEX", "SCHEME_CURRENT", "SUB_VIDEO", "VIDEOIDLE", "0")
+  Invoke-KioskPowerCfg -Arguments @("/SETACVALUEINDEX", "SCHEME_CURRENT", "SUB_SLEEP", "HIBERNATEIDLE", "0")
+  Invoke-KioskPowerCfg -Arguments @("/SETACTIVE", "SCHEME_CURRENT")
+}
+
+function Set-KioskPrivateNetwork {
+  $profiles = @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { $_ })
+  if ($profiles.Count -eq 0) {
+    throw "No network connection profile was found."
+  }
+  foreach ($profile in $profiles) {
+    $label = "$($profile.InterfaceAlias) ($($profile.Name))"
+    if ([string]$profile.NetworkCategory -eq "Private") {
+      Write-Host "Network $label is already Private."
+      continue
+    }
+    Write-Host "Setting network $label from $($profile.NetworkCategory) to Private..."
+    try {
+      Set-NetConnectionProfile -InterfaceIndex $profile.InterfaceIndex -NetworkCategory Private -ErrorAction Stop
+    } catch {
+      Write-Warning "Could not set $label to Private: $($_.Exception.Message)"
+    }
+  }
+}
+
+function Add-KioskFirewallRule {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][int]$Port
+  )
+  & netsh.exe advfirewall firewall delete rule "name=$Name" | Out-Null
+  $added = & netsh.exe advfirewall firewall add rule "name=$Name" dir=in action=allow protocol=TCP "localport=$Port" profile=private | Out-String
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not add firewall rule '$Name' for TCP $Port (netsh exit $LASTEXITCODE). $added"
+  }
+  Write-Host "Firewall rule '$Name' allows TCP $Port on private networks."
+}
+
+function Set-KioskAutoLogon {
+  param([Parameter(Mandatory = $true)][string]$User)
+  # Blank-password auto-logon needs the password value to exist (even when empty).
+  # Windows 11 ignores that while PasswordLess DevicePasswordLessBuildVersion is non-zero.
+  $winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+  Set-KioskRegistryValue -Path $winlogon -Name "AutoAdminLogon" -Value "1"
+  Set-KioskRegistryValue -Path $winlogon -Name "DefaultUserName" -Value $User
+  Set-KioskRegistryValue -Path $winlogon -Name "DefaultDomainName" -Value $env:COMPUTERNAME
+  Set-KioskRegistryValue -Path $winlogon -Name "DefaultPassword" -Value ""
+  $passwordLess = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device"
+  Set-KioskRegistryValue -Path $passwordLess -Name "DevicePasswordLessBuildVersion" -Value 0
+  Write-Host "AutoAdminLogon set for passwordless local account '$User'."
+}
+
+function Get-AcPowerIndex {
+  param(
+    [Parameter(Mandatory = $true)][string]$Subgroup,
+    [Parameter(Mandatory = $true)][string]$Setting
+  )
+  $output = & powercfg.exe /q SCHEME_CURRENT $Subgroup $Setting | Out-String
+  $match = [regex]::Match($output, "Current AC Power Setting Index:\s*0x([0-9A-Fa-f]+)")
+  if (-not $match.Success) { return $null }
+  return [Convert]::ToInt32($match.Groups[1].Value, 16)
+}
+
+function Test-KioskFirewallRule {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][int]$Port
+  )
+  $output = & netsh.exe advfirewall firewall show rule "name=$Name" | Out-String
+  $escaped = [regex]::Escape($Name)
+  if ($output -notmatch "Rule Name:\s+$escaped") { return $false }
+  if ($output -notmatch "LocalPort:\s+$Port\b") { return $false }
+  if ($output -notmatch "Action:\s+Allow") { return $false }
+  if ($output -notmatch "Profiles:\s+.*\bPrivate\b") { return $false }
+  if ($output -match "Enabled:\s+No") { return $false }
+  return $true
+}
+
+function Read-KioskRegValue {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+  try {
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    return (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop).$Name
+  } catch {
+    return $null
+  }
+}
+
+function Write-KioskVerifySummary {
+  param(
+    [string]$AutoLogonUser,
+    [switch]$DryRun
+  )
+
+  $rows = New-Object System.Collections.Generic.List[object]
+  function Add-Row {
+    param($Label, $State, $Detail)
+    $rows.Add([pscustomobject]@{ Label = $Label; State = $State; Detail = $Detail }) | Out-Null
+  }
+
   $kiosk = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   $server = Get-ScheduledTask -TaskName $serverTask -ErrorAction SilentlyContinue
-  $scheme = powercfg /q SCHEME_CURRENT SUB_SLEEP STANDBYIDLE
-  Write-Host "Kiosk task:  $(if ($kiosk) { 'present' } else { 'MISSING' })"
-  Write-Host "Server task: $(if ($server) { 'present' } else { 'MISSING' })"
-  if (-not $kiosk -or -not $server) { exit 1 }
-  Write-Host "Power query answered. See KIOSK.md if the display still sleeps."
-  exit 0
-}
-$cmdPath = Join-Path $RepoRoot "scripts\start-kiosk.cmd"
+  Add-Row "Kiosk task" $(if ($kiosk) { "OK" } else { "FAIL" }) $(if ($kiosk) { $taskName } else { "missing" })
+  Add-Row "Server task" $(if ($server) { "OK" } else { "FAIL" }) $(if ($server) { $serverTask } else { "missing" })
 
-if (-not (Test-Path $cmdPath)) {
+  $electronExe = Join-Path $RepoRoot "node_modules\electron\dist\electron.exe"
+  $electronPkg = Join-Path $RepoRoot "node_modules\electron"
+  if (-not (Test-Path -LiteralPath $electronPkg)) {
+    Add-Row "Electron binary" "WARN" "package not installed"
+  } elseif (Test-Path -LiteralPath $electronExe) {
+    Add-Row "Electron binary" "OK" $electronExe
+  } else {
+    Add-Row "Electron binary" "FAIL" "missing $electronExe"
+  }
+
+  $profiles = @()
+  try {
+    $profiles = @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { $_ })
+  } catch {
+    $profiles = @()
+  }
+  $relevant = New-Object System.Collections.Generic.List[object]
+  foreach ($profile in $profiles) {
+    $gateway = $null
+    try {
+      $cfg = Get-NetIPConfiguration -InterfaceIndex $profile.InterfaceIndex -ErrorAction Stop
+      $gateway = $cfg.IPv4DefaultGateway
+    } catch {
+      $gateway = $null
+    }
+    if ($gateway) { $relevant.Add($profile) | Out-Null }
+  }
+  if ($relevant.Count -eq 0) {
+    foreach ($profile in $profiles) { $relevant.Add($profile) | Out-Null }
+  }
+  $networkDetail = "no connection profile"
+  $networkOk = $false
+  if ($relevant.Count -gt 0) {
+    $networkOk = $true
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($profile in $relevant) {
+      $parts.Add("$($profile.InterfaceAlias)=$($profile.NetworkCategory)") | Out-Null
+      if ([string]$profile.NetworkCategory -ne "Private") { $networkOk = $false }
+    }
+    $networkDetail = $parts -join ", "
+  }
+  Add-Row "Network profile" $(if ($networkOk) { "OK" } else { "FAIL" }) $networkDetail
+
+  $httpOk = Test-KioskFirewallRule -Name $httpRule -Port $httpPort
+  $shareOk = Test-KioskFirewallRule -Name $shareRule -Port $sharePort
+  Add-Row "Firewall $httpPort" $(if ($httpOk) { "OK" } else { "FAIL" }) $httpRule
+  Add-Row "Firewall $sharePort" $(if ($shareOk) { "OK" } else { "FAIL" }) $shareRule
+
+  $sleep = Get-AcPowerIndex -Subgroup SUB_SLEEP -Setting STANDBYIDLE
+  $monitor = Get-AcPowerIndex -Subgroup SUB_VIDEO -Setting VIDEOIDLE
+  $hibernate = Get-AcPowerIndex -Subgroup SUB_SLEEP -Setting HIBERNATEIDLE
+  $hibernateOk = ($hibernate -eq 0)
+  $hibernateDetail = $(if ($null -eq $hibernate) { "unreadable" } else { "$hibernate" })
+  if (-not $hibernateOk) {
+    $sleepStates = & powercfg.exe /a | Out-String
+    if ($sleepStates -match "Hibernation has not been enabled") {
+      $hibernateOk = $true
+      $hibernateDetail = "hibernation is not enabled"
+    }
+  }
+  Add-Row "AC sleep timeout" $(if ($sleep -eq 0) { "OK" } else { "FAIL" }) $(if ($null -eq $sleep) { "unreadable" } else { "$sleep" })
+  Add-Row "AC monitor timeout" $(if ($monitor -eq 0) { "OK" } else { "FAIL" }) $(if ($null -eq $monitor) { "unreadable" } else { "$monitor" })
+  Add-Row "AC hibernate timeout" $(if ($hibernateOk) { "OK" } else { "FAIL" }) $hibernateDetail
+
+  $toast = Read-KioskRegValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications" -Name "ToastEnabled"
+  $saver = Read-KioskRegValue -Path "HKCU:\Control Panel\Desktop" -Name "ScreenSaveActive"
+  $hoursStart = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursStart"
+  $hoursEnd = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursEnd"
+  Add-Row "Toast notifications" $(if ($toast -eq 0) { "OK" } else { "WARN" }) $(if ($null -eq $toast) { "not set" } else { "ToastEnabled=$toast" })
+  Add-Row "Screensaver" $(if ("$saver" -eq "0") { "OK" } else { "WARN" }) $(if ($null -eq $saver) { "not set" } else { "ScreenSaveActive=$saver" })
+  $hoursOk = ($hoursStart -eq 9 -and $hoursEnd -eq 23)
+  Add-Row "Update active hours" $(if ($hoursOk) { "OK" } else { "WARN" }) $(if ($null -eq $hoursStart) { "not set" } else { "$hoursStart-$hoursEnd" })
+
+  if ($AutoLogonUser -and $DryRun) {
+    Add-Row "AutoAdminLogon" "SKIP" "dry run, not written for $AutoLogonUser"
+  } elseif ($AutoLogonUser) {
+    $auto = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon"
+    $autoUser = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultUserName"
+    $autoPass = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword"
+    $passwordLess = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device" -Name "DevicePasswordLessBuildVersion"
+    $passwordLessSet = ($null -ne $passwordLess -and "$passwordLess" -eq "0")
+    $autoOk = ("$auto" -eq "1" -and "$autoUser" -eq $AutoLogonUser -and $null -ne $autoPass -and $passwordLessSet)
+    Add-Row "AutoAdminLogon" $(if ($autoOk) { "OK" } else { "FAIL" }) $AutoLogonUser
+  } else {
+    Add-Row "AutoAdminLogon" "SKIP" "not requested"
+  }
+
+  Write-Host ""
+  Write-Host "Verify"
+  $failed = $false
+  foreach ($row in $rows) {
+    if ($row.State -eq "FAIL") { $failed = $true }
+    $line = "  {0,-24} {1}" -f $row.Label, $row.State
+    if ($row.Detail) { $line = "$line  $($row.Detail)" }
+    Write-Host $line
+  }
+  Write-Host ""
+  return -not $failed
+}
+
+if ($Verify) {
+  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun
+  if ($passed) {
+    Write-Host "Verify passed."
+    exit 0
+  }
+  Write-Host "Verify failed."
+  exit 1
+}
+
+$cmdPath = Join-Path $RepoRoot "scripts\start-kiosk.cmd"
+if (-not (Test-Path -LiteralPath $cmdPath)) {
   throw "Missing $cmdPath"
 }
 
+if ($DryRun) {
+  Write-Host "Dry run: AutoAdminLogon will not be written."
+}
+if (-not (Test-KioskAdmin)) {
+  Write-Warning "This PowerShell is not elevated. Firewall, power, private network, and auto-logon need Administrator."
+}
+
 Write-Host "Repo: $RepoRoot"
+try {
+  Invoke-RegistrySelfTest
+} catch {
+  Write-Warning "Registry self-test failed: $($_.Exception.Message)"
+  if ($DryRun) { throw }
+}
+
+Install-ElectronIfMissing
+
 Write-Host "Registering scheduled task '$taskName' to run at logon..."
+try {
+  $action = New-ScheduledTaskAction -Execute $cmdPath -WorkingDirectory $RepoRoot
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  $trigger.Delay = "PT20S"
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 
-$action = New-ScheduledTaskAction -Execute $cmdPath -WorkingDirectory $RepoRoot
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$trigger.Delay = "PT20S"
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-
-$serverAction = New-ScheduledTaskAction -Execute "node.exe" -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
-$serverTrigger = New-ScheduledTaskTrigger -AtLogOn
-Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
-Write-Host "Registered '$serverTask' at logon and '$taskName' 20 seconds later, with restart-on-failure."
+  $serverAction = New-ScheduledTaskAction -Execute "node.exe" -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
+  $serverTrigger = New-ScheduledTaskTrigger -AtLogOn
+  Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
+  Write-Host "Registered '$serverTask' at logon and '$taskName' 20 seconds later, with restart-on-failure."
+} catch {
+  Write-Warning "Scheduled tasks were not registered: $($_.Exception.Message)"
+}
 
 Write-Host "Hiding notifications, the screensaver, and update reboots during open hours..."
-New-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications" -Force | Out-Null
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications" -Name "ToastEnabled" -Value 0
-New-Item -Path "HKCU:\Control Panel\Desktop" -Force | Out-Null
-Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "ScreenSaveActive" -Value "0"
+Try-KioskRegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications" -Name "ToastEnabled" -Value 0
+Try-KioskRegistryValue -Path "HKCU:\Control Panel\Desktop" -Name "ScreenSaveActive" -Value "0"
 # Active hours: Windows Update should not reboot while the venue is open. Adjust in Settings if close time changes.
-New-Item -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Force | Out-Null
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursStart" -Value 9 -ErrorAction SilentlyContinue
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursEnd" -Value 23 -ErrorAction SilentlyContinue
+Try-KioskRegistryValue -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursStart" -Value 9
+Try-KioskRegistryValue -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursEnd" -Value 23
 
-Write-Host "Setting AC power: never sleep, never turn off display..."
-powercfg /change standby-timeout-ac 0 | Out-Null
-powercfg /change monitor-timeout-ac 0 | Out-Null
-powercfg /change hibernate-timeout-ac 0 | Out-Null
-powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 0 | Out-Null
-powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_VIDEO VIDEOIDLE 0 | Out-Null
-powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
+Write-Host "Setting AC power: never sleep, never turn off the display, never hibernate..."
+try {
+  Set-KioskPowerPlan
+} catch {
+  Write-Warning "Power settings were not fully applied: $($_.Exception.Message)"
+}
 
-Write-Host ""
-Write-Host "Done. Next steps (one-time):"
-Write-Host "  1. BIOS Auto Power On after AC restore (see KIOSK.md)."
-Write-Host "  2. Auto-logon: Win+R -> netplwiz -> uncheck 'Users must enter a user name and password'."
-Write-Host "  3. BenQ OSD: System -> Switch on state = On."
-Write-Host "  4. Allow Node on private networks for ports 3000 and 3443 when Windows asks."
-Write-Host "  5. Sign out and back in, or run scripts\start-kiosk.cmd to test now."
-Write-Host ""
-Write-Host "Uninstall later with:  powershell -File scripts\uninstall-kiosk-windows.ps1"
+Write-Host "Setting the network profile to Private..."
+try {
+  Set-KioskPrivateNetwork
+} catch {
+  Write-Warning "Network profile was not changed: $($_.Exception.Message)"
+}
+
+Write-Host "Allowing the guest and admin apps through the private-network firewall..."
+foreach ($rule in @(
+    @{ Name = $httpRule; Port = $httpPort },
+    @{ Name = $shareRule; Port = $sharePort }
+  )) {
+  try {
+    Add-KioskFirewallRule -Name $rule.Name -Port $rule.Port
+  } catch {
+    Write-Warning "Firewall rule was not added: $($_.Exception.Message)"
+  }
+}
+
+if ($AutoLogonUser -and $DryRun) {
+  Write-Host "Dry run: would set AutoAdminLogon for passwordless account '$AutoLogonUser'."
+} elseif ($AutoLogonUser) {
+  try {
+    Set-KioskAutoLogon -User $AutoLogonUser
+  } catch {
+    Write-Warning "AutoAdminLogon was not set for '$AutoLogonUser': $($_.Exception.Message)"
+  }
+}
+
+if (-not $NoSummary) {
+  Write-Host ""
+  Write-Host "Done. Still by hand:"
+  Write-Host "  1. BIOS Auto Power On after AC restore (see KIOSK.md)."
+  Write-Host "  2. BenQ OSD: System -> Switch on state = On."
+  if (-not $AutoLogonUser) {
+    Write-Host "  3. Auto-logon: re-run with -AutoLogonUser Admin for a passwordless account, or use netplwiz."
+  }
+  Write-Host "  Sign out and back in, or run scripts\start-kiosk.cmd to test now."
+  Write-Host ""
+  Write-Host "Uninstall later with:  powershell -File scripts\uninstall-kiosk-windows.ps1"
+  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun
+  if ($passed) {
+    Write-Host "Verify passed."
+  } else {
+    Write-Host "Verify failed."
+    exit 1
+  }
+}
