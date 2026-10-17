@@ -75,7 +75,18 @@ async function startHttps({ app, attachWebSocket, config, certDir }) {
   return server;
 }
 
-async function startServer() {
+const SERVER_LOG = "server.log";
+
+async function logStartupFailure(err, logsDir) {
+  const dir = logsDir || dataLayout(defaultDataDir()).logs;
+  await fs.promises.mkdir(dir, { recursive: true });
+  const body = err && err.stack ? err.stack : String(err);
+  const file = path.join(dir, SERVER_LOG);
+  await fs.promises.appendFile(file, `[${new Date().toISOString()}] ${body}\n`, "utf8");
+  return file;
+}
+
+async function launchServer() {
   const root = path.join(__dirname, "..");
   const migrated = await migrateData({ appRoot: root });
   const paths = dataLayout(migrated.dataDir);
@@ -131,11 +142,25 @@ async function startServer() {
   return { server, port: config.port, config, httpsReady };
 }
 
-if (require.main === module) {
-  startServer().catch((err) => {
+async function startServer() {
+  try {
+    return await launchServer();
+  } catch (err) {
     console.error(err);
+    try {
+      const file = await logStartupFailure(err);
+      console.error(`Startup failure written to ${file}`);
+    } catch (logErr) {
+      console.error(`Could not write the server log: ${logErr.message}`);
+    }
+    throw err;
+  }
+}
+
+if (require.main === module) {
+  startServer().catch(() => {
     process.exit(1);
   });
 }
 
-module.exports = { startServer, printBanner };
+module.exports = { startServer, printBanner, logStartupFailure };

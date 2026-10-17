@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
-const { Store } = require("../src/store");
+const { Store, replaceFile, removeStaleTemp } = require("../src/store");
 
 let filePath;
 
@@ -120,6 +120,145 @@ test("turning rotation on clears blackout", async () => {
   assert.equal(state.blackout, false);
   assert.equal(state.rotation.enabled, true);
   assert.equal(state.rotation.intervalSec, 12);
+});
+
+function locked(code) {
+  return Object.assign(new Error(code), { code });
+}
+
+test("load removes a stale temp file and keeps the saved state", async () => {
+  const store = await Store.load(filePath);
+  await store.setTheme("halloween");
+  await fs.writeFile(`${filePath}.tmp`, "{not json");
+  const reloaded = await Store.load(filePath);
+  let missing = false;
+  try {
+    await fs.stat(`${filePath}.tmp`);
+  } catch (err) {
+    missing = err.code === "ENOENT";
+  }
+  assert.equal(missing, true);
+  assert.equal(reloaded.getState().theme, "halloween");
+  const saved = JSON.parse(await fs.readFile(filePath, "utf8"));
+  assert.equal(saved.theme, "halloween");
+});
+
+test("rename retries EPERM, EBUSY, and EACCES, then succeeds", async () => {
+  const codes = ["EPERM", "EBUSY", "EACCES"];
+  let renames = 0;
+  const sleeps = [];
+  const fake = {
+    async rename() {
+      if (renames < codes.length) {
+        const code = codes[renames];
+        renames += 1;
+        throw locked(code);
+      }
+      renames += 1;
+    },
+    async copyFile() {
+      throw new Error("copy should not run");
+    },
+    async unlink() {
+      throw new Error("unlink should not run");
+    },
+  };
+  await replaceFile("state.json.tmp", "state.json", fake, {
+    delays: [5, 5, 5, 5],
+    sleepFn: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  assert.equal(renames, 4);
+  assert.deepEqual(sleeps, [5, 5, 5]);
+});
+
+test("locked rename falls back to copyFile and unlink", async () => {
+  const calls = [];
+  const fake = {
+    async rename() {
+      calls.push("rename");
+      throw locked("EPERM");
+    },
+    async copyFile(tmp, dest) {
+      calls.push(`copy:${tmp}->${dest}`);
+    },
+    async unlink(tmp) {
+      calls.push(`unlink:${tmp}`);
+    },
+  };
+  await replaceFile("C:\\ProgramData\\PinballLand\\state.json.tmp", "C:\\ProgramData\\PinballLand\\state.json", fake, {
+    delays: [],
+    sleepFn: async () => {
+      throw new Error("no backoff when there are no retries");
+    },
+  });
+  assert.deepEqual(calls, [
+    "rename",
+    "copy:C:\\ProgramData\\PinballLand\\state.json.tmp->C:\\ProgramData\\PinballLand\\state.json",
+    "unlink:C:\\ProgramData\\PinballLand\\state.json.tmp",
+  ]);
+});
+
+test("copy fallback retries a locked destination, and a missing temp after copy is fine", async () => {
+  let copies = 0;
+  const fake = {
+    async rename() {
+      throw locked("EBUSY");
+    },
+    async copyFile() {
+      copies += 1;
+      if (copies === 1) throw locked("EACCES");
+    },
+    async unlink() {
+      throw Object.assign(new Error("gone"), { code: "ENOENT" });
+    },
+  };
+  const sleeps = [];
+  await replaceFile("state.json.tmp", "state.json", fake, {
+    delays: [0],
+    sleepFn: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  assert.equal(copies, 2);
+  assert.deepEqual(sleeps, [0, 0]);
+});
+
+test("unrelated rename errors are not retried and do not copy", async () => {
+  let copies = 0;
+  const fake = {
+    async rename() {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    },
+    async copyFile() {
+      copies += 1;
+    },
+    async unlink() {},
+  };
+  await assert.rejects(
+    () => replaceFile("state.json.tmp", "state.json", fake, { delays: [0, 0], sleepFn: async () => {} }),
+    (err) => err.code === "ENOENT"
+  );
+  assert.equal(copies, 0);
+});
+
+test("a stale temp that cannot be removed does not block load", async () => {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    await removeStaleTemp(filePath, {
+      async unlink() {
+        throw locked("EPERM");
+      },
+    });
+  } finally {
+    console.warn = original;
+  }
+  assert.match(warnings.join("\n"), /stale temp file/);
+  const store = await Store.load(filePath);
+  assert.equal(store.getState().theme, "pinnacle");
 });
 
 test("delete and reorder rows", async () => {

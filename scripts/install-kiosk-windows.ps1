@@ -31,6 +31,46 @@ $shareRule = "Pinball Land share"
 $httpPort = 3000
 $sharePort = 3443
 
+function Resolve-NodeExe {
+  $cmd = Get-Command node.exe -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source -and $cmd.Source -match '\.exe$') { return $cmd.Source }
+  $cmd = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $cmd -or -not $cmd.Source) { return $null }
+  if ($cmd.Source -match '\.exe$') { return $cmd.Source }
+  $candidate = Join-Path (Split-Path -Parent $cmd.Source) "node.exe"
+  if (Test-Path -LiteralPath $candidate) { return $candidate }
+  return $null
+}
+
+function Get-PinballDataDir {
+  $base = if ($env:ProgramData) { $env:ProgramData } else { "C:\ProgramData" }
+  return (Join-Path $base "PinballLand")
+}
+
+function Test-PinballUsersModify {
+  param([Parameter(Mandatory = $true)][string]$Dir)
+  if (-not (Test-Path -LiteralPath $Dir)) { return $false }
+  $listing = & icacls.exe $Dir | Out-String
+  return $listing -match '(?i)(?:BUILTIN\\)?Users:\(OI\)\(CI\)[^\r\n]*\bM\b'
+}
+
+function Grant-PinballDataUsersModify {
+  $dir = Get-PinballDataDir
+  if (-not (Test-Path -LiteralPath $dir)) {
+    New-Item -ItemType Directory -Path $dir | Out-Null
+  }
+  if (Test-PinballUsersModify -Dir $dir) {
+    Write-Host "Users already have Modify on $dir."
+    return
+  }
+  Write-Host "Granting Users Modify on $dir..."
+  $grant = & icacls.exe $dir /grant "Users:(OI)(CI)M" /T /C | Out-String
+  if (-not (Test-PinballUsersModify -Dir $dir)) {
+    throw "Users Modify was not present on $dir after icacls (exit $LASTEXITCODE). $grant"
+  }
+  Write-Host "Users can modify $dir."
+}
+
 function Test-KioskAdmin {
   $current = [Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = New-Object Security.Principal.WindowsPrincipal($current)
@@ -253,6 +293,15 @@ function Write-KioskVerifySummary {
   $server = Get-ScheduledTask -TaskName $serverTask -ErrorAction SilentlyContinue
   Add-Row "Kiosk task" $(if ($kiosk) { "OK" } else { "FAIL" }) $(if ($kiosk) { $taskName } else { "missing" })
   Add-Row "Server task" $(if ($server) { "OK" } else { "FAIL" }) $(if ($server) { $serverTask } else { "missing" })
+  $nodePath = $null
+  if ($server -and $server.Actions) {
+    $nodePath = [string]@($server.Actions)[0].Execute
+  }
+  $nodeOk = $nodePath -and [System.IO.Path]::IsPathRooted($nodePath) -and $nodePath.ToLower().EndsWith("\node.exe")
+  Add-Row "Server node.exe" $(if ($nodeOk) { "OK" } else { "FAIL" }) $(if ($nodePath) { $nodePath } else { "missing" })
+  $dataDir = Get-PinballDataDir
+  $dataOk = Test-PinballUsersModify -Dir $dataDir
+  Add-Row "Data folder" $(if ($dataOk) { "OK" } else { "FAIL" }) $dataDir
 
   $electronExe = Join-Path $RepoRoot "node_modules\electron\dist\electron.exe"
   $electronPkg = Join-Path $RepoRoot "node_modules\electron"
@@ -386,6 +435,13 @@ try {
 
 Install-ElectronIfMissing
 
+Write-Host "Letting Users modify the Pinball Land data folder..."
+try {
+  Grant-PinballDataUsersModify
+} catch {
+  Write-Warning "Data folder permissions were not updated: $($_.Exception.Message)"
+}
+
 Write-Host "Registering scheduled task '$taskName' to run at logon..."
 try {
   $action = New-ScheduledTaskAction -Execute $cmdPath -WorkingDirectory $RepoRoot
@@ -395,10 +451,15 @@ try {
   $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 
-  $serverAction = New-ScheduledTaskAction -Execute "node.exe" -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
-  $serverTrigger = New-ScheduledTaskTrigger -AtLogOn
-  Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
-  Write-Host "Registered '$serverTask' at logon and '$taskName' 20 seconds later, with restart-on-failure."
+  $nodeExe = Resolve-NodeExe
+  if (-not $nodeExe) {
+    Write-Warning "node.exe was not found on PATH. The server task was not registered."
+  } else {
+    $serverAction = New-ScheduledTaskAction -Execute $nodeExe -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
+    $serverTrigger = New-ScheduledTaskTrigger -AtLogOn
+    Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
+    Write-Host "Registered '$serverTask' at logon with $nodeExe, and '$taskName' 20 seconds later."
+  }
 } catch {
   Write-Warning "Scheduled tasks were not registered: $($_.Exception.Message)"
 }

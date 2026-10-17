@@ -13,6 +13,9 @@ const { mapDisplaysToSlots, windowLayoutKey } = require("./displays");
 const { placementDecision, expectedMonitorCount, monitorSignature } = require("./watchdog");
 const { defaultDataDir, dataLayout } = require("./paths");
 const { buildPlacementScript } = require("./airplay");
+const { bootPlan } = require("./kiosk-boot");
+
+const waitingPage = path.join(__dirname, "..", "public", "waiting.html");
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -23,6 +26,10 @@ let port = null;
 let layoutKey = "";
 let lastMonitors = "";
 let displaysConfig = null;
+let serverReady = false;
+let waiting = false;
+let waitingSignature = "";
+let tickRunning = false;
 const windows = new Map();
 let pollTimer = null;
 let placing = false;
@@ -34,6 +41,44 @@ function closeWindows() {
     if (!win.isDestroyed()) win.close();
   }
   windows.clear();
+}
+
+function openWaitingWindows() {
+  const displays = screen.getAllDisplays();
+  const signature = displays.map((display) => String(display.id)).join(",") || "none";
+  if (waiting && windows.size > 0 && signature === waitingSignature) return;
+  waitingSignature = signature;
+  closeWindows();
+  waiting = true;
+  const targets = displays.length ? displays : [null];
+  targets.forEach((display, index) => {
+    const bounds = display ? display.bounds : { x: 0, y: 0, width: 1280, height: 720 };
+    const win = new BrowserWindow({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      frame: false,
+      fullscreen: true,
+      simpleFullscreen: true,
+      autoHideMenuBar: true,
+      skipTaskbar: true,
+      backgroundColor: "#1a1916",
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+      },
+    });
+    win.setMenuBarVisibility(false);
+    win.setFullScreen(true);
+    win.loadFile(waitingPage);
+    win.on("closed", () => {
+      if (windows.get(`wait-${index}`) === win) windows.delete(`wait-${index}`);
+    });
+    windows.set(`wait-${index}`, win);
+  });
+  console.warn("Waiting for server. Retrying.");
 }
 
 function openDisplayWindows() {
@@ -230,20 +275,32 @@ async function waitForHealth(targetPort, tries = 40) {
   throw new Error(`Kiosk server did not become ready on port ${targetPort}`);
 }
 
-async function ensureServer() {
+async function tryBringUpServer() {
   const paths = dataLayout(defaultDataDir());
   const config = loadConfig(fs.existsSync(paths.config) ? paths.config : path.join(__dirname, "..", "config.json"));
   try {
     const res = await fetch(`http://127.0.0.1:${config.port}/api/health`);
     if (res.ok) {
       console.log(`Using already-running server on port ${config.port}`);
-      return config.port;
+      port = config.port;
+      serverReady = true;
+      return true;
     }
   } catch {
     // start our own
   }
-  const started = await startServer();
-  return started.port;
+  try {
+    const started = await startServer();
+    port = started.port;
+    await waitForHealth(port, 20);
+    serverReady = true;
+    return true;
+  } catch (err) {
+    console.error(err);
+    serverReady = false;
+    port = null;
+    return false;
+  }
 }
 
 function installOperatorTray() {
@@ -272,24 +329,61 @@ function installOperatorTray() {
 }
 
 function scheduleRefresh() {
-  refreshKiosk().catch((err) => console.error(err));
+  if (!serverReady || !port) {
+    openWaitingWindows();
+    return;
+  }
+  refreshKiosk().catch((err) => {
+    console.error(err);
+    serverReady = false;
+    openWaitingWindows();
+  });
+}
+
+async function tick() {
+  if (tickRunning) return;
+  tickRunning = true;
+  try {
+    if (!serverReady) {
+      const up = await tryBringUpServer();
+      const plan = bootPlan({ serverReady: up });
+      if (plan.screen === "waiting") {
+        openWaitingWindows();
+        return;
+      }
+      if (waiting) {
+        waiting = false;
+        waitingSignature = "";
+        closeWindows();
+      }
+    }
+    await refreshKiosk();
+  } catch (err) {
+    console.error(err);
+    serverReady = false;
+    if (!bootPlan({ serverReady: false }).quit) openWaitingWindows();
+  } finally {
+    tickRunning = false;
+  }
 }
 
 async function boot() {
   installOperatorTray();
   installCaptureHandler();
-  port = await ensureServer();
-  await waitForHealth(port);
-  await refreshKiosk();
   screen.on("display-added", () => {
     layoutKey = "";
+    waitingSignature = "";
     scheduleRefresh();
   });
   screen.on("display-removed", () => {
     layoutKey = "";
+    waitingSignature = "";
     scheduleRefresh();
   });
-  pollTimer = setInterval(scheduleRefresh, 2000);
+  pollTimer = setInterval(() => {
+    tick().catch((err) => console.error(err));
+  }, 2000);
+  await tick();
 }
 
 app.on("second-instance", () => {
@@ -300,7 +394,13 @@ app.on("second-instance", () => {
 
 app.whenReady().then(() => boot().catch((err) => {
   console.error(err);
-  app.quit();
+  if (!bootPlan({ serverReady: false }).quit) {
+    try {
+      openWaitingWindows();
+    } catch (windowErr) {
+      console.error(windowErr);
+    }
+  }
 }));
 
 app.on("window-all-closed", () => {
