@@ -187,16 +187,23 @@ function defaultState() {
   };
 }
 
+function parseScore(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  const digits = String(value ?? "").replace(/[,_\s]/g, "");
+  if (!digits) return 0;
+  const score = Number.parseInt(digits, 10);
+  return Number.isFinite(score) ? score : 0;
+}
+
 function normalizeRow(row) {
   if (!row || typeof row !== "object") {
     return { id: id(), name: "", score: 0 };
   }
-  const score = Number.parseInt(row.score, 10);
   const proofFile = typeof row.proofFile === "string" && /^[0-9a-f-]{36}\.jpg$/i.test(row.proofFile) ? row.proofFile : null;
   return {
     id: typeof row.id === "string" && row.id ? row.id : id(),
     name: String(row.name || "").trim(),
-    score: Number.isFinite(score) ? score : 0,
+    score: parseScore(row.score),
     proofFile,
   };
 }
@@ -233,7 +240,7 @@ function normalizeLeaderboard(board) {
       ? board.imageFiles.map((file) => String(file)).filter((file) => file && !file.includes("..")).slice(0, 24)
       : [],
     videoUrl: board.videoUrl ? String(board.videoUrl) : null,
-    rows: Array.isArray(board.rows) ? board.rows.map(normalizeRow) : [],
+    rows: sortRows(Array.isArray(board.rows) ? board.rows.map(normalizeRow) : []),
     archivedAt: Number.isFinite(Number(board.archivedAt)) ? Number(board.archivedAt) : null,
   };
 }
@@ -248,13 +255,12 @@ function isMachineBoard(board) {
 
 function normalizeSubmission(row) {
   if (!row || typeof row !== "object") return null;
-  const score = Number.parseInt(row.score, 10);
   const status = row.status === "approved" || row.status === "rejected" ? row.status : "pending";
   return {
     id: typeof row.id === "string" && row.id ? row.id : id(),
     boardId: row.boardId ? String(row.boardId) : "",
     name: String(row.name || "").trim().slice(0, 40),
-    score: Number.isFinite(score) ? score : 0,
+    score: parseScore(row.score),
     proofFile: row.proofFile ? String(row.proofFile) : null,
     status,
     createdAt: Number(row.createdAt) || Date.now(),
@@ -636,10 +642,7 @@ class Store {
     if (name !== undefined) {
       row.name = String(name || "").trim();
     }
-    if (score !== undefined) {
-      const parsed = Number.parseInt(score, 10);
-      row.score = Number.isFinite(parsed) ? parsed : 0;
-    }
+    if (score !== undefined) row.score = parseScore(score);
     board.rows = sortRows(board.rows);
     return this.commit();
   }
@@ -744,8 +747,9 @@ class Store {
     if (!board) throw Object.assign(new Error("Pick a machine"), { status: 404 });
     const cleanName = String(name || "").trim().slice(0, 40);
     if (!cleanName) throw Object.assign(new Error("Enter a name"), { status: 400 });
-    const parsed = Number.parseInt(String(score).replace(/,/g, ""), 10);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 999999999) {
+    const cleaned = String(score ?? "").replace(/[,_\s]/g, "");
+    const parsed = parseScore(score);
+    if (!/^\d+$/.test(cleaned) || parsed > 999999999) {
       throw Object.assign(new Error("Enter a score"), { status: 400 });
     }
     const submission = normalizeSubmission({

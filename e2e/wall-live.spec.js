@@ -184,7 +184,44 @@ test("leaderboard podium fits full names at 1080p", async ({ page }) => {
   expect(report.podiumAboveRows).toBe(true);
   expect(report.firstTaller).toBe(true);
   expect(report.textAboveParticles).toBe(true);
+  const order = await page.evaluate(() => {
+    const read = (selector) => Number((document.querySelector(selector)?.textContent || "").replace(/[^0-9]/g, ""));
+    const rowScores = [...document.querySelectorAll(".board-row .score")].map((el) => Number(el.textContent.replace(/[^0-9]/g, "")));
+    return [read(".place-1 .points"), read(".place-2 .points"), read(".place-3 .points"), ...rowScores];
+  });
+  expect(order).toEqual([500000000, 6000, 5000, 200, 50]);
+  const sizes = await page.evaluate(() => ({
+    first: parseFloat(getComputedStyle(document.querySelector(".place-1 .who")).fontSize),
+    second: parseFloat(getComputedStyle(document.querySelector(".place-2 .who")).fontSize),
+    third: parseFloat(getComputedStyle(document.querySelector(".place-3 .who")).fontSize),
+    artWidth: document.querySelector("#machine-art")?.naturalWidth || 0,
+    artHidden: document.querySelector("#machine-art")?.hidden,
+    fallbackHidden: document.querySelector("#machine-art-fallback")?.hidden,
+  }));
+  expect(sizes.first).toBeGreaterThan(sizes.second);
+  expect(sizes.first).toBeGreaterThan(sizes.third);
+  expect(sizes.artHidden).toBe(false);
+  expect(sizes.artWidth).toBeGreaterThan(20);
+  expect(sizes.fallbackHidden).toBe(true);
   await page.screenshot({ path: "e2e/artifacts/leaderboard-1080.png" });
+});
+
+test("broken machine art falls through to a title placeholder", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto("/display/1?preview=board&fixture=long&art=skip&shot=1");
+  await page.waitForFunction(() => {
+    const img = document.querySelector("#machine-art");
+    return img && !img.hidden && img.naturalWidth > 20 && img.getAttribute("src") === "/photos/arcade";
+  });
+  await page.goto("/display/1?preview=board&fixture=long&art=bad&shot=1");
+  await expect(page.locator("#machine-art-fallback")).toBeVisible();
+  await expect(page.locator("#machine-art")).toBeHidden();
+  await expect(page.locator("#machine-art-fallback")).toContainText("Wizard of Oz");
+  const broken = await page.evaluate(() => {
+    const img = document.querySelector("#machine-art");
+    return Boolean(img && !img.hidden && img.complete && img.naturalWidth === 0);
+  });
+  expect(broken).toBe(false);
 });
 
 test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
@@ -205,6 +242,29 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
         const box = el.getBoundingClientRect();
         return { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
       });
+      const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      const qr = document.querySelector(".pin-qr")?.getBoundingClientRect();
+      const captions = cards.map((card) => {
+        const cap = card.querySelector("span");
+        const box = cap.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          text: cap.textContent || "",
+          clipped: cap.scrollWidth > cap.clientWidth + 1 || cap.scrollHeight > cap.clientHeight + 1,
+          covered: hit !== cap && !cap.contains(hit),
+          box,
+        };
+      });
+      const captionHits = [];
+      for (let i = 0; i < cards.length; i += 1) {
+        const capBox = captions[i].box;
+        for (let j = 0; j < cards.length; j += 1) {
+          if (i === j) continue;
+          if (intersects(capBox, cards[j].getBoundingClientRect())) captionHits.push([i, j]);
+        }
+      }
+      const qrHits = qr ? cards.filter((card) => intersects(card.getBoundingClientRect(), qr)).length : 0;
+      const photos = cards.map((card) => card.querySelector("img")?.naturalWidth || 0);
       const tilt = Math.abs(parseFloat(cards[0]?.style.getPropertyValue("--tilt")) || 0);
       return {
         view,
@@ -212,14 +272,24 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
         outside,
         tilt,
         caption: cards[0]?.innerText || "",
+        clipped: captions.filter((item) => item.clipped).length,
+        covered: captions.filter((item) => item.covered).length,
+        captionHits,
+        qrHits,
+        photos,
       };
     });
     const cap = Math.min(count, 12);
     expect(report.count, `pins ${count}`).toBe(cap);
     expect(report.outside, `pins ${count} ${JSON.stringify(report.outside)}`).toEqual([]);
-    expect(report.tilt).toBeGreaterThanOrEqual(4);
-    expect(report.tilt).toBeLessThanOrEqual(8);
+    expect(report.tilt).toBeGreaterThanOrEqual(5);
+    expect(report.tilt).toBeLessThanOrEqual(12);
     expect(report.caption).toContain("·");
+    expect(report.clipped, `pins ${count} clipped`).toBe(0);
+    expect(report.covered, `pins ${count} covered`).toBe(0);
+    expect(report.captionHits, `pins ${count} caption overlap`).toEqual([]);
+    expect(report.qrHits, `pins ${count} qr`).toBe(0);
+    expect(Math.min(...report.photos), `pins ${count} photo`).toBeGreaterThan(20);
     if (count === 15) await page.screenshot({ path: "e2e/artifacts/pinboard-15-1080.png" });
   }
 });

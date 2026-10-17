@@ -29,6 +29,30 @@ async function addMachine(store, name = "Medieval Madness") {
   return store.getState().leaderboards.at(-1).id;
 }
 
+test("comma scores load as numbers and sort 50, 200, 5000, 6000, 500000000", async () => {
+  await fs.writeFile(filePath, JSON.stringify({
+    leaderboards: [{
+      id: "oz",
+      name: "The Wizard of Oz",
+      kind: "machine",
+      opdbId: "OZ-1",
+      rows: [
+        { id: "a", name: "RetroHardroc", score: "50" },
+        { id: "b", name: "John Smith", score: "200" },
+        { id: "c", name: "Montgomery Alexander-Parra", score: "5,000" },
+        { id: "d", name: "Adam Salguero", score: "6,000" },
+        { id: "e", name: "Alexander Montgomery-Parra", score: "500,000,000" },
+      ],
+    }],
+  }));
+  const store = await Store.load(filePath);
+  const scores = store.getState().leaderboards[0].rows.map((row) => row.score);
+  assert.deepEqual(scores, [500000000, 6000, 5000, 200, 50]);
+  const saved = JSON.parse(await fs.readFile(filePath, "utf8"));
+  assert.deepEqual(saved.leaderboards[0].rows.map((row) => row.score), [500000000, 6000, 5000, 200, 50]);
+  assert.ok(saved.leaderboards[0].rows.every((row) => typeof row.score === "number"));
+});
+
 test("assigns a slot, sorts scores, and reloads from disk", async () => {
   const store = await Store.load(filePath);
   const boardId = await addMachine(store);
