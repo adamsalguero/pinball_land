@@ -1147,37 +1147,58 @@ function tryPinGrid(photos, cols, rows, cardW, width, height, qr) {
   });
   const cellW = Math.max(...specs.map((item) => item.box.w));
   const cellH = Math.max(...specs.map((item) => item.box.h));
-  const gap = 12;
+  // Gap stays wider than the caption pad plus the jitter below, for every id window.
+  const gap = 18;
   const gridW = cols * cellW + (cols - 1) * gap;
   const gridH = rows * cellH + (rows - 1) * gap;
-  if (gridW > width - 8 || gridH > height - 8) return null;
-  const spareX = width - 8 - gridW;
-  const spareY = height - 8 - gridH;
-  const placed = [];
-  for (let index = 0; index < specs.length; index += 1) {
-    const spec = specs[index];
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    const jx = (pinHash(spec.photo.id, 21) - 0.5) * Math.min(28, spareX / Math.max(1, cols));
-    const jy = (pinHash(spec.photo.id, 22) - 0.5) * Math.min(18, spareY / Math.max(1, rows));
-    const left = 4 + spareX * 0.5 + col * (cellW + gap) + (cellW - spec.box.w) / 2 + jx;
-    const top = 4 + spareY * 0.28 + row * (cellH + gap) + (cellH - spec.box.h) / 2 + jy;
-    const parts = cardParts(left + spec.box.w / 2, top + spec.box.h / 2, cardW, cardH, spec.tilt);
-    if (!spotFits(parts, placed, width, height, qr)) return null;
-    placed.push({
-      photo: spec.photo,
-      cx: left + spec.box.w / 2,
-      cy: top + spec.box.h / 2,
-      tilt: spec.tilt,
-      cardW,
-      cardH,
-      z: spec.z,
-      full: parts.full,
-      caption: parts.caption,
-      photoBox: parts.photo,
-    });
+  const minX = 4;
+  const minY = 4;
+  const maxX = width - 4 - gridW;
+  const maxY = height - 4 - gridH;
+  if (maxX < minX - 0.5 || maxY < minY - 0.5) return null;
+  const origins = [
+    { x: (minX + maxX) / 2, y: minY + (maxY - minY) * 0.22 },
+  ];
+  if (qr) {
+    origins.push(
+      { x: minX, y: minY },
+      { x: maxX, y: minY },
+      { x: minX, y: maxY },
+      { x: Math.min(maxX, Math.max(minX, qr.x - gridW - 8)), y: minY },
+    );
   }
-  return placed;
+  for (const origin of origins) {
+    const placed = [];
+    let fits = true;
+    for (let index = 0; index < specs.length; index += 1) {
+      const spec = specs[index];
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const jx = (pinHash(spec.photo.id, 21) - 0.5) * 4;
+      const jy = (pinHash(spec.photo.id, 22) - 0.5) * 4;
+      const left = origin.x + col * (cellW + gap) + (cellW - spec.box.w) / 2 + jx;
+      const top = origin.y + row * (cellH + gap) + (cellH - spec.box.h) / 2 + jy;
+      const parts = cardParts(left + spec.box.w / 2, top + spec.box.h / 2, cardW, cardH, spec.tilt);
+      if (!spotFits(parts, placed, width, height, qr)) {
+        fits = false;
+        break;
+      }
+      placed.push({
+        photo: spec.photo,
+        cx: left + spec.box.w / 2,
+        cy: top + spec.box.h / 2,
+        tilt: spec.tilt,
+        cardW,
+        cardH,
+        z: spec.z,
+        full: parts.full,
+        caption: parts.caption,
+        photoBox: parts.photo,
+      });
+    }
+    if (fits) return placed;
+  }
+  return null;
 }
 
 function scatterPins(photos, width, height, qr) {
@@ -1203,18 +1224,20 @@ function scatterPins(photos, width, height, qr) {
   if (best) return best;
   const cols = Math.ceil(Math.sqrt(n));
   const rows = Math.ceil(n / cols);
-  const cardW = Math.max(90, Math.min((width - 24) / cols, (height - 24) / rows / 1.35));
+  const cardW = Math.max(72, Math.min((width - 32) / cols / 1.12, (height - 32) / rows / 1.45));
+  const fitted = tryPinGrid(photos, cols, rows, cardW, width, height, null);
+  if (fitted) return fitted;
   const cardH = pinCardHeight(cardW);
   return photos.map((photo, index) => {
     const col = index % cols;
     const row = Math.floor(index / cols);
     return {
       photo,
-      cx: 12 + cardW * (col + 0.5),
-      cy: 12 + cardH * (row + 0.5),
+      cx: 16 + cardW * (col + 0.55),
+      cy: 16 + cardH * (row + 0.55),
       tilt: pinTilt(pinHash(photo.id, 3)),
-      cardW: cardW * 0.92,
-      cardH: cardH * 0.92,
+      cardW,
+      cardH,
       z: 10 + index,
     };
   });
