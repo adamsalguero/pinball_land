@@ -141,9 +141,14 @@ function enforceFirstLargest() {
   const rest = [...document.querySelectorAll(".podium-card.place-2 .who, .podium-card.place-3 .who")];
   if (!first || !rest.length || first.closest("[hidden]")) return;
   const size = (el) => parseFloat(el.style.fontSize) || parseFloat(getComputedStyle(el).fontSize) || 0;
-  const firstSize = size(first);
+  let firstSize = size(first);
+  const smallest = Math.min(...rest.map(size));
+  if (smallest > 0 && firstSize > smallest / 0.6) {
+    firstSize = Math.floor(smallest / 0.6);
+    first.style.fontSize = `${firstSize}px`;
+  }
   for (const el of rest) {
-    if (size(el) >= firstSize - 0.5) el.style.fontSize = `${Math.max(12, firstSize - 6)}px`;
+    if (size(el) > firstSize - 1) el.style.fontSize = `${Math.max(Math.round(firstSize * 0.6), firstSize - 4)}px`;
   }
 }
 
@@ -291,8 +296,7 @@ function renderRows(rows) {
       const place = top.indexOf(row) + 1;
       const card = document.createElement("article");
       card.className = `podium-card place-${place}`;
-      const lines = place === 1 ? "2" : "1";
-      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="${lines}" data-fit-full="1"></span><span class="points" data-fit="1" data-fit-full="1"></span>`;
+      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="2" data-fit-full="1"></span><span class="points" data-fit="1" data-fit-full="1"></span>`;
       setFit(card.querySelector(".who"), row.name || "—");
       setFit(card.querySelector(".points"), formatScore(row.score));
       podium.append(card);
@@ -1064,47 +1068,84 @@ function spotFits(parts, placed, width, height, qr) {
   return true;
 }
 
+function pinCardHeight(cardW) {
+  return cardW + 50;
+}
+
+function tryPinGrid(photos, cols, rows, cardW, width, height, qr) {
+  const cardH = pinCardHeight(cardW);
+  const specs = photos.map((photo) => {
+    const tilt = pinTilt(pinHash(photo.id, 11));
+    return {
+      photo,
+      tilt,
+      cardW,
+      cardH,
+      box: pinCardBox(cardW, cardH, tilt, 1),
+      z: 8 + Math.round(pinHash(photo.id, 9) * 40),
+    };
+  });
+  const cellW = Math.max(...specs.map((item) => item.box.w));
+  const cellH = Math.max(...specs.map((item) => item.box.h));
+  const gap = 12;
+  const gridW = cols * cellW + (cols - 1) * gap;
+  const gridH = rows * cellH + (rows - 1) * gap;
+  if (gridW > width - 8 || gridH > height - 8) return null;
+  const spareX = width - 8 - gridW;
+  const spareY = height - 8 - gridH;
+  const placed = [];
+  for (let index = 0; index < specs.length; index += 1) {
+    const spec = specs[index];
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const jx = (pinHash(spec.photo.id, 21) - 0.5) * Math.min(28, spareX / Math.max(1, cols));
+    const jy = (pinHash(spec.photo.id, 22) - 0.5) * Math.min(18, spareY / Math.max(1, rows));
+    const left = 4 + spareX * 0.5 + col * (cellW + gap) + (cellW - spec.box.w) / 2 + jx;
+    const top = 4 + spareY * 0.28 + row * (cellH + gap) + (cellH - spec.box.h) / 2 + jy;
+    const parts = cardParts(left + spec.box.w / 2, top + spec.box.h / 2, cardW, cardH, spec.tilt);
+    if (!spotFits(parts, placed, width, height, qr)) return null;
+    placed.push({
+      photo: spec.photo,
+      cx: left + spec.box.w / 2,
+      cy: top + spec.box.h / 2,
+      tilt: spec.tilt,
+      cardW,
+      cardH,
+      z: spec.z,
+      full: parts.full,
+      caption: parts.caption,
+      photoBox: parts.photo,
+    });
+  }
+  return placed;
+}
+
 function scatterPins(photos, width, height, qr) {
   const n = photos.length;
-  let cardW = n <= 1 ? 420 : n <= 4 ? 280 : n <= 8 ? 220 : 180;
-  for (let pass = 0; pass < 7; pass += 1) {
-    const cardH = cardW * 1.42;
-    const placed = [];
-    let ok = true;
-    for (let index = 0; index < n; index += 1) {
-      const photo = photos[index];
-      const seed = pinHash(photo.id, 11);
-      const tilt = pinTilt(seed);
-      let chosen = null;
-      for (let attempt = 0; attempt < 36; attempt += 1) {
-        const hx = pinHash(photo.id, 100 + attempt);
-        const hy = pinHash(photo.id, 400 + attempt);
-        const box = pinCardBox(cardW, cardH, tilt, 1);
-        const cx = box.w / 2 + 8 + hx * Math.max(1, width - box.w - 16);
-        const cy = box.h / 2 + 8 + hy * Math.max(1, height - box.h - 16);
-        const parts = cardParts(cx, cy, cardW, cardH, tilt);
-        if (!spotFits(parts, placed, width, height, qr)) continue;
-        chosen = { photo, cx, cy, tilt, cardW, cardH, z: 8 + Math.round(pinHash(photo.id, 9) * 40) };
-        break;
-      }
-      if (!chosen) {
-        ok = false;
-        break;
-      }
-      const parts = cardParts(chosen.cx, chosen.cy, cardW, cardH, tilt);
-      chosen.full = parts.full;
-      chosen.caption = parts.caption;
-      chosen.photoBox = parts.photo;
-      placed.push(chosen);
-    }
-    if (ok) return placed;
-    cardW *= 0.84;
-  }
-  return photos.map((photo, index) => {
-    const cols = Math.ceil(Math.sqrt(n));
+  let best = null;
+  for (let cols = 1; cols <= n; cols += 1) {
     const rows = Math.ceil(n / cols);
-    const cardW = Math.max(90, (width - 24) / cols);
-    const cardH = cardW * 1.42;
+    let lo = 96;
+    let hi = Math.min(width * 0.86, height * 0.86, 640);
+    let placed = null;
+    for (let step = 0; step < 12; step += 1) {
+      const mid = (lo + hi) / 2;
+      const attempt = tryPinGrid(photos, cols, rows, mid, width, height, qr);
+      if (attempt) {
+        placed = attempt;
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    if (placed && (!best || placed[0].cardW > best[0].cardW)) best = placed;
+  }
+  if (best) return best;
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const cardW = Math.max(90, Math.min((width - 24) / cols, (height - 24) / rows / 1.35));
+  const cardH = pinCardHeight(cardW);
+  return photos.map((photo, index) => {
     const col = index % cols;
     const row = Math.floor(index / cols);
     return {

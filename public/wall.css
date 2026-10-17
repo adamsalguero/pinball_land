@@ -53,8 +53,8 @@ html, body, .screen {
 .board-header h1 { font-size: clamp(36px, 4vw, 72px); }
 .podium {
   display: grid;
-  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.9fr) minmax(0, 0.7fr);
-  gap: 1vw;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 4fr) minmax(0, 3fr);
+  gap: 0.7vw;
   align-items: end;
   width: 100%;
   min-width: 0;
@@ -76,16 +76,25 @@ html, body, .screen {
   padding-top: 2.6vh;
   padding-bottom: 2.2vh;
 }
-.podium-card.place-2 { min-height: 16vh; border: 3px solid #c0c0c0; }
-.podium-card.place-3 { min-height: 16vh; border: 3px solid #b87333; }
+.podium-card.place-2,
+.podium-card.place-3 { min-height: 24vh; }
+.podium-card.place-2 { border: 3px solid #c0c0c0; }
+.podium-card.place-3 { border: 3px solid #b87333; }
 .machine-logo { display: block; height: 7vh; width: auto; max-width: 28vw; object-fit: contain; margin-bottom: 1vh; }
 .podium-card .place { color: var(--rank); font-size: clamp(12px, 1.4vh, 16px); letter-spacing: 0.18em; text-transform: uppercase; }
-.podium-card .who { font-size: clamp(16px, 1.3vw, 26px); margin: 0.8vh 0 0.3vh; font-weight: 700; }
+.podium-card .who {
+  font-size: clamp(28px, 2.4vw, 44px);
+  margin: 0.8vh 0 0.3vh;
+  font-weight: 700;
+  white-space: normal;
+  line-height: 1.08;
+  max-height: 2.25em;
+}
 .podium-card.place-1 .who {
-  font-size: clamp(34px, 3vw, 60px);
+  font-size: clamp(36px, 3vw, 58px);
   white-space: normal;
   line-height: 1.05;
-  max-height: 3.3em;
+  max-height: 2.25em;
 }
 .podium-card .points { font-variant-numeric: tabular-nums; color: var(--beige); font-size: clamp(16px, 1.5vw, 28px); font-weight: 700; }
 .podium-card.place-1 .points { font-size: clamp(20px, 2vw, 36px); }

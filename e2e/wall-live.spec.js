@@ -200,6 +200,19 @@ test("leaderboard podium fits full names at 1080p", async ({ page }) => {
   }));
   expect(sizes.first).toBeGreaterThan(sizes.second);
   expect(sizes.first).toBeGreaterThan(sizes.third);
+  expect(sizes.second, `second ${sizes.second} first ${sizes.first}`).toBeGreaterThanOrEqual(sizes.first * 0.6);
+  expect(sizes.third, `third ${sizes.third} first ${sizes.first}`).toBeGreaterThanOrEqual(sizes.first * 0.6);
+  expect(sizes.third).toBeGreaterThanOrEqual(24);
+  expect(sizes.second).toBeGreaterThanOrEqual(24);
+  const shares = await page.evaluate(() => {
+    const podium = document.querySelector("#podium").getBoundingClientRect().width;
+    const share = (selector) => document.querySelector(selector).getBoundingClientRect().width / podium;
+    return { first: share(".place-1"), second: share(".place-2"), third: share(".place-3") };
+  });
+  expect(shares.first).toBeGreaterThan(0.36);
+  expect(shares.first).toBeLessThan(0.46);
+  expect(shares.second).toBeGreaterThan(0.26);
+  expect(shares.third).toBeGreaterThan(0.26);
   expect(sizes.artHidden).toBe(false);
   expect(sizes.artWidth).toBeGreaterThan(20);
   expect(sizes.fallbackHidden).toBe(true);
@@ -226,6 +239,7 @@ test("broken machine art falls through to a title placeholder", async ({ page })
 
 test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
+  const imgWidths = {};
   for (const count of [1, 5, 15, 40]) {
     await page.goto(`/display/1?preview=pinboard&pins=${count}&shot=1`);
     await page.waitForSelector(".pin-card");
@@ -265,6 +279,7 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
       }
       const qrHits = qr ? cards.filter((card) => intersects(card.getBoundingClientRect(), qr)).length : 0;
       const photos = cards.map((card) => card.querySelector("img")?.naturalWidth || 0);
+      const imgWidths = cards.map((card) => card.querySelector("img")?.getBoundingClientRect().width || 0);
       const tilt = Math.abs(parseFloat(cards[0]?.style.getPropertyValue("--tilt")) || 0);
       return {
         view,
@@ -277,6 +292,7 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
         captionHits,
         qrHits,
         photos,
+        imgWidth: imgWidths.reduce((sum, value) => sum + value, 0) / Math.max(1, imgWidths.length),
       };
     });
     const cap = Math.min(count, 12);
@@ -290,8 +306,12 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
     expect(report.captionHits, `pins ${count} caption overlap`).toEqual([]);
     expect(report.qrHits, `pins ${count} qr`).toBe(0);
     expect(Math.min(...report.photos), `pins ${count} photo`).toBeGreaterThan(20);
+    imgWidths[cap] = report.imgWidth;
+    if (cap === 12) expect(report.imgWidth, `pins ${count} fill`).toBeGreaterThanOrEqual(200);
     if (count === 15) await page.screenshot({ path: "e2e/artifacts/pinboard-15-1080.png" });
   }
+  expect(imgWidths[1]).toBeGreaterThan(imgWidths[5]);
+  expect(imgWidths[5]).toBeGreaterThan(imgWidths[12]);
 });
 
 test("camera hides the raw file inputs and opens a photo lightbox", async ({ page }) => {
