@@ -265,6 +265,244 @@ test("unrelated rename errors are not retried and do not copy", async () => {
   assert.equal(copies, 0);
 });
 
+test("a read-only destination is cleared before the replace is retried", async () => {
+  const calls = [];
+  let mode = 0o444;
+  const fake = {
+    async stat() {
+      return { mode };
+    },
+    async chmod(_dest, next) {
+      mode = next;
+      calls.push(`chmod:${mode.toString(8)}`);
+    },
+    async rename() {
+      calls.push(`rename:${mode.toString(8)}`);
+      if ((mode & 0o200) === 0) throw locked("EPERM");
+    },
+    async copyFile() {
+      throw new Error("copy should not run");
+    },
+    async unlink() {
+      throw new Error("unlink should not run");
+    },
+  };
+  await replaceFile("state.json.tmp", "state.json", fake, {
+    delays: [0],
+    sleepFn: async () => {
+      calls.push("sleep");
+    },
+  });
+  assert.equal(mode & 0o200, 0o200);
+  assert.deepEqual(calls, ["chmod:644", "rename:644"]);
+});
+
+test("rename and copyFile EPERM fall back to a direct fsync write", async () => {
+  const calls = [];
+  const fake = {
+    async stat() {
+      return { mode: 0o666 };
+    },
+    async chmod() {
+      throw new Error("chmod should not run when the file is already writable");
+    },
+    async rename() {
+      calls.push("rename");
+      throw locked("EPERM");
+    },
+    async copyFile() {
+      calls.push("copy");
+      throw locked("EPERM");
+    },
+    async readFile() {
+      calls.push("read");
+      return "{\"theme\":\"halloween\"}";
+    },
+    async open(dest) {
+      calls.push(`open:${dest}`);
+      return {
+        async writeFile(data) {
+          calls.push(`write:${data}`);
+        },
+        async sync() {
+          calls.push("sync");
+        },
+        async close() {
+          calls.push("close");
+        },
+      };
+    },
+    async unlink(tmp) {
+      calls.push(`unlink:${tmp}`);
+    },
+  };
+  await replaceFile(
+    "C:\\ProgramData\\PinballLand\\state.json.tmp",
+    "C:\\ProgramData\\PinballLand\\state.json",
+    fake,
+    {
+      delays: [],
+      sleepFn: async () => {
+        throw new Error("no backoff when there are no retries");
+      },
+    }
+  );
+  assert.deepEqual(calls, [
+    "rename",
+    "copy",
+    "read",
+    "open:C:\\ProgramData\\PinballLand\\state.json",
+    "write:{\"theme\":\"halloween\"}",
+    "sync",
+    "close",
+    "unlink:C:\\ProgramData\\PinballLand\\state.json.tmp",
+  ]);
+});
+
+test("a locked replace with no direct-write handle still throws EPERM", async () => {
+  const fake = {
+    async rename() {
+      throw locked("EPERM");
+    },
+    async copyFile() {
+      throw locked("EPERM");
+    },
+    async unlink() {},
+  };
+  await assert.rejects(
+    () => replaceFile("state.json.tmp", "state.json", fake, { delays: [], sleepFn: async () => {} }),
+    (err) => err.code === "EPERM" && err.renameError && err.renameError.code === "EPERM"
+  );
+});
+
+test("load keeps the saved state in memory when every persist attempt is EPERM", async () => {
+  const file = "C:\\ProgramData\\PinballLand\\state.json";
+  const files = new Map([[file, JSON.stringify({ theme: "halloween" })]]);
+  const fake = {
+    async mkdir() {},
+    async stat() {
+      return { mode: 0o666 };
+    },
+    async readFile(target) {
+      if (!files.has(target)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      return files.get(target);
+    },
+    async writeFile(target, data) {
+      if (String(target).endsWith(".tmp")) {
+        files.set(target, data);
+        return;
+      }
+      throw locked("EPERM");
+    },
+    async rename() {
+      throw locked("EPERM");
+    },
+    async copyFile() {
+      throw locked("EPERM");
+    },
+    async unlink() {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    },
+    async open() {
+      throw locked("EPERM");
+    },
+  };
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  let store;
+  try {
+    store = await Store.load(file, {
+      fsImpl: fake,
+      renameDelays: [],
+      retryDelays: [60_000],
+      sleepFn: async () => {
+        throw new Error("no backoff when there are no retries");
+      },
+    });
+    assert.equal(store.unpersisted, true);
+    assert.equal(store.getState().theme, "halloween");
+    const text = warnings.join("\n");
+    assert.match(text, /keep running with this state in memory/);
+    assert.match(text, /owned by Administrators/);
+    assert.match(text, /read-only attribute/);
+    assert.match(text, /another node process/);
+    assert.match(text, /antivirus software/);
+    assert.ok(text.includes('icacls "C:\\ProgramData\\PinballLand" /grant "Users:(OI)(CI)M" /T /C'));
+  } finally {
+    console.warn = original;
+    if (store) clearTimeout(store.retryTimer);
+  }
+});
+
+test("a later persist retry writes state.json after the EPERM clears", async () => {
+  const file = "C:\\ProgramData\\PinballLand\\state.json";
+  const files = new Map([[file, JSON.stringify({ theme: "halloween" })]]);
+  let allow = false;
+  let synced = false;
+  const fake = {
+    async mkdir() {},
+    async stat() {
+      return { mode: 0o666 };
+    },
+    async readFile(target) {
+      if (!files.has(target)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      return files.get(target);
+    },
+    async writeFile(target, data) {
+      if (String(target).endsWith(".tmp")) {
+        files.set(target, data);
+        return;
+      }
+      throw locked("EPERM");
+    },
+    async rename() {
+      throw locked("EPERM");
+    },
+    async copyFile() {
+      throw locked("EPERM");
+    },
+    async unlink() {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    },
+    async open(target) {
+      if (!allow) throw locked("EPERM");
+      return {
+        async writeFile(data) {
+          files.set(target, String(data));
+        },
+        async sync() {
+          synced = true;
+        },
+        async close() {},
+      };
+    },
+  };
+  const original = console.warn;
+  console.warn = () => {};
+  let store;
+  try {
+    store = await Store.load(file, {
+      fsImpl: fake,
+      renameDelays: [],
+      retryDelays: [20],
+      sleepFn: async () => {},
+    });
+    assert.equal(store.getState().theme, "halloween");
+    allow = true;
+    const started = Date.now();
+    while (store.unpersisted && Date.now() - started < 1000) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(store.unpersisted, false);
+    assert.equal(synced, true);
+    assert.match(files.get(file), /halloween/);
+  } finally {
+    console.warn = original;
+    if (store) clearTimeout(store.retryTimer);
+  }
+});
+
 test("a stale temp that cannot be removed does not block load", async () => {
   const warnings = [];
   const original = console.warn;
