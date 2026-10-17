@@ -20,9 +20,10 @@ test("seeds a Halloween board, rotation on, and three slots on first load", asyn
   assert.equal(state.leaderboards[0].inRotation, true);
   assert.equal(state.rotation.enabled, true);
   assert.equal(state.blackout, false);
-  assert.equal(state.slots["1"].content, "pinnacle");
-  assert.equal(state.slots["2"].content, "pinball-land");
+  assert.equal(state.slots["1"].content, "logos");
+  assert.equal(state.slots["2"].content, "amenities");
   assert.equal(state.slots["3"].content, "leaderboard");
+  assert.equal(state.rotation.intervalSec, 25);
   const saved = JSON.parse(await fs.readFile(filePath, "utf8"));
   assert.equal(saved.leaderboards[0].rows.length, 3);
 });
@@ -45,17 +46,38 @@ test("assigns a slot, edits rows, and reloads from disk", async () => {
   assert.equal(board.rows.find((row) => row.name === "Alex P").score, 12500);
 });
 
-test("clear board and black-all persist without wiping slot assignments", async () => {
+test("clear board keeps slot assignments and black does not blank the wall", async () => {
   const store = await Store.load(filePath);
   const boardId = store.getState().leaderboards[0].id;
   await store.clearLeaderboard(boardId);
   await store.blackAll();
   const reloaded = await Store.load(filePath);
   assert.equal(reloaded.getState().leaderboards[0].rows.length, 0);
-  assert.equal(reloaded.getState().blackout, true);
-  assert.equal(reloaded.getState().slots["1"].content, "pinnacle");
-  await reloaded.resumeWall();
   assert.equal(reloaded.getState().blackout, false);
+  assert.equal(reloaded.getState().rotation.enabled, true);
+  assert.equal(reloaded.getState().slots["1"].content, "logos");
+});
+
+test("a saved black wall loads as rotation", async () => {
+  await fs.writeFile(
+    filePath,
+    JSON.stringify({
+      blackout: true,
+      rotation: { enabled: false, intervalSec: 14 },
+      slots: {
+        1: { content: "dark" },
+        2: { content: "black" },
+        3: { content: "off" },
+      },
+    })
+  );
+  const state = (await Store.load(filePath)).getState();
+  assert.equal(state.blackout, false);
+  assert.equal(state.rotation.enabled, true);
+  assert.equal(state.rotation.intervalSec, 25);
+  assert.equal(state.slots["1"].content, "logos");
+  assert.equal(state.slots["2"].content, "logos");
+  assert.equal(state.slots["3"].content, "logos");
 });
 
 test("migrates legacy photo slots and persists halloween theme", async () => {
@@ -64,9 +86,9 @@ test("migrates legacy photo slots and persists halloween theme", async () => {
     JSON.stringify({
       theme: "halloween",
       slots: {
-        1: { content: "arcade" },
+        1: { content: "photos" },
         2: { content: "pool" },
-        3: { content: "bar" },
+        3: { content: "amenity-arcade" },
       },
       leaderboards: [{ id: "evt1", name: "Keep me", rows: [] }],
     })
@@ -75,9 +97,9 @@ test("migrates legacy photo slots and persists halloween theme", async () => {
   const state = store.getState();
   assert.equal(state.theme, "halloween");
   assert.equal(state.rotation.enabled, true);
-  assert.equal(state.slots["1"].content, "amenity-arcade");
-  assert.equal(state.slots["2"].content, "amenity-oasis");
-  assert.equal(state.slots["3"].content, "amenity-oasis");
+  assert.equal(state.slots["1"].content, "pinboard");
+  assert.equal(state.slots["2"].content, "amenities");
+  assert.equal(state.slots["3"].content, "amenities");
   assert.equal(state.leaderboards[0].name, "Keep me");
   assert.equal(state.leaderboards[0].inRotation, true);
   await store.setTheme("pinnacle");
@@ -89,7 +111,7 @@ test("assigns an Outdoor Oasis amenity slot and reloads", async () => {
   const store = await Store.load(filePath);
   await store.setSlot("2", { content: "amenity-oasis" });
   const reloaded = await Store.load(filePath);
-  assert.equal(reloaded.getState().slots["2"].content, "amenity-oasis");
+  assert.equal(reloaded.getState().slots["2"].content, "amenities");
 });
 
 test("machine boards can be added and toggled in the rotation", async () => {

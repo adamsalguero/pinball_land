@@ -5,23 +5,21 @@ const { AMENITY_IDS } = require("./amenities");
 const { normalizeRotation, ROTATION_ITEM_IDS, clampInterval } = require("./playlist");
 
 const SLOT_IDS = ["1", "2", "3"];
-const CONTENTS = [
-  "pinnacle",
-  "pinball-land",
-  "amenity-arcade",
-  "amenity-oasis",
-  "amenity-events",
-  "leaderboard",
-  "off",
-];
+const CONTENTS = ["logos", "amenities", "leaderboard", "pinboard", "video"];
 const THEMES = ["pinnacle", "halloween", "christmas"];
+const BLACK_CONTENT = new Set(["off", "black", "dark"]);
 const LEGACY_CONTENT = {
-  arcade: "amenity-arcade",
-  photos: "amenity-arcade",
-  collage: "amenity-arcade",
-  venue: "amenity-arcade",
-  bar: "amenity-oasis",
-  pool: "amenity-oasis",
+  pinnacle: "logos",
+  "pinball-land": "logos",
+  arcade: "amenities",
+  photos: "pinboard",
+  collage: "pinboard",
+  venue: "amenities",
+  bar: "amenities",
+  pool: "amenities",
+  "amenity-arcade": "amenities",
+  "amenity-oasis": "amenities",
+  "amenity-events": "amenities",
 };
 
 const LOCKED_RENAME = new Set(["EPERM", "EBUSY", "EACCES"]);
@@ -96,13 +94,12 @@ function defaultState() {
     blackout: false,
     rotation: normalizeRotation({
       enabled: true,
-      intervalSec: 14,
       startedAt: Date.now(),
       items: Object.fromEntries(ROTATION_ITEM_IDS.map((key) => [key, true])),
     }),
     slots: {
-      1: { content: "pinnacle", leaderboardId: halloweenId },
-      2: { content: "pinball-land", leaderboardId: halloweenId },
+      1: { content: "logos", leaderboardId: halloweenId },
+      2: { content: "amenities", leaderboardId: halloweenId },
       3: { content: "leaderboard", leaderboardId: halloweenId },
     },
     leaderboards: [
@@ -165,10 +162,9 @@ function normalizeLeaderboard(board) {
 }
 
 function normalizeContent(content) {
-  if (LEGACY_CONTENT[content]) {
-    return LEGACY_CONTENT[content];
-  }
-  return CONTENTS.includes(content) ? content : "off";
+  if (BLACK_CONTENT.has(content)) return "logos";
+  if (LEGACY_CONTENT[content]) return LEGACY_CONTENT[content];
+  return CONTENTS.includes(content) ? content : null;
 }
 
 function normalizeTheme(theme) {
@@ -176,12 +172,17 @@ function normalizeTheme(theme) {
 }
 
 function normalizeSlot(slot, fallbackLeaderboardId) {
-  const content = normalizeContent(slot?.content);
+  const content = normalizeContent(slot?.content) || "logos";
   const leaderboardId =
     typeof slot?.leaderboardId === "string" && slot.leaderboardId
       ? slot.leaderboardId
       : fallbackLeaderboardId;
   return { content, leaderboardId };
+}
+
+function slotWasBlack(rawSlots) {
+  if (!rawSlots || typeof rawSlots !== "object") return false;
+  return SLOT_IDS.some((slotId) => BLACK_CONTENT.has(rawSlots[slotId]?.content));
 }
 
 function normalizeState(raw) {
@@ -195,10 +196,12 @@ function normalizeState(raw) {
   for (const slotId of SLOT_IDS) {
     slots[slotId] = normalizeSlot(incoming.slots?.[slotId] || seeded.slots[slotId], fallbackId);
   }
+  const rotation = normalizeRotation(incoming.rotation);
+  if (incoming.blackout || slotWasBlack(incoming.slots)) rotation.enabled = true;
   return {
     theme: normalizeTheme(incoming.theme ?? seeded.theme),
-    blackout: Boolean(incoming.blackout),
-    rotation: normalizeRotation(incoming.rotation),
+    blackout: false,
+    rotation,
     slots,
     leaderboards,
   };
@@ -270,10 +273,12 @@ class Store {
     }
     const slot = this.state.slots[slotId];
     if (patch.content !== undefined) {
-      if (!CONTENTS.includes(patch.content)) {
+      const content = normalizeContent(patch.content);
+      if (!content) {
         throw Object.assign(new Error("Unknown slot content"), { status: 400 });
       }
-      slot.content = patch.content;
+      slot.content = content;
+      if (BLACK_CONTENT.has(patch.content)) this.state.rotation.enabled = true;
     }
     if (patch.leaderboardId !== undefined) {
       if (patch.leaderboardId !== null && !this.findBoard(patch.leaderboardId)) {
@@ -285,12 +290,14 @@ class Store {
   }
 
   async blackAll() {
-    this.state.blackout = true;
+    this.state.blackout = false;
+    this.state.rotation.enabled = true;
     return this.commit();
   }
 
   async resumeWall() {
     this.state.blackout = false;
+    this.state.rotation.enabled = true;
     return this.commit();
   }
 

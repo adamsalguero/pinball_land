@@ -13,8 +13,6 @@ const machineSearch = document.getElementById("machine-search");
 const machineResults = document.getElementById("machine-results");
 const opdbHelp = document.getElementById("opdb-help");
 const manualScreens = document.getElementById("manual-screens");
-const offAll = document.getElementById("off-all");
-
 const SLOT_META = [
   { id: "1", label: "Left" },
   { id: "2", label: "Center" },
@@ -23,25 +21,13 @@ const SLOT_META = [
 
 const CONTENT_GROUPS = [
   {
-    label: "Brand",
+    label: "On this screen",
     options: [
-      { id: "pinnacle", label: "Pinnacle Group" },
-      { id: "pinball-land", label: "Entertainment Center" },
-    ],
-  },
-  {
-    label: "Amenities",
-    options: [
-      { id: "amenity-arcade", label: "2-story arcade" },
-      { id: "amenity-oasis", label: "Outdoor Oasis" },
-      { id: "amenity-events", label: "Event options" },
-    ],
-  },
-  {
-    label: "Show",
-    options: [
-      { id: "leaderboard", label: "Leaderboard" },
-      { id: "off", label: "Black" },
+      { id: "logos", label: "Logos" },
+      { id: "amenities", label: "Amenities" },
+      { id: "leaderboard", label: "Leaderboards" },
+      { id: "pinboard", label: "Live Pinboard/Photos" },
+      { id: "video", label: "Video" },
     ],
   },
 ];
@@ -49,9 +35,7 @@ const CONTENT_GROUPS = [
 const ROTATION_TOGGLES = [
   { id: "logoPinnacle", label: "Pinnacle Group logo" },
   { id: "logoEntertainment", label: "Entertainment Center logo" },
-  { id: "amenityArcade", label: "2-story arcade" },
-  { id: "amenityOasis", label: "Outdoor Oasis" },
-  { id: "amenityEvents", label: "Flexible Event Options" },
+  { id: "amenities", label: "Amenities" },
   { id: "clock", label: "Clock and next event" },
   { id: "pinboard", label: "Live pinboard" },
 ];
@@ -120,28 +104,15 @@ function selectedBoard() {
 }
 
 function isSlotActive(content, optionId) {
-  if (optionId === "amenity-arcade") {
-    return ["amenity-arcade", "photos", "arcade", "collage", "venue"].includes(content);
-  }
-  if (optionId === "amenity-oasis") {
-    return ["amenity-oasis", "pool", "bar"].includes(content);
-  }
   return content === optionId;
 }
 
-function renderOffButton() {
-  const blackout = Boolean(current.state.blackout);
-  offAll.textContent = blackout ? "Resume wall" : "Off — black all screens";
-  offAll.classList.toggle("danger", !blackout);
-  offAll.classList.toggle("primary", blackout);
-}
-
 function renderRotation() {
-  const rotation = current.state.rotation || { enabled: true, intervalSec: 14, items: {} };
+  const rotation = current.state.rotation || { enabled: true, intervalSec: 25, items: {} };
   document.getElementById("rotation-on").classList.toggle("active", rotation.enabled !== false);
   document.getElementById("rotation-off").classList.toggle("active", rotation.enabled === false);
   if (document.activeElement !== intervalInput) {
-    intervalInput.value = String(rotation.intervalSec || 14);
+    intervalInput.value = String(rotation.intervalSec || 25);
   }
   rotationItemsEl.replaceChildren();
   for (const item of ROTATION_TOGGLES) {
@@ -412,13 +383,11 @@ function displayLabel(slot, count) {
 
 const DISPLAY_CONTENT = [
   { id: "rotation", label: "Rotation" },
-  { id: "pinnacle", label: "Pinnacle Group" },
-  { id: "pinball-land", label: "Entertainment Center" },
-  { id: "amenity-arcade", label: "2-story arcade" },
-  { id: "amenity-oasis", label: "Outdoor Oasis" },
-  { id: "amenity-events", label: "Event options" },
-  { id: "leaderboard", label: "Leaderboard" },
-  { id: "off", label: "Black" },
+  { id: "logos", label: "Logos" },
+  { id: "amenities", label: "Amenities" },
+  { id: "leaderboard", label: "Leaderboards" },
+  { id: "pinboard", label: "Live Pinboard/Photos" },
+  { id: "video", label: "Video" },
 ];
 
 function shareUrl() {
@@ -1120,9 +1089,15 @@ function renderMedia() {
   }
 }
 
+function renderMotion() {
+  const motion = current.motion === "off" ? "off" : "subtle";
+  for (const button of document.querySelectorAll("[data-motion]")) {
+    button.classList.toggle("active", button.dataset.motion === motion);
+  }
+}
+
 function render() {
   applyTheme(current.state?.theme);
-  renderOffButton();
   renderPresent();
   renderAirplay();
   renderDisplays();
@@ -1136,6 +1111,7 @@ function render() {
   renderYoutube();
   renderPhotos();
   renderAdmin();
+  renderMotion();
 }
 
 function showApp() {
@@ -1183,16 +1159,6 @@ document.getElementById("logout").addEventListener("click", async () => {
   loginEl.hidden = false;
   appEl.hidden = true;
   pinInput.value = "";
-});
-
-offAll.addEventListener("click", async () => {
-  if (current.state.blackout) {
-    applyPayload(await api("/api/resume", { method: "POST" }));
-    toast("Wall resumed");
-  } else {
-    applyPayload(await api("/api/off", { method: "POST" }));
-    toast("All screens black");
-  }
 });
 
 document.getElementById("theme-pinnacle").addEventListener("click", async () => {
@@ -1440,7 +1406,7 @@ for (const button of document.querySelectorAll("[data-tab]")) {
 for (const button of document.querySelectorAll("[data-motion]")) {
   button.addEventListener("click", async () => {
     applyPayload(await api("/api/motion", { method: "PUT", body: { motion: button.dataset.motion } }));
-    toast(`Motion ${button.dataset.motion}`);
+    toast(button.dataset.motion === "off" ? "Transitions off" : "Transitions subtle");
   });
 }
 document.getElementById("youtube-form").addEventListener("submit", async (event) => {

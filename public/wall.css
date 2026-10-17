@@ -7,10 +7,16 @@ html, body, .screen {
     var(--bg);
   cursor: none;
 }
-.screen { padding: var(--space); }
+.screen {
+  padding: 0;
+  overflow: hidden;
+}
 .panel {
   border-radius: var(--radius);
-  animation: card-drift 18s var(--ease) infinite alternate;
+  overflow: hidden;
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
 }
 .logo-panel, .amenity-panel, .board-panel, .clock-panel, .pinboard, .video-frame {
   background: var(--panel);
@@ -21,7 +27,12 @@ html, body, .screen {
   width: min(78vw, 1100px);
   filter: drop-shadow(0 24px 40px rgba(0, 0, 0, 0.35));
 }
-.amenity-layout { gap: clamp(24px, 3vw, 56px); }
+.amenity-layout {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  gap: clamp(24px, 3vw, 56px);
+}
 .amenity-frame {
   border-radius: calc(var(--radius) - 6px);
   overflow: hidden;
@@ -30,14 +41,13 @@ html, body, .screen {
 .amenity-photo, #amenity-photo {
   width: 100%;
   height: 100%;
+  max-height: 42vh;
   object-fit: cover;
-  animation: kenburns 28s ease-in-out infinite alternate;
-  transform-origin: center;
 }
 .amenity-copy h1, .board-header h1, .clock-time {
   font-weight: 700;
   letter-spacing: -0.035em;
-  line-height: 0.95;
+  line-height: 1.15;
 }
 .amenity-copy h1 { font-size: var(--type-title); }
 .board-header h1 { font-size: clamp(36px, 4vw, 72px); }
@@ -56,21 +66,26 @@ html, body, .screen {
   text-align: center;
   animation: rise 700ms var(--ease) both;
 }
-.podium-card.place-1 { min-height: 180px; transform: translateY(-12px); }
+.podium-card.place-1 { min-height: 0; }
 .podium-card .place { color: var(--rank); font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase; }
-.podium-card .who { display: block; font-size: clamp(22px, 2vw, 36px); margin: 8px 0; }
+.podium-card .who { display: block; font-size: clamp(18px, 2vw, 32px); margin: 8px 0; max-width: 100%; }
 .podium-card .points { font-variant-numeric: tabular-nums; color: var(--beige); }
 .board-row { border-radius: 16px; padding-inline: 12px; }
+.rank, .name, .score, .podium-card .who, .podium-card .points, .podium-card .place {
+  line-height: 1.25;
+}
 .clock-panel, .pinboard, .collage-panel, .yt-panel {
   position: absolute;
-  inset: var(--space);
+  inset: 4.5vh 4.5vw;
+  width: auto;
+  height: auto;
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
 .clock-kicker { color: var(--kicker); letter-spacing: 0.2em; text-transform: uppercase; }
-.clock-time { font-size: clamp(84px, 12vw, 220px); font-weight: 700; letter-spacing: -0.05em; }
-.clock-event { font-size: clamp(28px, 3vw, 54px); color: var(--muted); }
+.clock-time { font-size: clamp(64px, 10vw, 168px); font-weight: 700; letter-spacing: -0.04em; line-height: 1.3; max-width: 100%; }
+.clock-event { font-size: clamp(22px, 2.6vw, 44px); color: var(--muted); max-width: 100%; }
 .pinboard {
   background:
     linear-gradient(180deg, rgba(255,255,255,0.04), transparent 30%),
@@ -80,7 +95,7 @@ html, body, .screen {
 .pin-wall { position: absolute; inset: 0; }
 .pin-card {
   position: absolute;
-  width: min(240px, 18vw);
+  width: min(200px, 16vw);
   background: #f8f8f5;
   color: #1a1916;
   padding: 10px 10px 28px;
@@ -89,7 +104,7 @@ html, body, .screen {
   animation: pin-in 700ms var(--ease) both;
 }
 .pin-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
-.pin-card span { display: block; margin-top: 8px; font-size: 14px; }
+.pin-card span { display: block; margin-top: 8px; font-size: 14px; max-width: 100%; }
 .pin-card.is-new { box-shadow: 0 0 0 2px var(--accent), 0 18px 40px rgba(0, 0, 0, 0.35); }
 .pin-card::before {
   content: "";
@@ -132,17 +147,11 @@ html, body, .screen {
   pointer-events: none;
   z-index: 4;
 }
-#wipe {
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  width: 18vw;
-  pointer-events: none;
-  z-index: 5;
-  background: linear-gradient(90deg, transparent, rgba(248,248,245,0.16), transparent);
-  transform: translateX(-20vw);
-}
-.is-shot .panel, .is-shot .amenity-photo, .is-shot #amenity-photo, .is-shot .pin-card { animation: none !important; }
+.is-shot .panel,
+.is-shot .amenity-photo,
+.is-shot #amenity-photo,
+.is-shot .pin-card,
+.is-shot .podium-card { animation: none !important; transition: none !important; }
 
 @keyframes kenburns {
   from { transform: scale(1) translate3d(0, 0, 0); }

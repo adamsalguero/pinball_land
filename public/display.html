@@ -11,13 +11,12 @@
   </head>
   <body>
     <main id="screen" class="screen" data-mode="off" aria-live="polite">
-      <div id="off" class="panel off-panel" hidden></div>
       <div id="present" class="panel present-panel" hidden>
         <div id="present-waiting" class="present-waiting">
           <p class="present-kicker">Pinball Land</p>
-          <h1 id="present-heading">Share to this screen</h1>
+          <h1 id="present-heading" data-fit="3">Share to this screen</h1>
           <p id="present-code" class="present-code" hidden></p>
-          <p id="present-instructions" class="present-instructions"></p>
+          <p id="present-instructions" class="present-instructions" data-fit="6"></p>
         </div>
         <video id="present-video" autoplay playsinline hidden></video>
         <img id="present-image" alt="" hidden />
@@ -25,9 +24,10 @@
       </div>
       <div id="video-panel" class="panel video-panel" hidden>
         <video id="wall-video" autoplay playsinline></video>
+        <p id="video-fallback" class="video-fallback" data-fit="4" hidden>Video</p>
       </div>
       <div id="logo" class="panel logo-panel" hidden>
-        <p id="logo-fallback" class="logo-fallback" hidden></p>
+        <p id="logo-fallback" class="logo-fallback" data-fit="4" hidden></p>
         <img id="logo-image" alt="" hidden />
       </div>
       <div id="amenity" class="panel amenity-panel" hidden>
@@ -37,9 +37,9 @@
             <img id="amenity-photo" alt="" />
           </figure>
           <div class="amenity-copy">
-            <h1 id="amenity-headline"></h1>
-            <p id="amenity-body"></p>
-            <p id="amenity-types" class="amenity-types" hidden></p>
+            <h1 id="amenity-headline" data-fit="3"></h1>
+            <p id="amenity-body" data-fit="6"></p>
+            <p id="amenity-types" class="amenity-types" data-fit="4" hidden></p>
           </div>
         </div>
       </div>
@@ -51,8 +51,8 @@
         <div class="board-main">
           <header class="board-header">
             <p class="board-kicker">Pinnacle Entertainment Center</p>
-            <h1 id="board-title">Leaderboard</h1>
-            <p id="board-meta" class="board-meta" hidden></p>
+            <h1 id="board-title" data-fit="2">Leaderboard</h1>
+            <p id="board-meta" class="board-meta" data-fit="2" hidden></p>
           </header>
           <ol id="board-rows" class="board-rows"></ol>
           <p id="board-empty" class="board-empty" hidden>No scores yet</p>
@@ -62,7 +62,7 @@
       <div id="clock" class="panel clock-panel" hidden>
         <p class="clock-kicker">Pinnacle Entertainment Center</p>
         <p id="clock-time" class="clock-time">00:00</p>
-        <p id="clock-event" class="clock-event"></p>
+        <p id="clock-event" class="clock-event" data-fit="2"></p>
       </div>
       <div id="pinboard" class="panel pinboard" hidden>
         <div id="pin-wall" class="pin-wall"></div>
@@ -77,7 +77,6 @@
       <div id="youtube" class="panel yt-panel" hidden></div>
     </main>
     <canvas id="motion"></canvas>
-    <div id="wipe"></div>
     <script src="/motion.js"></script>
     <script src="/display.js"></script>
   </body>
