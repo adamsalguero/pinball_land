@@ -236,12 +236,31 @@ body,
 }
 
 .machine-art-wrap img,
-.machine-art-wrap video {
+.machine-art-wrap video,
+.machine-art-fallback {
   width: 100%;
   height: min(82vh, 860px);
   object-fit: contain;
   background: #0a0908;
   border-radius: 12px;
+}
+
+.machine-art-fallback {
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 6vh 4vw;
+  text-align: center;
+  color: var(--text);
+  font-size: clamp(28px, 4.2vh, 64px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  text-transform: uppercase;
+  border: 3px solid var(--line);
+  background:
+    radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--accent) 35%, transparent), transparent 55%),
+    #0a0908;
 }
 
 .board-main {

@@ -133,6 +133,33 @@ function fitVisibleText() {
     if (el.closest("[hidden]")) continue;
     fitText(el);
   }
+  enforceFirstLargest();
+}
+
+function enforceFirstLargest() {
+  const first = document.querySelector(".podium-card.place-1 .who");
+  const rest = [...document.querySelectorAll(".podium-card.place-2 .who, .podium-card.place-3 .who")];
+  if (!first || !rest.length || first.closest("[hidden]")) return;
+  const size = (el) => parseFloat(el.style.fontSize) || parseFloat(getComputedStyle(el).fontSize) || 0;
+  let firstSize = size(first);
+  const smallest = Math.min(...rest.map(size));
+  if (smallest > 0 && firstSize > smallest / 0.6) {
+    firstSize = Math.floor(smallest / 0.6);
+    first.style.fontSize = `${firstSize}px`;
+  }
+  for (const el of rest) {
+    if (size(el) > firstSize - 1) el.style.fontSize = `${Math.max(Math.round(firstSize * 0.6), firstSize - 4)}px`;
+  }
+}
+
+function scoreNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number.parseInt(String(value ?? "").replace(/[,_\s]/g, ""), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sortScoreRows(rows) {
+  return [...(rows || [])].sort((a, b) => scoreNumber(b.score) - scoreNumber(a.score) || String(a.name || "").localeCompare(String(b.name || "")));
 }
 
 function formatScore(score) {
@@ -257,8 +284,9 @@ function stopVideo() {
 function renderRows(rows) {
   boardRows.replaceChildren();
   podium.replaceChildren();
-  const top = rows.slice(0, 3);
-  const rest = rows.slice(3);
+  const ranked = sortScoreRows(rows);
+  const top = ranked.slice(0, 3);
+  const rest = ranked.slice(3);
   podium.hidden = top.length === 0;
   boardEmpty.hidden = rows.length > 0;
   boardRows.hidden = rest.length === 0 && top.length > 0 ? true : rows.length === 0;
@@ -268,7 +296,7 @@ function renderRows(rows) {
       const place = top.indexOf(row) + 1;
       const card = document.createElement("article");
       card.className = `podium-card place-${place}`;
-      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="1" data-fit-full="1"></span><span class="points" data-fit="1" data-fit-full="1"></span>`;
+      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="2" data-fit-full="1"></span><span class="points" data-fit="1" data-fit-full="1"></span>`;
       setFit(card.querySelector(".who"), row.name || "—");
       setFit(card.querySelector(".points"), formatScore(row.score));
       podium.append(card);
@@ -297,6 +325,8 @@ function renderRows(rows) {
 }
 
 let shownBoard = null;
+let failedArt = new Set();
+let failedArtBoard = "";
 
 function boardArtList(board) {
   if (!board || board.kind !== "machine") return [];
@@ -305,33 +335,69 @@ function boardArtList(board) {
   return board.artUrl ? [board.artUrl] : [];
 }
 
-function currentBoardArt(board) {
-  const urls = boardArtList(board);
-  if (!urls.length) return null;
-  const cursor = Math.floor(Math.max(0, Date.now() - clockSkew) / 8000);
-  return urls[cursor % urls.length];
-}
-
 function paintBoardArt() {
   const board = shownBoard;
-  const artUrl = currentBoardArt(board);
+  const boardKey = `${board?.id || ""}:${board?.name || ""}`;
+  if (failedArtBoard !== boardKey) {
+    failedArtBoard = boardKey;
+    failedArt = new Set();
+  }
+  const fallback = document.getElementById("machine-art-fallback");
   const isMachine = board?.kind === "machine";
-  boardPanel.classList.toggle("has-art", Boolean(isMachine && artUrl));
-  if (!artUrl) {
-    machineArtWrap.hidden = true;
-    machineArt.hidden = true;
+  const urls = boardArtList(board).filter((url) => !failedArt.has(url));
+  const showPlaceholder = () => {
     machineVideo.hidden = true;
+    machineArt.hidden = true;
+    machineArt.onerror = null;
+    machineArt.onload = null;
     machineArt.removeAttribute("src");
     delete machineArt.dataset.src;
+    machineArt.alt = "";
+    if (!isMachine) {
+      boardPanel.classList.remove("has-art");
+      machineArtWrap.hidden = true;
+      if (fallback) fallback.hidden = true;
+      return;
+    }
+    boardPanel.classList.add("has-art");
+    machineArtWrap.hidden = false;
+    if (fallback) {
+      fallback.hidden = false;
+      fallback.textContent = board?.name || "Leaderboard";
+    }
+  };
+  if (!urls.length) {
+    showPlaceholder();
     return;
   }
+  const cursor = Math.floor(Math.max(0, Date.now() - clockSkew) / 8000);
+  const artUrl = urls[cursor % urls.length];
+  boardPanel.classList.add("has-art");
   machineVideo.hidden = true;
   machineArtWrap.hidden = false;
-  machineArt.hidden = false;
-  machineArt.alt = board.name || "Machine art";
+  if (fallback) fallback.hidden = true;
+  machineArt.alt = "";
+  machineArt.onerror = () => {
+    const failed = machineArt.dataset.src;
+    if (failed) failedArt.add(failed);
+    machineArt.onerror = null;
+    machineArt.hidden = true;
+    machineArt.removeAttribute("src");
+    paintBoardArt();
+  };
+  machineArt.onload = () => {
+    if (machineArt.dataset.src !== artUrl) return;
+    machineArt.hidden = false;
+    machineArt.alt = board?.name || "Machine art";
+    if (fallback) fallback.hidden = true;
+  };
   if (machineArt.dataset.src !== artUrl) {
+    machineArt.hidden = true;
     machineArt.dataset.src = artUrl;
     machineArt.src = artUrl;
+  } else if (machineArt.complete && machineArt.naturalWidth > 0) {
+    machineArt.hidden = false;
+    machineArt.alt = board?.name || "Machine art";
   }
 }
 
@@ -348,12 +414,17 @@ function showBoard(board) {
   stopWallVideo();
   teardownPresent();
   shownBoard = board || null;
-  if (FIXTURE && params.get("art") === "1") {
+  if (FIXTURE && params.get("art")) {
+    const artMode = params.get("art");
+    const catalogs = {
+      1: ["/photos/arcade", "/photos/oasis"],
+      skip: ["/photos/not-a-real-photo", "/photos/arcade"],
+      bad: ["/photos/not-a-real-photo", "/photos/also-missing"],
+    };
     shownBoard = {
       kind: "machine",
       name: "The Wizard of Oz (75th Anniversary Edition)",
-      artUrl: "/photos/arcade.jpg",
-      artUrls: ["/photos/arcade.jpg", "/photos/oasis.jpg", "/photos/bar.jpg"],
+      artUrls: catalogs[artMode] || catalogs["1"],
     };
   }
   const rows = FIXTURE ? NAMED_BOARD_ROWS : (board?.rows || []);
@@ -943,46 +1014,161 @@ function pinCardBox(cardW, cardH, tilt, scale) {
   };
 }
 
-function layoutPins(count, width, height) {
-  const n = Math.max(1, count);
-  const cols = n === 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4;
+function rectsOverlap(a, b, pad = 0) {
+  return a.x < b.x + b.w + pad && a.x + a.w + pad > b.x && a.y < b.y + b.h + pad && a.y + a.h + pad > b.y;
+}
+
+function overlapRatio(a, b) {
+  const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  const area = x * y;
+  const denom = Math.max(1, Math.min(a.w * a.h, b.w * b.h));
+  return area / denom;
+}
+
+function pinTilt(seed) {
+  const sign = seed < 0.5 ? -1 : 1;
+  return sign * (5 + ((seed * 17) % 1) * 7);
+}
+
+function cardParts(cx, cy, cardW, cardH, tilt) {
+  const box = pinCardBox(cardW, cardH, tilt, 1);
+  const full = { x: cx - box.w / 2, y: cy - box.h / 2, w: box.w, h: box.h };
+  const captionH = Math.max(44, cardH * 0.3);
+  return {
+    full,
+    caption: { x: full.x, y: full.y + full.h - captionH, w: full.w, h: captionH },
+    photo: { x: full.x, y: full.y, w: full.w, h: Math.max(20, full.h - captionH) },
+  };
+}
+
+function qrHole(wall) {
+  const qr = document.querySelector(".pin-qr");
+  if (!qr || !wall) return null;
+  const wallBox = wall.getBoundingClientRect();
+  const box = qr.getBoundingClientRect();
+  if (box.width < 2 || box.height < 2) return null;
+  return {
+    x: box.left - wallBox.left - 16,
+    y: box.top - wallBox.top - 16,
+    w: box.width + 32,
+    h: box.height + 32,
+  };
+}
+
+function spotFits(parts, placed, width, height, qr) {
+  if (parts.full.x < 4 || parts.full.y < 4) return false;
+  if (parts.full.x + parts.full.w > width - 4 || parts.full.y + parts.full.h > height - 4) return false;
+  if (qr && rectsOverlap(parts.full, qr, 0)) return false;
+  for (const other of placed) {
+    if (rectsOverlap(parts.caption, other.full, 6)) return false;
+    if (rectsOverlap(other.caption, parts.full, 6)) return false;
+    if (overlapRatio(parts.photo, other.photoBox) > 0.16) return false;
+  }
+  return true;
+}
+
+function pinCardHeight(cardW) {
+  return cardW + 50;
+}
+
+function tryPinGrid(photos, cols, rows, cardW, width, height, qr) {
+  const cardH = pinCardHeight(cardW);
+  const specs = photos.map((photo) => {
+    const tilt = pinTilt(pinHash(photo.id, 11));
+    return {
+      photo,
+      tilt,
+      cardW,
+      cardH,
+      box: pinCardBox(cardW, cardH, tilt, 1),
+      z: 8 + Math.round(pinHash(photo.id, 9) * 40),
+    };
+  });
+  const cellW = Math.max(...specs.map((item) => item.box.w));
+  const cellH = Math.max(...specs.map((item) => item.box.h));
+  const gap = 12;
+  const gridW = cols * cellW + (cols - 1) * gap;
+  const gridH = rows * cellH + (rows - 1) * gap;
+  if (gridW > width - 8 || gridH > height - 8) return null;
+  const spareX = width - 8 - gridW;
+  const spareY = height - 8 - gridH;
+  const placed = [];
+  for (let index = 0; index < specs.length; index += 1) {
+    const spec = specs[index];
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const jx = (pinHash(spec.photo.id, 21) - 0.5) * Math.min(28, spareX / Math.max(1, cols));
+    const jy = (pinHash(spec.photo.id, 22) - 0.5) * Math.min(18, spareY / Math.max(1, rows));
+    const left = 4 + spareX * 0.5 + col * (cellW + gap) + (cellW - spec.box.w) / 2 + jx;
+    const top = 4 + spareY * 0.28 + row * (cellH + gap) + (cellH - spec.box.h) / 2 + jy;
+    const parts = cardParts(left + spec.box.w / 2, top + spec.box.h / 2, cardW, cardH, spec.tilt);
+    if (!spotFits(parts, placed, width, height, qr)) return null;
+    placed.push({
+      photo: spec.photo,
+      cx: left + spec.box.w / 2,
+      cy: top + spec.box.h / 2,
+      tilt: spec.tilt,
+      cardW,
+      cardH,
+      z: spec.z,
+      full: parts.full,
+      caption: parts.caption,
+      photoBox: parts.photo,
+    });
+  }
+  return placed;
+}
+
+function scatterPins(photos, width, height, qr) {
+  const n = photos.length;
+  let best = null;
+  for (let cols = 1; cols <= n; cols += 1) {
+    const rows = Math.ceil(n / cols);
+    let lo = 96;
+    let hi = Math.min(width * 0.86, height * 0.86, 640);
+    let placed = null;
+    for (let step = 0; step < 12; step += 1) {
+      const mid = (lo + hi) / 2;
+      const attempt = tryPinGrid(photos, cols, rows, mid, width, height, qr);
+      if (attempt) {
+        placed = attempt;
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    if (placed && (!best || placed[0].cardW > best[0].cardW)) best = placed;
+  }
+  if (best) return best;
+  const cols = Math.ceil(Math.sqrt(n));
   const rows = Math.ceil(n / cols);
-  const margin = 10;
-  const usableW = Math.max(40, width - margin * 2);
-  const usableH = Math.max(40, height - margin * 2);
-  const overlap = n >= 8 ? 0.14 : n >= 4 ? 0.08 : 0;
-  const cellW = usableW / cols;
-  const cellH = usableH / rows;
-  const ratio = 1.36;
-  let cardW = Math.min(cellW * (1 + overlap), n === 1 ? 460 : 340);
-  let cardH = cardW * ratio;
-  if (cardH > cellH * (1 + overlap)) {
-    cardH = cellH * (1 + overlap);
-    cardW = cardH / ratio;
-  }
-  const worst = pinCardBox(cardW, cardH, 8, 1.05);
-  if (worst.w > usableW) {
-    cardW *= usableW / worst.w;
-    cardH = cardW * ratio;
-  }
-  if (worst.h > usableH && cardH > 0) {
-    const fitted = pinCardBox(cardW, cardH, 8, 1.05);
-    const scaleDown = Math.min(1, usableH / fitted.h, usableW / fitted.w);
-    cardW *= scaleDown;
-    cardH = cardW * ratio;
-  }
-  return { cols, rows, margin, cellW, cellH, cardW, cardH };
+  const cardW = Math.max(90, Math.min((width - 24) / cols, (height - 24) / rows / 1.35));
+  const cardH = pinCardHeight(cardW);
+  return photos.map((photo, index) => {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    return {
+      photo,
+      cx: 12 + cardW * (col + 0.5),
+      cy: 12 + cardH * (row + 0.5),
+      tilt: pinTilt(pinHash(photo.id, 3)),
+      cardW: cardW * 0.92,
+      cardH: cardH * 0.92,
+      z: 10 + index,
+    };
+  });
 }
 
 function placePhotos(target, card) {
   let photos = payload?.guest?.photos || [];
   const requested = Number.parseInt(params.get("pins") || "", 10);
   if (Number.isFinite(requested) && requested > 0) {
-    const pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    const samples = ["/photos/arcade", "/photos/oasis"];
     const names = ["Alex Parra", "Jordan Hale", "Sam Okonkwo", "Riley Chen", "Morgan Blake"];
     photos = Array.from({ length: requested }, (_, i) => ({
       id: `pin-${i}`,
-      url: photos[i % Math.max(photos.length, 1)]?.url || pixel,
+      url: samples[i % samples.length],
       caption: i % 2 === 0 ? "High score on Oz" : "Friday night",
       guestName: names[i % names.length],
       createdAt: Date.now() - i * 60000,
@@ -1010,41 +1196,25 @@ function placePhotos(target, card) {
   const shown = visiblePinPhotos(photos);
   const width = Math.max(1, target.clientWidth || window.innerWidth);
   const height = Math.max(1, target.clientHeight || window.innerHeight);
-  const layout = layoutPins(shown.length, width, height);
+  const placed = scatterPins(shown, width, height, qrHole(target));
   target.replaceChildren();
-  shown.forEach((photo, index) => {
-    const col = index % layout.cols;
-    const row = Math.floor(index / layout.cols);
-    const seed = pinHash(photo.id, 1);
-    const seedB = pinHash(photo.id, 2);
-    const seedC = pinHash(photo.id, 3);
-    const tilt = (seed < 0.5 ? -1 : 1) * (4 + seedB * 4);
-    const scale = 0.94 + seedC * 0.1;
-    const box = pinCardBox(layout.cardW, layout.cardH, tilt, scale);
-    const jitterX = (seed - 0.5) * layout.cellW * 0.12;
-    const jitterY = (seedB - 0.5) * layout.cellH * 0.1;
-    let cx = layout.margin + layout.cellW * (col + 0.5) + jitterX;
-    let cy = layout.margin + layout.cellH * (row + 0.5) + jitterY;
-    const halfW = box.w / 2 + 8;
-    const halfH = box.h / 2 + 8;
-    cx = Math.min(width - halfW, Math.max(halfW, cx));
-    cy = Math.min(height - halfH, Math.max(halfH, cy));
+  placed.forEach((spot) => {
+    const photo = spot.photo;
     const el = document.createElement("article");
     el.className = `pin-card${Date.now() - Number(photo.createdAt) < 20000 ? " is-new" : ""}`;
-    el.style.width = `${layout.cardW}px`;
-    el.style.left = `${cx}px`;
-    el.style.top = `${cy}px`;
-    el.style.zIndex = String(10 + Math.round(seedC * 20));
-    el.style.setProperty("--tilt", `${tilt.toFixed(2)}deg`);
-    el.style.setProperty("--pin-scale", scale.toFixed(3));
-    el.style.setProperty("--drift-x", `${((seed - 0.5) * 8).toFixed(1)}px`);
-    el.style.setProperty("--drift-y", `${((seedB - 0.5) * 6).toFixed(1)}px`);
-    el.style.transform = `translate(-50%, -50%) rotate(${tilt.toFixed(2)}deg) scale(${scale.toFixed(3)})`;
+    el.style.width = `${spot.cardW}px`;
+    el.style.left = `${spot.cx}px`;
+    el.style.top = `${spot.cy}px`;
+    el.style.zIndex = String(spot.z);
+    el.style.setProperty("--tilt", `${spot.tilt.toFixed(2)}deg`);
+    el.style.transform = `translate(-50%, -50%) rotate(${spot.tilt.toFixed(2)}deg)`;
     const img = document.createElement("img");
     img.src = photo.url;
     img.alt = photo.caption || "Guest photo";
     const cap = document.createElement("span");
-    cap.setAttribute("data-fit", "2");
+    const fixtureCaption = FIXTURE && !(Number.isFinite(requested) && requested > 0);
+    cap.setAttribute("data-fit", "3");
+    if (!fixtureCaption) cap.setAttribute("data-fit-full", "1");
     const taken = Number(photo.createdAt) ? new Date(Number(photo.createdAt)).toLocaleString([], {
       month: "short",
       day: "numeric",
@@ -1052,7 +1222,7 @@ function placePhotos(target, card) {
       minute: "2-digit",
     }) : "";
     const caption = [photo.guestName, photo.caption].filter(Boolean).join(" · ");
-    setFit(cap, FIXTURE && !(Number.isFinite(requested) && requested > 0) ? LONG_TEXT : [taken, caption].filter(Boolean).join(" · "));
+    setFit(cap, fixtureCaption ? LONG_TEXT : [taken, caption].filter(Boolean).join(" · "));
     el.append(img, cap);
     target.append(el);
   });
