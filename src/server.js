@@ -111,6 +111,8 @@ async function launchServer() {
     devicesPath: paths.devices,
     guestPhotosDir: paths.photos,
     catalogPath: path.join(root, "media", "catalog.json"),
+    dataDir: migrated.dataDir,
+    appRoot: root,
     configStore,
     isHttpsReady: () => httpsReady,
   });

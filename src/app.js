@@ -20,8 +20,8 @@ const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, 
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards } = require("./catalog");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
-const { selectRelease } = require("./updater");
-const { isInside } = require("./paths");
+const { isInside, defaultDataDir, dataLayout } = require("./paths");
+const { launchDetachedUpdate, launchRegisterTasks, readGitCommit, readUpdateStatusSync } = require("./self-update");
 const pkg = require("../package.json");
 
 const UPLOAD_TYPES = {
@@ -90,6 +90,8 @@ function createApp({
   guestPhotosDir = null,
   catalogPath = null,
   now,
+  dataDir = null,
+  appRoot = path.join(__dirname, ".."),
 }) {
   const app = express();
   const opdb = createOpdb({
@@ -141,6 +143,35 @@ function createApp({
   });
   const catalogItems = loadCatalog(catalogPath || path.join(__dirname, "..", "media", "catalog.json"));
   let playback = null;
+  const updateDataDir = dataDir || defaultDataDir();
+  let commitCache = null;
+  let statusCache = { at: 0, value: null };
+
+  function updateFields(config) {
+    if (commitCache === null) commitCache = readGitCommit(appRoot);
+    const nowMs = Date.now();
+    if (!statusCache.value || nowMs - statusCache.at > 5000) {
+      statusCache = {
+        at: nowMs,
+        value: readUpdateStatusSync(dataLayout(updateDataDir).logs) || {},
+      };
+    }
+    const status = statusCache.value || {};
+    const updates = config.updates || {};
+    return {
+      enabled: updates.enabled !== false,
+      channel: updates.channel === "preview" ? "preview" : "stable",
+      intervalMin: updates.intervalMin || 30,
+      quietStart: updates.quietStart || "02:00",
+      quietEnd: updates.quietEnd || "06:00",
+      nightlyAt: updates.nightlyAt || "03:17",
+      branch: updates.branch || "main",
+      commit: commitCache,
+      lastAt: status.at || null,
+      lastResult: status.action || null,
+      lastDetail: status.detail || "",
+    };
+  }
 
   function currentPin() {
     if (externalConfig) return localStore.get().pin;
@@ -259,13 +290,7 @@ function createApp({
         photos: album.feed(),
         events: album.events.map((event) => ({ id: event.id, name: event.name, createdAt: event.createdAt })),
       },
-      updates: {
-        enabled: config.updates.enabled,
-        channel: config.updates.channel,
-        intervalMin: config.updates.intervalMin,
-        quietStart: config.updates.quietStart,
-        quietEnd: config.updates.quietEnd,
-      },
+      updates: updateFields(config),
       kiosk: {
         restartToken,
         monitors: mapped.arranged.map((display) => ({
@@ -1511,28 +1536,58 @@ function createApp({
     }
   });
 
+  app.put("/api/updates/settings", requirePin, async (req, res, next) => {
+    try {
+      const updated = await localStore.update({
+        updates: {
+          enabled: req.body?.enabled !== false,
+          nightlyAt: req.body?.nightlyAt,
+        },
+      });
+      let rescheduled = false;
+      if (process.platform === "win32" && !process.env.NODE_TEST_CONTEXT) {
+        launchRegisterTasks({ appRoot });
+        rescheduled = true;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        rescheduled,
+        updates: updateFields(updated),
+        note: "Saved. The PC uses this switch at sign-in and this time each night.",
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post("/api/updates/now", requirePin, async (req, res, next) => {
     try {
-      const updates = currentConfig().updates;
-      let latest = null;
-      if (!process.env.NODE_TEST_CONTEXT) {
-        const response = await fetch(`https://api.github.com/repos/${updates.repo}/releases?per_page=5`, {
-          headers: { accept: "application/vnd.github+json", "user-agent": "pinball-land" },
+      const updates = updateFields(currentConfig());
+      if (process.env.NODE_TEST_CONTEXT) {
+        return sendJson(res, 200, {
+          version: pkg.version,
+          commit: updates.commit,
+          started: false,
+          applied: false,
+          note: `Version ${pkg.version}. No install was started. The data folder stays put.`,
         });
-        if (response.ok) {
-          const release = selectRelease(await response.json(), updates);
-          latest = release ? release.tag_name : null;
-        }
       }
-      const updateAvailable = Boolean(latest && latest !== `v${pkg.version}` && latest !== pkg.version);
+      if (process.platform !== "win32") {
+        return sendJson(res, 200, {
+          version: pkg.version,
+          commit: updates.commit,
+          started: false,
+          applied: false,
+          note: "Update now runs on the Windows kiosk. This computer was not changed.",
+        });
+      }
+      launchDetachedUpdate({ appRoot, mode: "now" });
       sendJson(res, 200, {
         version: pkg.version,
-        latest,
-        updateAvailable,
+        commit: updates.commit,
+        started: true,
         applied: false,
-        note: updateAvailable
-          ? `Version ${latest} is on GitHub. Download it on the kiosk PC and restart. This button does not install it.`
-          : `Version ${pkg.version}. No install was started. The data folder stays put.`,
+        note: "Update started. The wall comes back when it finishes. Venue data is not changed.",
       });
     } catch (err) {
       next(err);

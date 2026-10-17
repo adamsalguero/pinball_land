@@ -55,3 +55,6 @@ jobs:
       - name: Installer dry run
         shell: pwsh
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-beelink.ps1 -DryRun
+      - name: Enable autoupdate dry run
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -DryRun

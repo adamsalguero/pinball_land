@@ -5,15 +5,23 @@
 .DESCRIPTION
   Sets the network profile to Private, opens TCP 3000 and 3443 on that profile, and turns off
   AC sleep, monitor timeout, and hibernate. Pass -AutoLogonUser Admin for a passwordless account.
-  -DryRun skips Node install, npm ci, AutoAdminLogon, and starting the server.
+  Registers boot and nightly self-update tasks. Pass -RustDesk or -RustDeskPassword to install
+  the latest RustDesk as a service. -DryRun skips Node install, npm ci, AutoAdminLogon, RustDesk,
+  and starting the server. It still registers the update tasks.
 .PARAMETER AutoLogonUser
   Local passwordless account to sign in automatically, for example Admin.
 .PARAMETER DryRun
   Run the Windows setup and print the verify summary without installing packages or starting the server.
+.PARAMETER RustDesk
+  Install RustDesk from the latest GitHub x86_64 release. Prompts for a password when -RustDeskPassword is omitted.
+.PARAMETER RustDeskPassword
+  Permanent RustDesk password for this run. Not written into the repo.
 #>
 param(
   [string]$AutoLogonUser,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [switch]$RustDesk,
+  [string]$RustDeskPassword
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,10 +78,45 @@ if (-not $DryRun) {
   Write-Host "Dry run: server was not started."
 }
 
-$verify = @{
-  RepoRoot = $RepoRoot
-  Verify = $true
+$wantRust = $false
+if ($RustDesk) { $wantRust = $true }
+if ($RustDeskPassword) { $wantRust = $true }
+$rustOutput = ""
+if ($wantRust -and $DryRun) {
+  Write-Host "Dry run: RustDesk will not be downloaded and the password will not be prompted."
+} elseif ($wantRust) {
+  if (-not $RustDeskPassword -and $env:RUSTDESK_PASSWORD) {
+    $RustDeskPassword = $env:RUSTDESK_PASSWORD
+  }
+  if (-not $RustDeskPassword) {
+    $secure = Read-Host -AsSecureString "RustDesk permanent password"
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+      $RustDeskPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    } finally {
+      [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+  }
+  $remoteScript = Join-Path $PSScriptRoot "install-remote-support.ps1"
+  $rustOutput = & $remoteScript -Tool rustdesk -RustDeskPassword $RustDeskPassword | Out-String
+  Write-Host $rustOutput
 }
-if ($DryRun) { $verify.DryRun = $true }
-if ($AutoLogonUser) { $verify.AutoLogonUser = $AutoLogonUser }
-& $kioskScript @verify
+
+$verifyArgs = @(
+  "-NoProfile",
+  "-ExecutionPolicy", "Bypass",
+  "-File", $kioskScript,
+  "-RepoRoot", $RepoRoot,
+  "-Verify"
+)
+if ($DryRun) { $verifyArgs += "-DryRun" }
+if ($AutoLogonUser) { $verifyArgs += @("-AutoLogonUser", $AutoLogonUser) }
+& powershell.exe @verifyArgs
+$verifyCode = $LASTEXITCODE
+if ($rustOutput -match "RustDesk ID:") {
+  Write-Host ""
+  foreach ($line in ($rustOutput -split "`r?`n")) {
+    if ($line -match "RustDesk ID:") { Write-Host $line }
+  }
+}
+if ($verifyCode -ne 0) { exit $verifyCode }

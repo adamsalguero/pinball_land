@@ -156,13 +156,23 @@
             </div>
           </section>
           <section>
-            <h2>This device</h2>
+            <h2>Updates</h2>
+            <p class="muted">At sign-in the PC checks GitHub main before the server starts, then again at this time. A bad update rolls back. Scores, photos, and settings stay put.</p>
             <p id="version-line" class="muted"></p>
+            <p id="update-status" class="muted"></p>
+            <form id="update-settings" class="add-row">
+              <label class="muted"><input id="update-enabled" type="checkbox" checked /> Automatic updates</label>
+              <label class="muted">Nightly time <input id="update-nightly" type="time" value="03:17" /></label>
+              <button class="btn" type="submit">Save update schedule</button>
+            </form>
+            <button id="update-now" class="btn" type="button">Update now</button>
+          </section>
+          <section>
+            <h2>This device</h2>
             <img id="join-qr" alt="Admin install QR" width="180" height="180" />
             <p id="join-link" class="muted"></p>
             <div id="device-list" class="stack"></div>
             <button id="revoke-all" class="btn danger" type="button">Sign out all devices</button>
-            <button id="update-now" class="btn" type="button">Check for updates</button>
           </section>
           <section>
             <h2>PIN</h2>

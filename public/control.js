@@ -1369,7 +1369,19 @@ async function renderPhotos() {
 async function renderAdmin() {
   const version = document.getElementById("version-line");
   if (!version || document.getElementById("app").hidden) return;
-  version.textContent = `Version ${current.version || ""}`;
+  const updates = current.updates || {};
+  const commit = updates.commit ? ` · ${updates.commit}` : "";
+  version.textContent = `Version ${current.version || ""}${commit}`;
+  const status = document.getElementById("update-status");
+  if (status) {
+    status.textContent = updates.lastAt
+      ? `Last update ${updates.lastAt}: ${updates.lastResult || "unknown"}. ${updates.lastDetail || ""}`
+      : "No update has run yet.";
+  }
+  const enabled = document.getElementById("update-enabled");
+  const nightly = document.getElementById("update-nightly");
+  if (enabled && document.activeElement !== enabled) enabled.checked = updates.enabled !== false;
+  if (nightly && document.activeElement !== nightly && updates.nightlyAt) nightly.value = updates.nightlyAt;
   const qr = document.getElementById("join-qr");
   if (qr && !qr.dataset.loaded) {
     qr.src = "/api/admin/join-qr";
@@ -1431,6 +1443,19 @@ document.getElementById("revoke-all").addEventListener("click", async () => {
   await api("/api/devices/revoke-all", { method: "POST" });
   localStorage.removeItem("pl-admin-device");
   location.reload();
+});
+document.getElementById("update-settings").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const saved = await api("/api/updates/settings", {
+    method: "PUT",
+    body: {
+      enabled: document.getElementById("update-enabled").checked,
+      nightlyAt: document.getElementById("update-nightly").value || "03:17",
+    },
+  });
+  if (saved.updates) current.updates = { ...current.updates, ...saved.updates };
+  toast(saved.note || "Update schedule saved");
+  renderAdmin();
 });
 document.getElementById("update-now").addEventListener("click", async () => {
   const result = await api("/api/updates/now", { method: "POST" });

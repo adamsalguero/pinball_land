@@ -20,6 +20,22 @@ That installs Node.js LTS if it is missing, installs the app, registers the serv
 
 Sign out and back in once so the wall windows open on the TVs. The server is already running from the command above.
 
+## Already installed on the Beelink
+
+Run this once in PowerShell so the PC updates itself from GitHub `main` at sign-in and again at 3:17 AM. It does not reinstall Node or touch scores, photos, or settings.
+
+```powershell
+cd C:\pinball-land
+git pull
+npm.cmd ci
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -RustDeskPassword "your-permanent-password"
+shutdown /r /t 0
+```
+
+The script prints the RustDesk ID at the end. Write that ID down in the venue password manager, not in git. Omit `-RustDeskPassword` and pass `-RustDesk` instead if you want a hidden password prompt.
+
+After the restart, sign-in runs the update before the server starts. If GitHub or Wi-Fi is down, the current version starts. If an update fails, it rolls back and still starts. Change the nightly time or turn updates off under Admin, Settings.
+
 ## Two home-screen apps
 
 On the iPhone or iPad, join the venue WiFi. In Safari:
