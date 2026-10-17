@@ -93,30 +93,20 @@ post.addEventListener("click", async () => {
   }
 });
 
-async function shareOrDownload(url, filename) {
-  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  if (ios && typeof navigator.share === "function") {
-    try {
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const file = new File([blob], filename, { type: blob.type || "image/jpeg" });
-      const payload = { files: [file], title: "Pinball Land" };
-      if (typeof navigator.canShare !== "function" || navigator.canShare(payload)) {
-        await navigator.share(payload);
-        return;
-      }
-    } catch (err) {
-      if (err && err.name === "AbortError") return;
-    }
-  }
-  const link = document.createElement("a");
+function openPhotoLightbox(url, filename) {
+  const box = document.getElementById("photo-lightbox");
+  const img = document.getElementById("photo-lightbox-img");
+  const link = document.getElementById("photo-lightbox-download");
+  img.src = url;
+  img.alt = filename || "Guest photo";
   link.href = `${url}${url.includes("?") ? "&" : "?"}download=1`;
-  link.download = filename;
-  link.rel = "noopener";
-  document.body.append(link);
-  link.click();
-  link.remove();
+  link.download = filename || "photo.jpg";
+  box.hidden = false;
 }
+
+document.getElementById("photo-lightbox-close").addEventListener("click", () => {
+  document.getElementById("photo-lightbox").hidden = true;
+});
 
 function when(stamp) {
   const n = Number(stamp);
@@ -138,14 +128,8 @@ async function loadFeed() {
     img.alt = photo.caption || "Guest photo";
     const copy = document.createElement("p");
     copy.textContent = [when(photo.createdAt), photo.guestName, photo.caption].filter(Boolean).join(" · ") || "On the wall";
-    const download = document.createElement("button");
-    download.type = "button";
-    download.className = "btn download";
-    download.textContent = "Save photo";
-    download.addEventListener("click", () => {
-      shareOrDownload(photo.url, `${photo.id}.jpg`).catch(() => {});
-    });
-    card.append(img, copy, download);
+    img.addEventListener("click", () => openPhotoLightbox(photo.url, `${photo.id}.jpg`));
+    card.append(img, copy);
     feed.append(card);
   }
 }

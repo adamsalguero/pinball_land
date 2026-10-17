@@ -9,7 +9,7 @@ test("transitions are subtle or off, and particles move on their own canvas fiel
   assert.equal(normalizeMotion("off"), "off");
   assert.equal(normalizeMotion(undefined), "subtle");
 
-  const { worldPoint, screenPoint, WORLD_W, SLICE_W } = require("../public/motion");
+  const { worldPoint, screenPoint, spiderSilk, WORLD_W, SLICE_W } = require("../public/motion");
   const halloween = createField("halloween", 2);
   assert.equal(halloween.particles.length, 24);
   assert.ok(halloween.particles.some((particle) => particle.kind === "pumpkin"));
@@ -27,6 +27,14 @@ test("transitions are subtle or off, and particles move on their own canvas fiel
   assert.ok(Math.abs(left.x - intoNext.x) < 0.01);
   assert.ok(Math.abs(left.y - intoNext.y) < 0.01);
   assert.equal(WORLD_W, SLICE_W * 3);
+  const silk = spiderSilk(screenPoint({ x: 400, y: 240 }, 0, 1920, 1080));
+  assert.equal(silk.y1, 0);
+  assert.equal(silk.x1, silk.x2);
+  assert.equal(silk.y2, 240);
+  const sliced = spiderSilk(screenPoint({ x: SLICE_W + 180, y: 310 }, 1, 1920, 1080));
+  assert.equal(sliced.y1, 0);
+  assert.ok(Math.abs(sliced.x1 - 180) < 0.01);
+  assert.ok(Math.abs(sliced.y2 - 310) < 0.01);
   const later = worldPoint(halloween.particles.find((particle) => particle.kind === "bat"), elapsed + 4);
   const earlier = worldPoint(halloween.particles.find((particle) => particle.kind === "bat"), elapsed);
   assert.notEqual(later.x, earlier.x);

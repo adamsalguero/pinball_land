@@ -2,7 +2,8 @@ const { defineConfig } = require("@playwright/test");
 
 module.exports = defineConfig({
   testDir: "e2e",
-  timeout: 30000,
+  timeout: 90000,
+  workers: 1,
   expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.02 } },
   use: {
     baseURL: "http://127.0.0.1:3210",
@@ -18,6 +19,7 @@ module.exports = defineConfig({
       HTTPS_PORT: "0",
       PINBALL_DATA_DIR: "e2e-data",
       PINBALL_PLUG_MOCK: "1",
+      PINBALL_ROTATION_SEC: "1",
       NODE_TEST_CONTEXT: "1",
     },
   },

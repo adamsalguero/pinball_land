@@ -15,6 +15,8 @@ media/**
 !media/halloween/.gitkeep
 !media/christmas/
 !media/christmas/.gitkeep
+!media/bundled/
+!media/bundled/*.mp4
 tools/realesrgan/
 .DS_Store
 *.log

@@ -159,29 +159,42 @@ function drawPumpkin(ctx, size) {
   ctx.fill();
 }
 
+function spiderSilk(point) {
+  const x = Number(point?.x) || 0;
+  const y = Number(point?.y) || 0;
+  return { x1: x, y1: 0, x2: x, y2: y };
+}
+
+function strokeSpiderSilk(ctx, point, size) {
+  const silk = spiderSilk(point);
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 236, 214, 0.8)";
+  ctx.lineWidth = Math.max(1, (Number(size) || 28) * 0.02);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(silk.x1, silk.y1);
+  ctx.lineTo(silk.x2, silk.y2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawSpider(ctx, size, phase) {
   const pose = Number(phase) || 0;
-  ctx.strokeStyle = "rgba(255, 236, 214, 0.72)";
-  ctx.lineWidth = Math.max(1.25, size * 0.035);
-  ctx.beginPath();
-  ctx.moveTo(0, -size * 2.4);
-  ctx.lineTo(0, -size * 0.72);
-  ctx.stroke();
   ctx.strokeStyle = "#3a2a22";
-  ctx.lineWidth = Math.max(1.4, size * 0.055);
+  ctx.lineWidth = Math.max(1.2, size * 0.045);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   for (let i = 0; i < 8; i += 1) {
     const side = i < 4 ? -1 : 1;
     const index = i % 4;
-    const hipY = (index - 1.5) * size * 0.16;
-    const swing = Math.sin(pose * 3 + index * 1.2) * size * 0.16;
-    const lift = (index % 2 === 0 ? -1 : 1) * size * 0.22 + swing * 0.35;
-    const hipX = side * size * 0.16;
-    const kneeX = side * size * (0.42 + index * 0.03);
+    const hipY = (index - 1.5) * size * 0.1;
+    const swing = Math.sin(pose * 3 + index * 1.2) * size * 0.12;
+    const lift = (index % 2 === 0 ? -1 : 1) * size * 0.16 + swing * 0.35;
+    const hipX = side * size * 0.1;
+    const kneeX = side * size * (0.48 + index * 0.04);
     const kneeY = hipY + lift;
-    const footX = side * size * (0.78 + Math.cos(pose * 3 + index) * 0.08);
-    const footY = hipY + size * 0.28 + Math.max(0, -lift) * 0.15;
+    const footX = side * size * (0.9 + Math.cos(pose * 3 + index) * 0.06);
+    const footY = hipY + size * 0.22 + Math.max(0, -lift) * 0.12;
     ctx.beginPath();
     ctx.moveTo(hipX, hipY);
     ctx.quadraticCurveTo(kneeX, kneeY, footX, footY);
@@ -189,26 +202,26 @@ function drawSpider(ctx, size, phase) {
   }
   ctx.fillStyle = "#4a3428";
   ctx.beginPath();
-  ctx.ellipse(0, size * 0.08, size * 0.34, size * 0.42, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, size * 0.04, size * 0.16, size * 0.2, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#2c1d16";
   ctx.beginPath();
-  ctx.ellipse(-size * 0.08, size * 0.16, size * 0.16, size * 0.22, -0.4, 0, Math.PI * 2);
+  ctx.ellipse(-size * 0.04, size * 0.08, size * 0.08, size * 0.11, -0.4, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#5c4034";
   ctx.beginPath();
-  ctx.arc(0, -size * 0.42, size * 0.2, 0, Math.PI * 2);
+  ctx.arc(0, -size * 0.2, size * 0.11, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#fff6ea";
-  for (const eye of [-0.07, 0.07]) {
+  for (const eye of [-0.045, 0.045]) {
     ctx.beginPath();
-    ctx.arc(eye * size, -size * 0.46, size * 0.045, 0, Math.PI * 2);
+    ctx.arc(eye * size, -size * 0.22, size * 0.028, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.fillStyle = "#1a100c";
-  for (const eye of [-0.07, 0.07]) {
+  for (const eye of [-0.045, 0.045]) {
     ctx.beginPath();
-    ctx.arc(eye * size, -size * 0.45, size * 0.02, 0, Math.PI * 2);
+    ctx.arc(eye * size, -size * 0.215, size * 0.012, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -305,6 +318,7 @@ function drawField(ctx, field, width, height, options = {}) {
     const world = worldPoint(particle, elapsed);
     const point = screenPoint(world, slot, width, height);
     if (point.x < -margin || point.x > width + margin || point.y < -margin || point.y > height + margin) continue;
+    if (particle.kind === "spider") strokeSpiderSilk(ctx, point, particle.size);
     ctx.save();
     ctx.translate(point.x, point.y);
     if (particle.kind === "pumpkin") drawPumpkin(ctx, particle.size);
@@ -363,6 +377,8 @@ const motionApi = {
   drawField,
   drawSpider,
   drawBat,
+  spiderSilk,
+  strokeSpiderSilk,
   pinPositions,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = motionApi;

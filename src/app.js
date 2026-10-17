@@ -20,6 +20,7 @@ const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./me
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards } = require("./catalog");
+const { bundledCards, bundledFile } = require("./bundled");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
 const { isInside, defaultDataDir, dataLayout } = require("./paths");
 const { launchDetachedUpdate, launchRegisterTasks, readGitCommit, readUpdateStatusSync } = require("./self-update");
@@ -64,16 +65,51 @@ function machineAssetUrl(board, kind) {
   return `/media/machines/${encodeURIComponent(board.id)}/${kind === "playfield" ? "playfield" : kind === "logo" ? "logo" : "art"}`;
 }
 
+function machineFileUrl(board, file) {
+  if (!board || !file) return null;
+  return `/media/machines/${encodeURIComponent(board.id)}/file/${encodeURIComponent(path.basename(file))}`;
+}
+
+function boardArtUrls(board) {
+  const urls = [];
+  const push = (url) => {
+    if (url && !urls.includes(url)) urls.push(url);
+  };
+  push(machineAssetUrl(board, "art"));
+  push(machineAssetUrl(board, "playfield"));
+  push(machineAssetUrl(board, "logo"));
+  for (const file of board?.imageFiles || []) push(machineFileUrl(board, file));
+  for (const row of board?.rows || []) {
+    if (row?.proofFile && /^[0-9a-f-]{36}\.jpg$/i.test(row.proofFile)) {
+      push(`/media/score-proofs/${row.proofFile}`);
+    }
+  }
+  return urls;
+}
+
 function publicLeaderboards(leaderboards) {
-  return (leaderboards || []).map((board) => ({
-    ...board,
-    artUrl: machineAssetUrl(board, "art"),
-    playfieldUrl: machineAssetUrl(board, "playfield"),
-    logoUrl: machineAssetUrl(board, "logo"),
-    artFile: undefined,
-    playfieldFile: undefined,
-    logoFile: undefined,
-  }));
+  return (leaderboards || []).map((board) => {
+    const artUrls = boardArtUrls(board);
+    return {
+      ...board,
+      artUrl: artUrls[0] || machineAssetUrl(board, "art"),
+      artUrls,
+      playfieldUrl: machineAssetUrl(board, "playfield"),
+      logoUrl: machineAssetUrl(board, "logo"),
+      artFile: undefined,
+      playfieldFile: undefined,
+      logoFile: undefined,
+      imageFiles: undefined,
+    };
+  });
+}
+
+function effectiveRotation(state) {
+  const override = Number.parseInt(process.env.PINBALL_ROTATION_SEC || "", 10);
+  if (Number.isFinite(override) && override >= 1 && override <= 120) {
+    return { intervalSec: override, minInterval: 1 };
+  }
+  return { intervalSec: state?.rotation?.intervalSec, minInterval: 10 };
 }
 
 function createApp({
@@ -114,6 +150,7 @@ function createApp({
     now,
   });
   let restartToken = 0;
+  const blockedVideos = new Set();
   const motionSync = {
     seed: 0x50494e,
     epoch: Date.now(),
@@ -250,6 +287,7 @@ function createApp({
     const playlist = buildPlaylist(state, {
       videos: library.list(),
       allAges: config.media.allAges,
+      bundled: bundledCards(appRoot),
       starters: starterCards(catalogItems, {
         theme: state.theme,
         allAges: config.media.allAges,
@@ -258,10 +296,12 @@ function createApp({
         disabledIds: config.media.disabledIds,
       }),
       youtube: config.youtube?.[state.theme] || [],
-    });
+    }).filter((card) => !(card.type === "video" && blockedVideos.has(card.id)));
+    const timing = effectiveRotation(state);
     const rotationPlan = planRotation(playlist, {
       startedAt: state.rotation.startedAt,
-      intervalSec: state.rotation.intervalSec,
+      intervalSec: timing.intervalSec,
+      minInterval: timing.minInterval,
       screenCount: displays.count,
       layout,
       now: Date.now(),
@@ -700,6 +740,7 @@ function createApp({
             artFile: cached.artFile,
             playfieldFile: cached.playfieldFile,
             logoFile: cached.logoFile,
+            imageFiles: cached.imageFiles || [],
             videoUrl: cached.videoUrl,
           };
         } catch {
@@ -886,6 +927,14 @@ function createApp({
   app.get("/media/machines/:id/logo", (req, res) => {
     const board = machineById(req.params.id);
     sendMachineFile(res, board, board?.logoFile);
+  });
+
+  app.get("/media/machines/:id/file/:name", (req, res) => {
+    const board = machineById(req.params.id);
+    const name = path.basename(String(req.params.name || ""));
+    const files = [board?.artFile, board?.playfieldFile, board?.logoFile, ...(board?.imageFiles || [])].filter(Boolean);
+    const match = files.find((file) => path.basename(file) === name);
+    sendMachineFile(res, board, match);
   });
 
   app.put("/api/displays", requirePin, async (req, res, next) => {
@@ -1078,6 +1127,10 @@ function createApp({
     const dir = path.join(root, "logs");
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(path.join(dir, "video.log"), `${new Date().toISOString()} ${reason} ${id} ${title}\n`);
+    if (id && !blockedVideos.has(id)) {
+      blockedVideos.add(id);
+      broadcast();
+    }
     sendJson(res, 200, { ok: true });
   });
 
@@ -1233,6 +1286,12 @@ function createApp({
     req.on("close", () => {
       if (!req.complete && !failed) fail(Object.assign(new Error("Upload interrupted"), { status: 400 }));
     });
+  });
+
+  app.get("/media/bundled/:file", (req, res) => {
+    const filePath = bundledFile(appRoot, req.params.file);
+    if (!filePath) return res.status(404).send("Not found");
+    sendByteRange(req, res, filePath);
   });
 
   app.get("/media/videos/:id", lanRequired, (req, res) => {
@@ -1477,11 +1536,15 @@ function createApp({
     }
   });
 
-  app.get("/media/score-proofs/:file", requirePin, (req, res) => {
+  app.get("/media/score-proofs/:file", (req, res) => {
     const name = String(req.params.file || "");
     if (!/^[0-9a-f-]{36}\.jpg$/i.test(name)) return res.status(404).send("Not found");
-    const submission = (store.getState().scoreSubmissions || []).find((row) => row.proofFile === name);
-    if (!submission) return res.status(404).send("Not found");
+    const state = store.getState();
+    const onBoard = [...(state.leaderboards || []), ...(state.archivedLeaderboards || [])].some((board) =>
+      (board.rows || []).some((row) => row.proofFile === name)
+    );
+    const submission = (state.scoreSubmissions || []).find((row) => row.proofFile === name);
+    if (!onBoard && !(submission && isAuthed(req))) return res.status(404).send("Not found");
     const filePath = path.resolve(proofDir, name);
     if (!isInside(proofDir, filePath) || !fs.existsSync(filePath)) return res.status(404).send("Not found");
     res.setHeader("Cache-Control", "no-store");
@@ -2033,6 +2096,20 @@ function createApp({
     }
   }, 15000);
   if (typeof sweepTimer.unref === "function") sweepTimer.unref();
+
+  let rotationSignature = "";
+  const rotationTimer = setInterval(() => {
+    try {
+      const plan = payload().rotationPlan;
+      const signature = JSON.stringify(plan);
+      if (signature === rotationSignature) return;
+      rotationSignature = signature;
+      broadcast();
+    } catch (err) {
+      console.error(err);
+    }
+  }, 200);
+  if (typeof rotationTimer.unref === "function") rotationTimer.unref();
 
   function attachWebSocket(server) {
     const wss = new WebSocketServer({ server, path: "/ws" });

@@ -196,13 +196,13 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
     async cacheMachine(opdbId) {
       const id = safeId(opdbId);
       if (!id || !cacheDir || !key) {
-        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, videoUrl: null };
+        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, imageFiles: [], videoUrl: null };
       }
       const dir = path.join(cacheDir, id);
       await fs.mkdir(dir, { recursive: true });
       const machine = await this.getMachine(id);
       if (!machine) {
-        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, videoUrl: null };
+        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, imageFiles: [], videoUrl: null };
       }
       await fs.writeFile(path.join(dir, "machine.json"), JSON.stringify(machine, null, 2));
       async function saveNamed(url, stem) {
@@ -221,7 +221,13 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
       const artFile = await saveNamed(pickArtUrl(machine), "art");
       const playfieldFile = await saveNamed(pickPlayfieldUrl(machine), "playfield");
       const logoFile = await saveNamed(pickLogoUrl(machine), "logo");
-      return { machine, artFile, playfieldFile, logoFile, videoUrl: pickVideoUrl(machine) };
+      const imageFiles = [];
+      const images = collectImages(machine).slice(0, 12);
+      for (let i = 0; i < images.length; i += 1) {
+        const saved = await saveNamed(imageUrl(images[i]), `image-${i}`);
+        if (saved) imageFiles.push(saved);
+      }
+      return { machine, artFile, playfieldFile, logoFile, imageFiles, videoUrl: pickVideoUrl(machine) };
     },
   };
 }

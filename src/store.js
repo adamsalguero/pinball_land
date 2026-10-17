@@ -192,10 +192,12 @@ function normalizeRow(row) {
     return { id: id(), name: "", score: 0 };
   }
   const score = Number.parseInt(row.score, 10);
+  const proofFile = typeof row.proofFile === "string" && /^[0-9a-f-]{36}\.jpg$/i.test(row.proofFile) ? row.proofFile : null;
   return {
     id: typeof row.id === "string" && row.id ? row.id : id(),
     name: String(row.name || "").trim(),
     score: Number.isFinite(score) ? score : 0,
+    proofFile,
   };
 }
 
@@ -227,6 +229,9 @@ function normalizeLeaderboard(board) {
     artFile: board.artFile ? String(board.artFile) : null,
     playfieldFile: board.playfieldFile ? String(board.playfieldFile) : null,
     logoFile: board.logoFile ? String(board.logoFile) : null,
+    imageFiles: Array.isArray(board.imageFiles)
+      ? board.imageFiles.map((file) => String(file)).filter((file) => file && !file.includes("..")).slice(0, 24)
+      : [],
     videoUrl: board.videoUrl ? String(board.videoUrl) : null,
     rows: Array.isArray(board.rows) ? board.rows.map(normalizeRow) : [],
     archivedAt: Number.isFinite(Number(board.archivedAt)) ? Number(board.archivedAt) : null,
@@ -535,6 +540,7 @@ class Store {
       artFile: extra.artFile || null,
       playfieldFile: extra.playfieldFile || null,
       logoFile: extra.logoFile || null,
+      imageFiles: extra.imageFiles || [],
       videoUrl: extra.videoUrl || null,
       rows: extra.rows || [],
     });
@@ -772,7 +778,7 @@ class Store {
     if (status === "approved") {
       const board = this.findBoard(item.boardId);
       if (!board) throw Object.assign(new Error("That machine is no longer on a board"), { status: 404 });
-      board.rows.push(normalizeRow({ name: item.name, score: item.score }));
+      board.rows.push(normalizeRow({ name: item.name, score: item.score, proofFile: item.proofFile }));
       board.rows = sortRows(board.rows);
     }
     return this.commit();

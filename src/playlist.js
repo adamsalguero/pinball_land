@@ -81,6 +81,10 @@ function buildPlaylist(state, options = {}) {
       cards.push({ type: "leaderboard", id: board.id });
     }
   }
+  const bundled = Array.isArray(options.bundled) ? options.bundled : [];
+  for (const clip of bundled) {
+    if (clip && clip.type === "video" && clip.url) cards.push(clip);
+  }
   const starters = Array.isArray(options.starters) ? options.starters : [];
   for (const starter of starters) cards.push(starter);
   const youtube = Array.isArray(options.youtube) ? options.youtube : [];
@@ -103,6 +107,7 @@ function buildPlaylist(state, options = {}) {
   return cards;
 }
 
+const rotationApi = require("../public/rotation");
 const {
   currentTick,
   tickForSlot,
@@ -110,8 +115,7 @@ const {
   hash32,
   videoStartSec,
   rotationKey,
-  planRotation,
-} = require("../public/rotation");
+} = rotationApi;
 
 function cycleIndex(startedAt, dwellSec, length, slotIndex = 0, now = Date.now()) {
   const count = Math.max(1, Number(length) || 1);
@@ -130,6 +134,26 @@ function amenityAt(startedAt, slotIndex = 0, now = Date.now()) {
 
 function logoAt(startedAt, slotIndex = 0, now = Date.now()) {
   return LOGO_ORDER[cycleIndex(startedAt, AMENITY_DWELL_SEC, LOGO_ORDER.length, slotIndex, now)];
+}
+
+function concretizeCard(card, slotIndex, startedAt, now) {
+  if (!card) return card;
+  if (card.type === "amenity" && (card.cycle || card.id === "amenities")) {
+    return { ...card, id: amenityAt(startedAt, slotIndex, now), cycle: false };
+  }
+  if (card.type === "logo" && card.cycle) {
+    return { ...card, key: logoAt(startedAt, slotIndex, now), cycle: false };
+  }
+  return card;
+}
+
+function planRotation(playlist, options = {}) {
+  const plan = rotationApi.planRotation(playlist, options);
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  for (const slot of ["1", "2", "3"]) {
+    plan[slot] = concretizeCard(plan[slot], Number(slot) - 1, options.startedAt, now);
+  }
+  return plan;
 }
 
 function slotIndexForDisplay(slotId) {

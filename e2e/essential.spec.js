@@ -53,7 +53,7 @@ test("mock plug toggle and video section", async ({ page }) => {
   await expect(plug.locator("option")).toHaveCount(2);
   await plug.selectOption("mock-1");
   await expect(page.getByRole("button", { name: "On" }).first()).toBeEnabled();
-  await page.getByRole("button", { name: "All on" }).click();
+  await page.getByRole("button", { name: "TVs On" }).click();
   await expect(page.getByText("· On")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Videos", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "YouTube" })).toBeVisible();

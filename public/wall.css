@@ -53,26 +53,37 @@ html, body, .screen {
 .board-header h1 { font-size: clamp(36px, 4vw, 72px); }
 .podium {
   display: grid;
-  grid-template-columns: 1fr 1.15fr 1fr;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.28fr) minmax(0, 1fr);
+  gap: 1.2vw;
   align-items: end;
-  margin: 18px 0 22px;
+  width: 100%;
+  min-width: 0;
+  margin: 1.2vh 0 1.6vh;
 }
 .podium-card {
-  background: rgba(255, 255, 255, 0.04);
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--line);
   border-radius: 22px;
-  padding: 18px 16px 16px;
+  padding: 1.6vh 0.9vw 1.4vh;
   text-align: center;
   animation: rise 700ms var(--ease) both;
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.22);
 }
-.podium-card.place-1 { min-height: 0; border: 3px solid #d4af37; }
-.podium-card.place-2 { border: 3px solid #c0c0c0; }
-.podium-card.place-3 { border: 3px solid #b87333; }
+.podium-card.place-1 {
+  min-height: 24vh;
+  border: 4px solid #d4af37;
+  padding-top: 2.4vh;
+  padding-bottom: 2vh;
+}
+.podium-card.place-2 { min-height: 17vh; border: 3px solid #c0c0c0; }
+.podium-card.place-3 { min-height: 17vh; border: 3px solid #b87333; }
 .machine-logo { display: block; height: 7vh; width: auto; max-width: 28vw; object-fit: contain; margin-bottom: 1vh; }
-.podium-card .place { color: var(--rank); font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase; }
-.podium-card .who { display: block; font-size: clamp(18px, 2vw, 32px); margin: 8px 0; max-width: 100%; }
-.podium-card .points { font-variant-numeric: tabular-nums; color: var(--beige); }
+.podium-card .place { color: var(--rank); font-size: clamp(12px, 1.4vh, 16px); letter-spacing: 0.18em; text-transform: uppercase; }
+.podium-card .who { font-size: clamp(18px, 1.7vw, 32px); margin: 0.8vh 0 0.3vh; font-weight: 700; }
+.podium-card.place-1 .who { font-size: clamp(26px, 2.5vw, 48px); }
+.podium-card .points { font-variant-numeric: tabular-nums; color: var(--beige); font-size: clamp(16px, 1.5vw, 28px); font-weight: 700; }
+.podium-card.place-1 .points { font-size: clamp(20px, 2vw, 36px); }
 .board-row { border-radius: 16px; padding-inline: 12px; }
 .rank, .name, .score, .podium-card .who, .podium-card .points, .podium-card .place {
   line-height: 1.25;
@@ -98,26 +109,40 @@ html, body, .screen {
 .pin-wall { position: absolute; inset: 0; }
 .pin-card {
   position: absolute;
-  width: min(200px, 16vw);
   background: #f4efe6;
   color: #3a342c;
-  padding: 12px 12px 36px;
+  padding: 12px 12px 28px;
   border-radius: 2px;
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
-  animation: pin-in 700ms var(--ease) both;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.18), 0 16px 28px rgba(0, 0, 0, 0.28);
+  transform-origin: center center;
+  animation: pin-sway 11s ease-in-out infinite alternate;
 }
 .pin-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
-.pin-card span { display: block; margin-top: 8px; font-size: 14px; max-width: 100%; }
+.pin-card span {
+  display: block;
+  margin-top: 8px;
+  font-size: clamp(11px, 1.2vh, 15px);
+  line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+}
 .pin-card.is-new { box-shadow: 0 0 0 2px var(--accent), 0 18px 40px rgba(0, 0, 0, 0.35); }
 .pin-card::before {
   content: "";
   position: absolute;
-  top: 8px; left: 50%;
-  width: 14px; height: 14px;
+  z-index: 2;
+  top: 7px;
+  left: 50%;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--pin);
   transform: translateX(-50%);
-  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.25);
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.25), 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+@keyframes pin-sway {
+  from { transform: translate(-50%, -50%) rotate(var(--tilt)) scale(var(--pin-scale)); }
+  to { transform: translate(calc(-50% + var(--drift-x)), calc(-50% + var(--drift-y))) rotate(var(--tilt)) scale(var(--pin-scale)); }
 }
 .pin-qr {
   position: absolute;

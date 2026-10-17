@@ -1,19 +1,20 @@
-function clampInterval(value) {
+function clampInterval(value, min = 10) {
+  const floor = Math.min(30, Math.max(1, Number(min) || 10));
   const n = Number.parseInt(value, 10);
-  if (!Number.isFinite(n)) return 30;
-  return Math.min(120, Math.max(10, n));
+  if (!Number.isFinite(n)) return Math.max(floor, 30);
+  return Math.min(120, Math.max(floor, n));
 }
 
-function currentTick(startedAt, intervalSec, now = Date.now()) {
-  const ms = clampInterval(intervalSec) * 1000;
+function currentTick(startedAt, intervalSec, now = Date.now(), min = 10) {
+  const ms = clampInterval(intervalSec, min) * 1000;
   const start = Number(startedAt);
   const origin = Number.isFinite(start) ? start : now;
   return Math.floor(Math.max(0, now - origin) / ms);
 }
 
 // Every screen shares one dwell clock. Slot index only picks a different card.
-function tickForSlot(startedAt, intervalSec, _slotIndex, _screenCount, now = Date.now()) {
-  return currentTick(startedAt, intervalSec, now);
+function tickForSlot(startedAt, intervalSec, _slotIndex, _screenCount, now = Date.now(), min = 10) {
+  return currentTick(startedAt, intervalSec, now, min);
 }
 
 function cardForSlot(playlist, tick, slotIndex) {
@@ -48,8 +49,8 @@ function rotationKey(card) {
   if (card.type === "logo") return `logo:${card.key || "cycle"}`;
   if (card.type === "amenity") return "amenity";
   if (card.type === "clock") return "clock";
-  if (card.type === "pinboard" || card.type === "collage") return "pinboard";
-  if (card.type === "leaderboard") return `board:${card.id || ""}`;
+  if (card.type === "pinboard" || card.type === "collage" || card.type === "photos") return "pinboard";
+  if (card.type === "leaderboard") return "leaderboard";
   if (card.type === "video") return `video:${card.id || ""}`;
   if (card.type === "youtube") return `youtube:${card.id || ""}`;
   return `${card.type}:${card.id || card.key || ""}`;
@@ -61,14 +62,15 @@ function manualCard(content, leaderboardId, playlist) {
   if (content === "leaderboard") return { type: "leaderboard", id: leaderboardId || null };
   if (content === "pinboard") return { type: "pinboard", id: "pinboard", span: false };
   if (content === "video") {
-    const video = (playlist || []).find((card) => card.type === "video");
-    return video ? { ...video, mode: "card" } : { type: "video", id: "empty", empty: true, mode: "card" };
+    const video = (playlist || []).find((card) => card.type === "video" && card.url && !card.empty);
+    return video ? { ...video, mode: "card", loop: video.loop !== false } : null;
   }
   return null;
 }
 
 function withVideoStart(card, tick) {
   if (!card || card.type !== "video" || card.empty) return card;
+  if (card.stream) return { ...card, startSec: 0 };
   return { ...card, startSec: videoStartSec(card.id, tick, card.durationSec) };
 }
 
@@ -76,7 +78,8 @@ function planRotation(playlist, options = {}) {
   const list = Array.isArray(playlist) ? playlist : [];
   const screens = Math.max(1, Math.min(3, Number(options.screenCount) || 3));
   const layout = options.layout || {};
-  const tick = currentTick(options.startedAt, options.intervalSec, options.now);
+  const min = Number(options.minInterval) || 10;
+  const tick = currentTick(options.startedAt, options.intervalSec, options.now, min);
   const used = new Set();
   const slots = { 1: null, 2: null, 3: null };
   for (const slot of ["1", "2", "3"]) {

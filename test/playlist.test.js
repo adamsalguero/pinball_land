@@ -161,3 +161,39 @@ test("screens advance together every dwell and stay on different cards", () => {
   assert.equal(amenityAt(0, 0, AMENITY_DWELL_SEC * 2000), "events");
   assert.equal(amenityAt(0, 0, AMENITY_DWELL_SEC * 3000), "arcade");
 });
+
+test("leaderboard and pinboard subtypes count as one card, and video mode plays a real clip", () => {
+  const playlist = [
+    { type: "leaderboard", id: "a" },
+    { type: "leaderboard", id: "b" },
+    { type: "pinboard", id: "pinboard" },
+    { type: "collage", id: "collage" },
+    { type: "logo", key: "pinnacle" },
+    { type: "clock", id: "clock" },
+    { type: "video", id: "bundled:arcade-lights", url: "/media/bundled/arcade-lights.mp4", durationSec: 6, local: true },
+  ];
+  assert.equal(rotationKey(playlist[0]), "leaderboard");
+  assert.equal(rotationKey(playlist[0]), rotationKey(playlist[1]));
+  assert.equal(rotationKey(playlist[2]), "pinboard");
+  assert.equal(rotationKey(playlist[2]), rotationKey(playlist[3]));
+  const layout = {
+    1: { content: "video", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  for (let tick = 0; tick < 12; tick += 1) {
+    const plan = planRotation(playlist, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now: tick * 30000,
+    });
+    const keys = ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
+    assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
+    assert.equal(plan["1"].type, "video");
+    assert.equal(plan["1"].url, "/media/bundled/arcade-lights.mp4");
+    assert.equal(keys.filter((key) => key === "leaderboard").length <= 1, true);
+    assert.equal(keys.filter((key) => key === "pinboard").length <= 1, true);
+  }
+});

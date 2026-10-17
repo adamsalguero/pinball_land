@@ -74,7 +74,23 @@ input[type="file"][hidden] {
   background: var(--panel); border-radius: 20px; overflow: hidden; box-shadow: var(--shadow);
   backdrop-filter: blur(16px);
 }
-.card img { width: 100%; display: block; aspect-ratio: 4 / 3; object-fit: cover; }
+.card img { width: 100%; display: block; aspect-ratio: 4 / 3; object-fit: cover; cursor: pointer; }
+.lightbox {
+  position: fixed; inset: 0; z-index: 30;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; padding: 24px; background: rgba(10, 8, 12, 0.94);
+}
+.lightbox[hidden] { display: none !important; }
+.lightbox img {
+  max-width: 100%; max-height: 75vh; object-fit: contain;
+  -webkit-touch-callout: default; cursor: default;
+}
+.lightbox-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 48px; height: 48px; border: 0; border-radius: 999px;
+  background: #fff; color: #1a1020; font-size: 28px; line-height: 1;
+}
+.lightbox .btn.download { margin: 0; }
 .card p, .score-card { margin: 0; padding: 12px 14px; }
 .score-card { display: flex; justify-content: space-between; align-items: center; min-height: 56px; }
 @media (min-width: 800px) {

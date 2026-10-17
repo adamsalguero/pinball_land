@@ -23,7 +23,7 @@
         <iframe id="present-frame" title="Presentation" hidden></iframe>
       </div>
       <div id="video-panel" class="panel video-panel" hidden>
-        <video id="wall-video" autoplay playsinline></video>
+        <video id="wall-video" autoplay muted playsinline></video>
         <p id="video-fallback" class="video-fallback" data-fit="4" hidden>Video</p>
       </div>
       <div id="logo" class="panel logo-panel" hidden>
@@ -52,12 +52,12 @@
           <header class="board-header">
             <img id="machine-logo" class="machine-logo" alt="" hidden />
             <p class="board-kicker">Pinnacle Entertainment Center</p>
-            <h1 id="board-title" data-fit="2">Leaderboard</h1>
-            <p id="board-meta" class="board-meta" data-fit="2" hidden></p>
+            <h1 id="board-title" data-fit="1" data-fit-full="1">Leaderboard</h1>
+            <p id="board-meta" class="board-meta" data-fit="1" data-fit-full="1" hidden></p>
           </header>
+          <div id="podium" class="podium" hidden></div>
           <ol id="board-rows" class="board-rows"></ol>
           <p id="board-empty" class="board-empty" hidden>No scores yet</p>
-          <div id="podium" class="podium" hidden></div>
         </div>
       </div>
       <div id="clock" class="panel clock-panel" hidden>

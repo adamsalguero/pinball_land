@@ -84,27 +84,48 @@ function fitText(el) {
   const full = el.dataset.full ?? "";
   if (!full) return;
   el.style.fontSize = "";
-  el.style.lineHeight = "1.25";
+  el.style.maxHeight = "";
+  el.style.lineHeight = "";
   el.textContent = full;
   if (el.clientWidth < 2 || el.clientHeight < 2) return;
+  const start = Math.max(11, Math.round(parseFloat(getComputedStyle(el).fontSize) || 32));
+  const boxHeight = el.clientHeight;
   const overflows = () => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+  el.style.fontSize = `${start}px`;
   if (!overflows()) return;
-  let lo = 0;
-  let hi = full.length;
-  let best = "…";
+  // Keep the laid-out box. An em max-height would shrink with the font and the line would never fit.
+  el.style.maxHeight = `${boxHeight}px`;
+  el.style.lineHeight = "1.15";
+  const keepWhole = el.dataset.fitFull === "1";
+  const absurd = !keepWhole && full.length > 180;
+  const min = keepWhole ? 6 : absurd ? 8 : 11;
+  let lo = min;
+  let hi = start;
+  let best = min;
   while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    el.textContent = mid >= full.length ? full : `${full.slice(0, mid).trimEnd()}…`;
+    const mid = (lo + hi) >> 1;
+    el.style.fontSize = `${mid}px`;
     if (overflows()) hi = mid - 1;
     else {
-      best = el.textContent;
+      best = mid;
       lo = mid + 1;
     }
   }
-  el.textContent = best;
-  while (el.textContent.length > 1 && overflows()) {
-    el.textContent = `${el.textContent.slice(0, -2).trimEnd()}…`;
+  el.style.fontSize = `${best}px`;
+  if (!overflows() || el.dataset.fitFull === "1" || !absurd) return;
+  lo = 1;
+  hi = full.length;
+  let fitted = "…";
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    el.textContent = mid >= full.length ? full : `${full.slice(0, mid).trimEnd()}…`;
+    if (overflows()) hi = mid - 1;
+    else {
+      fitted = el.textContent;
+      lo = mid + 1;
+    }
   }
+  el.textContent = fitted;
 }
 
 function fitVisibleText() {
@@ -247,7 +268,7 @@ function renderRows(rows) {
       const place = top.indexOf(row) + 1;
       const card = document.createElement("article");
       card.className = `podium-card place-${place}`;
-      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="2"></span><span class="points" data-fit="1"></span>`;
+      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="1" data-fit-full="1"></span><span class="points" data-fit="1" data-fit-full="1"></span>`;
       setFit(card.querySelector(".who"), row.name || "—");
       setFit(card.querySelector(".points"), formatScore(row.score));
       podium.append(card);
@@ -262,10 +283,12 @@ function renderRows(rows) {
     const name = document.createElement("span");
     name.className = "name";
     name.setAttribute("data-fit", "1");
+    name.setAttribute("data-fit-full", "1");
     setFit(name, row.name || "—");
     const score = document.createElement("span");
     score.className = "score";
     score.setAttribute("data-fit", "1");
+    score.setAttribute("data-fit-full", "1");
     setFit(score, formatScore(row.score));
     li.append(rank, name, score);
     boardRows.append(li);
@@ -273,18 +296,67 @@ function renderRows(rows) {
   if (top.length && !rest.length) boardRows.hidden = true;
 }
 
+let shownBoard = null;
+
+function boardArtList(board) {
+  if (!board || board.kind !== "machine") return [];
+  const urls = Array.isArray(board.artUrls) ? board.artUrls.filter(Boolean) : [];
+  if (urls.length) return urls;
+  return board.artUrl ? [board.artUrl] : [];
+}
+
+function currentBoardArt(board) {
+  const urls = boardArtList(board);
+  if (!urls.length) return null;
+  const cursor = Math.floor(Math.max(0, Date.now() - clockSkew) / 8000);
+  return urls[cursor % urls.length];
+}
+
+function paintBoardArt() {
+  const board = shownBoard;
+  const artUrl = currentBoardArt(board);
+  const isMachine = board?.kind === "machine";
+  boardPanel.classList.toggle("has-art", Boolean(isMachine && artUrl));
+  if (!artUrl) {
+    machineArtWrap.hidden = true;
+    machineArt.hidden = true;
+    machineVideo.hidden = true;
+    machineArt.removeAttribute("src");
+    delete machineArt.dataset.src;
+    return;
+  }
+  machineVideo.hidden = true;
+  machineArtWrap.hidden = false;
+  machineArt.hidden = false;
+  machineArt.alt = board.name || "Machine art";
+  if (machineArt.dataset.src !== artUrl) {
+    machineArt.dataset.src = artUrl;
+    machineArt.src = artUrl;
+  }
+}
+
+const NAMED_BOARD_ROWS = [
+  { id: "named-1", name: "Alexander Montgomery-Parra", score: 500000000 },
+  { id: "named-2", name: "Adam Salguero", score: 6000 },
+  { id: "named-3", name: "RetroHardroc", score: 50 },
+  { id: "named-4", name: "John Smith", score: 200 },
+  { id: "named-5", name: "Montgomery Alexander-Parra", score: 5000 },
+];
+
 function showBoard(board) {
   setMode("board");
   stopWallVideo();
   teardownPresent();
-  const rows = FIXTURE
-    ? (board?.rows || []).concat([
-      { id: "long-a", name: LONG_TEXT, score: 2450000 },
-      { id: "long-b", name: LONG_TEXT, score: 1810000 },
-      { id: "long-c", name: LONG_TEXT, score: 960000 },
-      { id: "long-d", name: LONG_TEXT, score: 420000 },
-    ]).map((row) => ({ ...row, name: `${row.name || ""} ${LONG_TEXT}` }))
-    : (board?.rows || []);
+  shownBoard = board || null;
+  if (FIXTURE && params.get("art") === "1") {
+    shownBoard = {
+      kind: "machine",
+      name: "The Wizard of Oz (75th Anniversary Edition)",
+      artUrl: "/photos/arcade.jpg",
+      artUrls: ["/photos/arcade.jpg", "/photos/oasis.jpg", "/photos/bar.jpg"],
+    };
+  }
+  const rows = FIXTURE ? NAMED_BOARD_ROWS : (board?.rows || []);
   const logo = document.getElementById("machine-logo");
   if (logo) {
     if (board?.logoUrl) {
@@ -296,39 +368,14 @@ function showBoard(board) {
       logo.removeAttribute("src");
     }
   }
-  setFit(boardTitle, FIXTURE ? `${board?.name || "Leaderboard"} ${LONG_TEXT}` : (board?.name || "Leaderboard"));
-  const meta = [board?.manufacturer, board?.year].filter(Boolean).join(" · ");
+  setFit(boardTitle, FIXTURE ? "The Wizard of Oz (75th Anniversary Edition)" : (board?.name || "Leaderboard"));
+  const meta = FIXTURE ? "Jersey Jack Pinball · 2014" : [board?.manufacturer, board?.year].filter(Boolean).join(" · ");
   boardMeta.hidden = !meta;
-  setFit(boardMeta, FIXTURE && meta ? `${meta} ${LONG_TEXT}` : meta);
+  setFit(boardMeta, meta);
   renderRows(rows);
 
-  const isMachine = board?.kind === "machine";
-  const videoUrl = isMachine && board?.videoUrl && /\.(mp4|webm|ogg)(\?|$)/i.test(board.videoUrl)
-    ? board.videoUrl
-    : null;
-  const artUrl = isMachine ? board?.artUrl : null;
-  boardPanel.classList.toggle("has-art", Boolean(isMachine && (artUrl || videoUrl)));
-
-  if (videoUrl) {
-    machineArtWrap.hidden = false;
-    machineArt.hidden = true;
-    machineVideo.hidden = false;
-    if (machineVideo.getAttribute("src") !== videoUrl) {
-      machineVideo.src = videoUrl;
-    }
-    machineVideo.play().catch(() => {});
-  } else if (artUrl) {
-    stopVideo();
-    machineArtWrap.hidden = false;
-    machineArt.hidden = false;
-    machineArt.alt = board.name || "Machine art";
-    if (machineArt.src !== artUrl) machineArt.src = artUrl;
-  } else {
-    stopVideo();
-    machineArtWrap.hidden = true;
-    machineArt.hidden = true;
-    machineArt.removeAttribute("src");
-  }
+  stopVideo();
+  paintBoardArt();
 }
 
 function cyclePick(order, dwell, slot) {
@@ -416,18 +463,8 @@ function resolveCard() {
       slots: playback.slots.map(String),
     };
   }
-  if (state.rotation?.enabled !== false && window.PinballRotation) {
-    const plan = window.PinballRotation.planRotation(payload.playlist || [], {
-      startedAt: state.rotation.startedAt,
-      intervalSec: state.rotation.intervalSec,
-      screenCount: Math.max(1, Number(payload.displays?.count) || 3),
-      layout: payload.layout || {},
-      now: Date.now() - clockSkew,
-    });
-    let planned = plan?.[SLOT] || plan?.[String(SLOT)] || null;
-    if (planned?.type === "video" && (planned.empty || !planned.url || failedVideoIds.has(planned.id))) {
-      planned = substituteCard(planned);
-    }
+  if (state.rotation?.enabled !== false && payload.rotationPlan) {
+    const planned = payload.rotationPlan[SLOT] || payload.rotationPlan[String(SLOT)] || null;
     if (planned) return { ...planned, span: false };
   }
   const layout = payload.layout?.[SLOT];
@@ -436,21 +473,6 @@ function resolveCard() {
     if (pinned) return pinned;
   }
   return cardFromSlot(state);
-}
-
-function substituteCard(blocked) {
-  const list = payload?.playlist || [];
-  const start = Math.max(0, list.findIndex((item) => item && item.type === blocked?.type && item.id === blocked?.id));
-  for (let step = 1; step <= list.length; step += 1) {
-    const candidate = list[(start + step) % list.length];
-    if (!candidate) continue;
-    if (candidate.type === "video") {
-      if (!candidate.url || candidate.empty || failedVideoIds.has(candidate.id)) continue;
-      return candidate;
-    }
-    return candidate;
-  }
-  return { type: "logo", cycle: true };
 }
 
 function decorate(card) {
@@ -553,6 +575,7 @@ function renderCard(raw) {
   lastKey = key;
   const run = () => {
     paintCard(card);
+    fitVisibleText();
     const fit = () => requestAnimationFrame(() => fitVisibleText());
     fit();
     document.fonts?.ready.then(fit).catch(() => {});
@@ -582,26 +605,22 @@ function alignVideo(startedAt) {
 }
 
 function seekIntoCard(card) {
+  if (card?.stream) return;
   const duration = wallVideo.duration;
   if (!Number.isFinite(duration) || duration < 20) return;
   let start = Number(card.startSec);
-  if (!Number.isFinite(start) || start < 0) {
-    start = window.PinballRotation
-      ? window.PinballRotation.videoStartSec(card.id, 0, duration)
-      : 0;
-  }
+  if (!Number.isFinite(start) || start < 0) start = 0;
+  if (start < 0.05) return;
   const cap = Math.max(0, duration - Math.min(20, duration * 0.05));
   try {
     wallVideo.currentTime = Math.min(Math.max(0, start), cap);
   } catch {
-    // A failed seek stays at the current frame. The stall watcher moves on quietly.
+    // A failed seek stays at the current frame. The server assigns another clip.
   }
 }
 
 let stallTimer = null;
-let stallSkip = false;
-const stalledIds = new Set();
-const failedVideoIds = new Set();
+let reportedVideoId = "";
 
 function clearStall() {
   if (stallTimer) clearInterval(stallTimer);
@@ -611,7 +630,9 @@ function clearStall() {
 }
 
 function reportVideo(card, reason) {
-  const id = card.starterId || card.id || "";
+  const id = String(card?.id || "");
+  if (!id || id === reportedVideoId) return;
+  reportedVideoId = id;
   fetch("/api/media/failure", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -619,27 +640,8 @@ function reportVideo(card, reason) {
   }).catch(() => {});
 }
 
-function skipStalled(card) {
-  if (stallSkip) return;
-  stallSkip = true;
-  if (card?.id) {
-    stalledIds.add(card.id);
-    failedVideoIds.add(card.id);
-  }
-  clearStall();
-  const fallback = document.getElementById("video-fallback");
-  if (fallback) {
-    fallback.hidden = true;
-    fallback.textContent = "";
-  }
-  lastKey = "";
-  renderCard(resolveCard());
-  stallSkip = false;
-}
-
 function armStall(card) {
   clearStall();
-  stallSkip = false;
   let last = wallVideo.currentTime || 0;
   let lastMove = Date.now();
   const started = Date.now();
@@ -651,17 +653,15 @@ function armStall(card) {
   };
   wallVideo.onerror = () => {
     reportVideo(card, "failed");
-    if (card.mode === "card") skipStalled(card);
   };
   stallTimer = setInterval(() => {
-    if (wallVideo.ended) return;
+    if (wallVideo.ended && card.loop) return;
     const quiet = Date.now() - lastMove;
     const waiting = Date.now() - started;
     if (quiet < 4500 || waiting < 4500) return;
     if (wallVideo.readyState >= 3 && Math.abs(wallVideo.currentTime - last) > 0.25) return;
     reportVideo(card, "stalled");
-    if (card.mode === "card") skipStalled(card);
-    else clearStall();
+    clearStall();
   }, 1000);
 }
 
@@ -675,9 +675,7 @@ function showVideo(card) {
     stopWallVideo();
     wallVideo.hidden = true;
     if (fallback) fallback.hidden = true;
-    if (card?.mode === "card" && card.id && card.id !== "preview" && card.id !== "empty") {
-      skipStalled(card);
-    }
+    if (card?.id && card.id !== "preview" && card.id !== "empty") reportVideo(card, "failed");
     return;
   }
   wallVideo.hidden = false;
@@ -697,7 +695,9 @@ function showVideo(card) {
     wallVideo.style.transform = "";
   }
   wallVideo.loop = Boolean(card.loop);
-  wallVideo.muted = card.mode === "card" || String(SLOT) !== primary;
+  wallVideo.muted = true;
+  wallVideo.defaultMuted = true;
+  wallVideo.playsInline = true;
   if (wallVideo.getAttribute("src") !== card.url) wallVideo.src = card.url;
   if (card.mode === "card") {
     wallVideo.onloadedmetadata = () => seekIntoCard(card);
@@ -716,7 +716,13 @@ function showVideo(card) {
       body: JSON.stringify({ videoId: card.id }),
     }).catch(() => {});
   };
-  wallVideo.play().catch(() => {});
+  const startPlayback = () => {
+    wallVideo.play().catch(() => {
+      wallVideo.muted = true;
+      wallVideo.play().catch(() => reportVideo(card, "failed"));
+    });
+  };
+  startPlayback();
 }
 
 function shareLines() {
@@ -909,9 +915,79 @@ function paintClock() {
   setFit(clockEvent, FIXTURE ? LONG_TEXT : (event?.name || payload?.guest?.eventName || "Tonight"));
 }
 
+const PIN_CAP = 12;
+
+function pinHash(text, salt) {
+  let h = 2166136261 ^ (Number(salt) || 0);
+  const value = String(text || "");
+  for (let i = 0; i < value.length; i += 1) h = Math.imul(h ^ value.charCodeAt(i), 16777619);
+  return (h >>> 0) / 4294967296;
+}
+
+function visiblePinPhotos(photos) {
+  const list = Array.isArray(photos) ? photos : [];
+  if (list.length <= PIN_CAP) return list;
+  const start = Math.floor(Math.max(0, Date.now() - clockSkew) / 12000) % list.length;
+  const shown = [];
+  for (let i = 0; i < PIN_CAP; i += 1) shown.push(list[(start + i) % list.length]);
+  return shown;
+}
+
+function pinCardBox(cardW, cardH, tilt, scale) {
+  const rad = Math.abs(tilt) * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    w: (cardW * Math.abs(cos) + cardH * Math.abs(sin)) * scale,
+    h: (cardW * Math.abs(sin) + cardH * Math.abs(cos)) * scale,
+  };
+}
+
+function layoutPins(count, width, height) {
+  const n = Math.max(1, count);
+  const cols = n === 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4;
+  const rows = Math.ceil(n / cols);
+  const margin = 10;
+  const usableW = Math.max(40, width - margin * 2);
+  const usableH = Math.max(40, height - margin * 2);
+  const overlap = n >= 8 ? 0.14 : n >= 4 ? 0.08 : 0;
+  const cellW = usableW / cols;
+  const cellH = usableH / rows;
+  const ratio = 1.36;
+  let cardW = Math.min(cellW * (1 + overlap), n === 1 ? 460 : 340);
+  let cardH = cardW * ratio;
+  if (cardH > cellH * (1 + overlap)) {
+    cardH = cellH * (1 + overlap);
+    cardW = cardH / ratio;
+  }
+  const worst = pinCardBox(cardW, cardH, 8, 1.05);
+  if (worst.w > usableW) {
+    cardW *= usableW / worst.w;
+    cardH = cardW * ratio;
+  }
+  if (worst.h > usableH && cardH > 0) {
+    const fitted = pinCardBox(cardW, cardH, 8, 1.05);
+    const scaleDown = Math.min(1, usableH / fitted.h, usableW / fitted.w);
+    cardW *= scaleDown;
+    cardH = cardW * ratio;
+  }
+  return { cols, rows, margin, cellW, cellH, cardW, cardH };
+}
+
 function placePhotos(target, card) {
   let photos = payload?.guest?.photos || [];
-  if (FIXTURE) {
+  const requested = Number.parseInt(params.get("pins") || "", 10);
+  if (Number.isFinite(requested) && requested > 0) {
+    const pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    const names = ["Alex Parra", "Jordan Hale", "Sam Okonkwo", "Riley Chen", "Morgan Blake"];
+    photos = Array.from({ length: requested }, (_, i) => ({
+      id: `pin-${i}`,
+      url: photos[i % Math.max(photos.length, 1)]?.url || pixel,
+      caption: i % 2 === 0 ? "High score on Oz" : "Friday night",
+      guestName: names[i % names.length],
+      createdAt: Date.now() - i * 60000,
+    }));
+  } else if (FIXTURE) {
     const pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
     photos = [0, 1, 2].map((i) => ({
       id: `fixture-${i}`,
@@ -921,32 +997,49 @@ function placePhotos(target, card) {
       createdAt: 0,
     }));
   }
-  const screens = 1;
-  if (target === pinWall) {
-    pinWall.style.width = "100%";
-    pinWall.style.transform = "";
-  }
-  const positions = window.PinballMotion ? window.PinballMotion.pinPositions(photos.length, screens) : [];
-  target.replaceChildren();
-  photos.forEach((photo, index) => {
-    const raw = positions[index] || { x: 10, y: 10, tilt: 0 };
-    const pos = {
-      x: Math.min(74, Math.max(4, raw.x * 0.7)),
-      y: Math.min(46, Math.max(6, raw.y * 0.5)),
-      tilt: Math.max(-2, Math.min(2, raw.tilt || 0)),
-    };
-    if (target === collageGrid) {
+  if (target === collageGrid) {
+    target.replaceChildren();
+    photos.forEach((photo) => {
       const img = document.createElement("img");
       img.src = photo.url;
       img.alt = photo.caption || "Guest photo";
       target.append(img);
-      return;
-    }
+    });
+    return;
+  }
+  const shown = visiblePinPhotos(photos);
+  const width = Math.max(1, target.clientWidth || window.innerWidth);
+  const height = Math.max(1, target.clientHeight || window.innerHeight);
+  const layout = layoutPins(shown.length, width, height);
+  target.replaceChildren();
+  shown.forEach((photo, index) => {
+    const col = index % layout.cols;
+    const row = Math.floor(index / layout.cols);
+    const seed = pinHash(photo.id, 1);
+    const seedB = pinHash(photo.id, 2);
+    const seedC = pinHash(photo.id, 3);
+    const tilt = (seed < 0.5 ? -1 : 1) * (4 + seedB * 4);
+    const scale = 0.94 + seedC * 0.1;
+    const box = pinCardBox(layout.cardW, layout.cardH, tilt, scale);
+    const jitterX = (seed - 0.5) * layout.cellW * 0.12;
+    const jitterY = (seedB - 0.5) * layout.cellH * 0.1;
+    let cx = layout.margin + layout.cellW * (col + 0.5) + jitterX;
+    let cy = layout.margin + layout.cellH * (row + 0.5) + jitterY;
+    const halfW = box.w / 2 + 8;
+    const halfH = box.h / 2 + 8;
+    cx = Math.min(width - halfW, Math.max(halfW, cx));
+    cy = Math.min(height - halfH, Math.max(halfH, cy));
     const el = document.createElement("article");
     el.className = `pin-card${Date.now() - Number(photo.createdAt) < 20000 ? " is-new" : ""}`;
-    el.style.left = `${pos.x}%`;
-    el.style.top = `${pos.y}%`;
-    el.style.transform = "none";
+    el.style.width = `${layout.cardW}px`;
+    el.style.left = `${cx}px`;
+    el.style.top = `${cy}px`;
+    el.style.zIndex = String(10 + Math.round(seedC * 20));
+    el.style.setProperty("--tilt", `${tilt.toFixed(2)}deg`);
+    el.style.setProperty("--pin-scale", scale.toFixed(3));
+    el.style.setProperty("--drift-x", `${((seed - 0.5) * 8).toFixed(1)}px`);
+    el.style.setProperty("--drift-y", `${((seedB - 0.5) * 6).toFixed(1)}px`);
+    el.style.transform = `translate(-50%, -50%) rotate(${tilt.toFixed(2)}deg) scale(${scale.toFixed(3)})`;
     const img = document.createElement("img");
     img.src = photo.url;
     img.alt = photo.caption || "Guest photo";
@@ -958,7 +1051,8 @@ function placePhotos(target, card) {
       hour: "numeric",
       minute: "2-digit",
     }) : "";
-    setFit(cap, FIXTURE ? LONG_TEXT : [taken, photo.caption || photo.guestName].filter(Boolean).join(" · "));
+    const caption = [photo.guestName, photo.caption].filter(Boolean).join(" · ");
+    setFit(cap, FIXTURE && !(Number.isFinite(requested) && requested > 0) ? LONG_TEXT : [taken, caption].filter(Boolean).join(" · "));
     el.append(img, cap);
     target.append(el);
   });
@@ -1055,6 +1149,7 @@ function tick() {
   if (!payload) return;
   applyTheme(payload.state?.theme);
   renderCard(resolveCard());
+  if (screen.dataset.mode === "board") paintBoardArt();
   if (screen.dataset.mode === "clock") paintClock();
   if (screen.dataset.mode === "clock" || FIXTURE) requestAnimationFrame(() => fitVisibleText());
 }
