@@ -20,7 +20,8 @@ const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./me
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards } = require("./catalog");
-const { bundledCards, bundledFile } = require("./bundled");
+const { bundledFile } = require("./bundled");
+const { createClipCache } = require("./clip-cache");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
 const { isInside, defaultDataDir, dataLayout } = require("./paths");
 const { launchDetachedUpdate, launchRegisterTasks, readGitCommit, readUpdateStatusSync } = require("./self-update");
@@ -134,6 +135,8 @@ function createApp({
   now,
   dataDir = null,
   appRoot = path.join(__dirname, ".."),
+  clipCache = false,
+  clipIdList = null,
 }) {
   const app = express();
   const opdb = createOpdb({
@@ -192,6 +195,17 @@ function createApp({
     root: guestPhotosDir || path.join(path.dirname(uploadRoot), "guest-photos"),
   });
   const catalogItems = loadCatalog(catalogPath || path.join(__dirname, "..", "media", "catalog.json"));
+  const clipIds = Array.isArray(clipIdList) && clipIdList.length
+    ? clipIdList
+    : String(process.env.PINBALL_CLIP_IDS || "").split(",").map((id) => id.trim()).filter(Boolean);
+  const clips = createClipCache({
+    items: catalogItems,
+    cacheDir: path.join(mediaRoot, "cache"),
+    logFile: path.join(dataDir || path.dirname(mediaRoot), "logs", "video.log"),
+    nightlyAt: () => localStore.get().updates?.nightlyAt || "03:17",
+    ids: clipIds.length ? clipIds : null,
+  });
+  if (clipCache || process.env.PINBALL_CLIP_CACHE === "1") clips.start();
   let playback = null;
   const updateDataDir = dataDir || defaultDataDir();
   let commitCache = null;
@@ -287,13 +301,12 @@ function createApp({
     const playlist = buildPlaylist(state, {
       videos: library.list(),
       allAges: config.media.allAges,
-      bundled: bundledCards(appRoot),
       starters: starterCards(catalogItems, {
         theme: state.theme,
         allAges: config.media.allAges,
-        mediaRoot: mediaRoot,
-        urlFor: (id) => `/media/starter/${id}`,
+        urlFor: (id) => `/media/cache/${id}`,
         disabledIds: config.media.disabledIds,
+        isReady: (id) => clips.isReady(id),
       }),
       youtube: config.youtube?.[state.theme] || [],
     }).filter((card) => !(card.type === "video" && blockedVideos.has(card.id)));
@@ -341,11 +354,13 @@ function createApp({
         catalog: catalogItems.map((item) => ({
           ...item,
           disabled: (config.media.disabledIds || []).includes(item.id),
-          playUrl: starterFile(mediaRoot, item) ? `/media/starter/${item.id}` : item.streamUrl,
+          playUrl: clips.isReady(item.id) ? `/media/cache/${item.id}` : null,
+          cached: clips.isReady(item.id),
         })),
       },
       playback: publicPlayback(),
       motion: config.motion,
+      slogans: config.slogans,
       motionSync,
       serverNow: Date.now(),
       version: pkg.version,
@@ -395,6 +410,7 @@ function createApp({
       serverNow: full.serverNow,
       version: full.version,
       motion: full.motion,
+      slogans: full.slogans,
     };
   }
 
@@ -679,6 +695,16 @@ function createApp({
   app.post("/api/resume", requirePin, async (_req, res, next) => {
     try {
       await store.resumeWall();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.put("/api/slogans", requirePin, async (req, res, next) => {
+    try {
+      await localStore.update({ slogans: req.body || {} });
+      broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
       next(err);
@@ -1120,18 +1146,31 @@ function createApp({
   });
 
   app.post("/api/media/failure", lanRequired, (req, res) => {
-    const reason = req.body?.reason === "failed" ? "failed" : "stalled";
+    const event = String(req.body?.event || req.body?.reason || "event").replace(/[^\w-]/g, "").slice(0, 40) || "event";
     const id = String(req.body?.id || "").replace(/[^\w:-]/g, "").slice(0, 80);
     const title = String(req.body?.title || "").replace(/\s+/g, " ").slice(0, 80);
+    const code = Number.isFinite(Number(req.body?.code)) ? Number(req.body.code) : "";
+    const networkState = Number.isFinite(Number(req.body?.networkState)) ? Number(req.body.networkState) : "";
+    const readyState = Number.isFinite(Number(req.body?.readyState)) ? Number(req.body.readyState) : "";
+    const currentTime = Number.isFinite(Number(req.body?.currentTime)) ? Number(req.body.currentTime).toFixed(2) : "";
+    const src = String(req.body?.src || "").replace(/\s+/g, "").slice(0, 180);
     const root = dataDir || path.dirname(store.filePath);
     const dir = path.join(root, "logs");
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, "video.log"), `${new Date().toISOString()} ${reason} ${id} ${title}\n`);
-    if (id && !blockedVideos.has(id)) {
+    fs.appendFileSync(
+      path.join(dir, "video.log"),
+      `${new Date().toISOString()} event=${event} id=${id} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}\n`,
+    );
+    const blocking = event === "failed" || event === "error" || event === "stall-timeout";
+    if (blocking && id && !blockedVideos.has(id)) {
       blockedVideos.add(id);
       broadcast();
     }
     sendJson(res, 200, { ok: true });
+  });
+
+  app.get("/api/media/cache", lanRequired, (req, res) => {
+    sendJson(res, 200, { clips: clips.snapshot() });
   });
 
   app.put("/api/media/:id", lanRequired, requirePin, async (req, res, next) => {
@@ -1689,6 +1728,14 @@ function createApp({
     const item = catalogItems.find((entry) => entry.id === req.params.id);
     const filePath = item ? starterFile(mediaRoot, item) : null;
     if (!filePath) return res.status(404).send("Not downloaded");
+    sendByteRange(req, res, filePath);
+  });
+
+  app.get("/media/cache/:id", lanRequired, (req, res) => {
+    const id = String(req.params.id || "");
+    if (!/^[a-z0-9-]{3,80}$/.test(id)) return res.status(404).send("Not found");
+    const filePath = clips.fileFor(id);
+    if (!filePath || !fs.existsSync(filePath)) return res.status(404).send("Not cached");
     sendByteRange(req, res, filePath);
   });
 

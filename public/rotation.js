@@ -61,6 +61,7 @@ function manualCard(content, leaderboardId, playlist) {
   if (content === "amenities") return { type: "amenity", id: "amenities", cycle: true };
   if (content === "leaderboard") return { type: "leaderboard", id: leaderboardId || null };
   if (content === "pinboard") return { type: "pinboard", id: "pinboard", span: false };
+  if (content === "clock") return { type: "clock", id: "clock" };
   if (content === "video") {
     const video = (playlist || []).find((card) => card.type === "video" && card.url && !card.empty);
     return video ? { ...video, mode: "card", loop: video.loop !== false } : null;
@@ -80,12 +81,13 @@ function planRotation(playlist, options = {}) {
   const layout = options.layout || {};
   const min = Number(options.minInterval) || 10;
   const tick = currentTick(options.startedAt, options.intervalSec, options.now, min);
+  const prepare = typeof options.prepare === "function" ? options.prepare : (card) => card;
   const used = new Set();
   const slots = { 1: null, 2: null, 3: null };
   for (const slot of ["1", "2", "3"]) {
     const content = layout[slot]?.content;
     if (content && content !== "rotation") {
-      const card = manualCard(content, layout[slot].leaderboardId, list);
+      const card = prepare(manualCard(content, layout[slot].leaderboardId, list), slot);
       const key = rotationKey(card);
       if (key) used.add(key);
       slots[slot] = withVideoStart(card, tick);
@@ -99,7 +101,7 @@ function planRotation(playlist, options = {}) {
     const slotIndex = i - 1;
     let chosen = null;
     for (let step = 0; step < n; step += 1) {
-      const candidate = cardForSlot(list, tick, slotIndex + step);
+      const candidate = prepare(cardForSlot(list, tick, slotIndex + step), slot);
       const key = rotationKey(candidate);
       if (!key || used.has(key)) continue;
       chosen = candidate;

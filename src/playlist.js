@@ -148,12 +148,13 @@ function concretizeCard(card, slotIndex, startedAt, now) {
 }
 
 function planRotation(playlist, options = {}) {
-  const plan = rotationApi.planRotation(playlist, options);
   const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
-  for (const slot of ["1", "2", "3"]) {
-    plan[slot] = concretizeCard(plan[slot], Number(slot) - 1, options.startedAt, now);
-  }
-  return plan;
+  return rotationApi.planRotation(playlist, {
+    ...options,
+    prepare(card, slot) {
+      return concretizeCard(card, Number(slot) - 1, options.startedAt, now);
+    },
+  });
 }
 
 function slotIndexForDisplay(slotId) {

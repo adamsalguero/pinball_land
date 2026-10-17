@@ -1,5 +1,5 @@
 const SLOT_IDS = ["1", "2", "3"];
-const DISPLAY_CONTENTS = ["rotation", "logos", "amenities", "leaderboard", "pinboard", "video"];
+const DISPLAY_CONTENTS = ["rotation", "logos", "amenities", "leaderboard", "pinboard", "video", "clock"];
 const BLACK_DISPLAY = new Set(["off", "black", "dark"]);
 const LEGACY_DISPLAY = {
   pinnacle: "logos",
@@ -9,7 +9,6 @@ const LEGACY_DISPLAY = {
   "amenity-events": "amenities",
   photos: "pinboard",
   collage: "pinboard",
-  clock: "rotation",
 };
 
 function canonicalDisplayContent(content) {

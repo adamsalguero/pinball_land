@@ -70,57 +70,6 @@ test("three live displays stay unique across real dwell ticks", async ({ browser
   await context.close();
 });
 
-test("video mode plays a bundled clip past three seconds", async ({ page, request }) => {
-  test.setTimeout(30000);
-  const pinned = await request.put("/api/displays", {
-    headers: { "x-pin": "2224" },
-    data: { screens: { 1: { content: "video" } } },
-  });
-  expect(pinned.ok()).toBeTruthy();
-  await page.setViewportSize({ width: 1920, height: 1080 });
-  await page.goto("/display/1");
-  await page.waitForFunction(() => {
-    const video = document.querySelector("#wall-video");
-    const screen = document.querySelector("#screen");
-    return screen?.dataset.mode === "video" && video && !video.hidden && !video.paused && video.currentTime > 3;
-  });
-  const frame = await page.evaluate(() => {
-    const video = document.querySelector("#wall-video");
-    const canvas = document.createElement("canvas");
-    canvas.width = 48;
-    canvas.height = 27;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(video, 0, 0, 48, 27);
-    const data = ctx.getImageData(0, 0, 48, 27).data;
-    let nonBlack = 0;
-    const colors = new Set();
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      if (r + g + b > 40) nonBlack += 1;
-      colors.add(`${r >> 4},${g >> 4},${b >> 4}`);
-    }
-    return {
-      nonBlack,
-      colors: colors.size,
-      mode: document.querySelector("#screen")?.dataset.mode,
-      logoHidden: document.querySelector("#logo")?.hidden,
-      card: document.querySelector("#screen")?.dataset.card || "",
-    };
-  });
-  expect(frame.mode).toBe("video");
-  expect(frame.logoHidden).toBe(true);
-  expect(frame.card.startsWith("video:")).toBe(true);
-  expect(frame.card).not.toContain("logo");
-  expect(frame.nonBlack).toBeGreaterThan(80);
-  expect(frame.colors).toBeGreaterThan(3);
-  const text = (await page.locator("body").innerText()).toLowerCase();
-  expect(text).not.toContain("skipping");
-  expect(text).not.toContain("did not play");
-  await page.screenshot({ path: "e2e/artifacts/video-playing.png" });
-});
-
 test("sprite sheet draws a spider and a bat", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/sprite-preview.html");
@@ -243,6 +192,10 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
   for (const count of [1, 5, 15, 40]) {
     await page.goto(`/display/1?preview=pinboard&pins=${count}&shot=1`);
     await page.waitForSelector(".pin-card");
+    await page.waitForFunction(() => {
+      const img = document.querySelector("#pin-qr");
+      return img && img.complete && img.naturalWidth > 20;
+    });
     await page.evaluate(async () => {
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     });
@@ -286,7 +239,7 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
         count: cards.length,
         outside,
         tilt,
-        caption: cards[0]?.innerText || "",
+        caption: cards.map((card) => card.innerText || "").join("\n"),
         clipped: captions.filter((item) => item.clipped).length,
         covered: captions.filter((item) => item.covered).length,
         captionHits,
@@ -298,9 +251,11 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
     const cap = Math.min(count, 12);
     expect(report.count, `pins ${count}`).toBe(cap);
     expect(report.outside, `pins ${count} ${JSON.stringify(report.outside)}`).toEqual([]);
-    expect(report.tilt).toBeGreaterThanOrEqual(5);
-    expect(report.tilt).toBeLessThanOrEqual(12);
+    expect(report.tilt).toBeGreaterThanOrEqual(1);
+    expect(report.tilt).toBeLessThanOrEqual(3);
+    if (count <= 12) expect(report.caption).toContain("Adam Salguero");
     expect(report.caption).toContain("·");
+    expect(report.caption).not.toContain("…");
     expect(report.clipped, `pins ${count} clipped`).toBe(0);
     expect(report.covered, `pins ${count} covered`).toBe(0);
     expect(report.captionHits, `pins ${count} caption overlap`).toEqual([]);
@@ -308,10 +263,19 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
     expect(Math.min(...report.photos), `pins ${count} photo`).toBeGreaterThan(20);
     imgWidths[cap] = report.imgWidth;
     if (cap === 12) expect(report.imgWidth, `pins ${count} fill`).toBeGreaterThanOrEqual(200);
+    if (count === 5) await page.screenshot({ path: "e2e/artifacts/pinboard-names.png" });
     if (count === 15) await page.screenshot({ path: "e2e/artifacts/pinboard-15-1080.png" });
   }
   expect(imgWidths[1]).toBeGreaterThan(imgWidths[5]);
   expect(imgWidths[5]).toBeGreaterThan(imgWidths[12]);
+});
+
+test("clock uses the halloween slogan", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto("/display/1?preview=clock&theme=halloween&shot=1");
+  await expect(page.locator("#clock-event")).toHaveText("Happy Halloween");
+  await expect(page.locator("#clock")).not.toContainText("Tonight");
+  await page.screenshot({ path: "e2e/artifacts/clock-halloween.png" });
 });
 
 test("camera hides the raw file inputs and opens a photo lightbox", async ({ page }) => {
@@ -323,4 +287,102 @@ test("camera hides the raw file inputs and opens a photo lightbox", async ({ pag
   await expect(page.locator("#photo-lightbox")).toBeHidden();
   const guestJs = await page.evaluate(async () => (await fetch("/guest.js")).text());
   expect(guestJs).not.toContain("navigator.share");
+});
+
+async function launchWallChrome() {
+  const { chromium } = require("@playwright/test");
+  const args = ["--autoplay-policy=no-user-gesture-required", "--no-sandbox", "--disable-dev-shm-usage"];
+  try {
+    return await chromium.launch({ channel: "chrome", headless: true, args });
+  } catch {
+    return chromium.launch({ headless: true, executablePath: chromium.executablePath(), args });
+  }
+}
+
+test("cached halloween cartoon advances past ten seconds in Chrome", async ({ request }) => {
+  test.setTimeout(180000);
+  await expect.poll(async () => {
+    const res = await request.get("/api/media/cache");
+    const body = await res.json();
+    const clip = (body.clips || []).find((item) => item.id === "skeleton-dance-1929");
+    if (!clip) return "missing";
+    return clip.ready ? "ready" : `wait:${clip.error || "downloading"}`;
+  }, { timeout: 150000 }).toBe("ready");
+  const browser = await launchWallChrome();
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  try {
+    const theme = await request.put("/api/theme", {
+      headers: { "x-pin": "2224" },
+      data: { theme: "halloween" },
+    });
+    expect(theme.ok()).toBeTruthy();
+    const pinned = await request.put("/api/displays", {
+      headers: { "x-pin": "2224" },
+      data: {
+        screens: {
+          1: { content: "video" },
+          2: { content: "rotation" },
+          3: { content: "rotation" },
+        },
+      },
+    });
+    expect(pinned.ok()).toBeTruthy();
+    await page.goto("/display/1");
+    await page.waitForFunction(() => {
+      const video = document.querySelector("#wall-video");
+      const screen = document.querySelector("#screen");
+      return screen?.dataset.mode === "video"
+        && video
+        && !video.hidden
+        && !video.paused
+        && video.readyState >= 2
+        && video.currentTime > 0.3
+        && String(video.currentSrc || "").includes("/media/cache/skeleton-dance-1929");
+    }, null, { timeout: 30000 });
+    await page.waitForTimeout(1500);
+    const sample = () => page.evaluate(() => {
+      const video = document.querySelector("#wall-video");
+      const canvas = document.createElement("canvas");
+      canvas.width = 48;
+      canvas.height = 27;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(video, 0, 0, 48, 27);
+      return {
+        time: video.currentTime,
+        paused: video.paused,
+        mode: document.querySelector("#screen")?.dataset.mode,
+        card: document.querySelector("#screen")?.dataset.card || "",
+        logoHidden: document.querySelector("#logo")?.hidden,
+        frame: Array.from(ctx.getImageData(0, 0, 48, 27).data),
+      };
+    });
+    const first = await sample();
+    await page.waitForTimeout(11000);
+    const second = await sample();
+    const changed = first.frame.reduce((count, value, index) => count + (Math.abs(value - second.frame[index]) > 12 ? 1 : 0), 0);
+    expect(second.time - first.time).toBeGreaterThan(10);
+    expect(changed).toBeGreaterThan(30);
+    expect(second.mode).toBe("video");
+    expect(second.logoHidden).toBe(true);
+    expect(second.card.startsWith("video:starter:skeleton-dance-1929")).toBe(true);
+    await page.waitForTimeout(1500);
+    const third = await sample();
+    expect(third.time - second.time).toBeGreaterThan(1);
+    await page.screenshot({ path: "e2e/artifacts/halloween-cartoon-10s.png" });
+  } finally {
+    await context.close();
+    await browser.close();
+    await request.put("/api/theme", { headers: { "x-pin": "2224" }, data: { theme: "pinnacle" } });
+    await request.put("/api/displays", {
+      headers: { "x-pin": "2224" },
+      data: {
+        screens: {
+          1: { content: "rotation" },
+          2: { content: "rotation" },
+          3: { content: "rotation" },
+        },
+      },
+    });
+  }
 });

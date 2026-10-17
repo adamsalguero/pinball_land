@@ -67,7 +67,6 @@ html, body, .screen {
   border-radius: 22px;
   padding: 1.6vh 0.9vw 1.4vh;
   text-align: center;
-  animation: rise 700ms var(--ease) both;
   box-shadow: 0 16px 30px rgba(0, 0, 0, 0.22);
 }
 .podium-card.place-1 {
@@ -134,10 +133,18 @@ html, body, .screen {
 .pin-card span {
   display: block;
   margin-top: 8px;
-  font-size: clamp(12px, 1.3vh, 16px);
-  line-height: 1.25;
+  font-size: clamp(13px, 1.4vh, 18px);
+  line-height: 1.3;
   max-width: 100%;
+  max-height: none;
+  overflow: visible;
+  text-overflow: unset;
   white-space: normal;
+  overflow-wrap: anywhere;
+}
+.pin-card span[data-fit] {
+  max-height: 3.45em;
+  overflow: hidden;
 }
 .pin-card.is-new { box-shadow: 0 0 0 2px var(--accent), 0 18px 40px rgba(0, 0, 0, 0.35); }
 .pin-card::before {
@@ -184,6 +191,12 @@ html, body, .screen {
   pointer-events: none;
   z-index: 4;
 }
+html.particles-under #motion { z-index: 0; }
+html.particles-under .screen {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
 .is-shot .panel,
 .is-shot .amenity-photo,
 .is-shot #amenity-photo,
@@ -197,10 +210,6 @@ html, body, .screen {
 @keyframes card-drift {
   from { transform: translate3d(0, 0, 0); }
   to { transform: translate3d(0, -10px, 0); }
-}
-@keyframes rise {
-  from { opacity: 0; transform: translateY(18px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 @keyframes pin-in {
   from { opacity: 0; transform: translateY(-24px) rotate(var(--tilt)); }

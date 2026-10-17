@@ -191,10 +191,10 @@ function drawSpider(ctx, size, phase) {
     const swing = Math.sin(pose * 3 + index * 1.2) * size * 0.12;
     const lift = (index % 2 === 0 ? -1 : 1) * size * 0.16 + swing * 0.35;
     const hipX = side * size * 0.1;
-    const kneeX = side * size * (0.48 + index * 0.04);
-    const kneeY = hipY + lift;
-    const footX = side * size * (0.9 + Math.cos(pose * 3 + index) * 0.06);
-    const footY = hipY + size * 0.22 + Math.max(0, -lift) * 0.12;
+    const kneeX = side * size * (0.28 + index * 0.015);
+    const kneeY = hipY + lift * 0.45;
+    const footX = side * size * (0.42 + Math.cos(pose * 3 + index) * 0.02);
+    const footY = hipY + size * 0.12 + Math.max(0, -lift) * 0.08;
     ctx.beginPath();
     ctx.moveTo(hipX, hipY);
     ctx.quadraticCurveTo(kneeX, kneeY, footX, footY);

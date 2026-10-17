@@ -87,6 +87,7 @@ body,
 }
 
 .screen {
+  position: relative;
   display: grid;
   place-items: stretch;
 }
@@ -243,6 +244,9 @@ body,
   object-fit: contain;
   background: #0a0908;
   border-radius: 12px;
+}
+.machine-art-wrap img {
+  transition: opacity 700ms ease;
 }
 
 .machine-art-fallback {

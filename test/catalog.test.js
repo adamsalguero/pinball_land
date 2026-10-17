@@ -2,7 +2,8 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { catalogProblems, loadCatalog } = require("../src/catalog");
+const { catalogProblems, loadCatalog, starterCards } = require("../src/catalog");
+const { normalizeSlogans } = require("../src/config");
 
 test("video catalog entries are well-formed, unique, and Christmas is color", () => {
   const filePath = path.join(__dirname, "..", "media", "catalog.json");
@@ -23,4 +24,27 @@ test("video catalog entries are well-formed, unique, and Christmas is color", ()
   }
   assert.ok(loaded.some((item) => item.holiday === "halloween"));
   assert.ok(loaded.some((item) => item.holiday === "christmas"));
+  assert.deepEqual(starterCards(loaded, { theme: "pinnacle", isReady: () => true }), []);
+  assert.deepEqual(starterCards(loaded, { theme: "halloween", isReady: () => false }), []);
+  const ready = starterCards(loaded, {
+    theme: "halloween",
+    isReady: (id) => id === "skeleton-dance-1929",
+    urlFor: (id) => `/media/cache/${id}`,
+  });
+  assert.equal(ready.length, 1);
+  assert.equal(ready[0].url, "/media/cache/skeleton-dance-1929");
+  assert.equal(ready[0].stream, false);
+  assert.equal(ready[0].local, true);
+  const christmas = starterCards(loaded, {
+    theme: "christmas",
+    isReady: () => true,
+    urlFor: (id) => `/media/cache/${id}`,
+  });
+  assert.ok(christmas.length >= 1);
+  assert.ok(christmas.every((card) => card.color === true));
+  const slogans = normalizeSlogans(undefined);
+  assert.equal(slogans.pinnacle, "");
+  assert.equal(slogans.halloween, "Happy Halloween");
+  assert.equal(slogans.christmas, "Merry Christmas");
+  assert.equal(normalizeSlogans({ halloween: "  Boo  " }).halloween, "Boo");
 });

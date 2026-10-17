@@ -9,14 +9,16 @@ async function unlock(page) {
 }
 
 test("PIN unlock, displays, rotation, leaderboard, theme, present", async ({ page, request }) => {
+  test.setTimeout(180000);
   await unlock(page);
   await expect(page.getByRole("heading", { name: "Displays" })).toBeVisible();
   await page.getByRole("button", { name: "Auto (rotate all)" }).click();
   await page.getByRole("button", { name: "Halloween party" }).click();
-  const state = await request.get("/api/state");
-  const body = await state.json();
-  expect(body.state.theme).toBe("halloween");
-  expect(body.playlist.some((card) => card.type === "video")).toBeTruthy();
+  await expect.poll(async () => {
+    const body = await (await request.get("/api/state")).json();
+    const cached = (body.playlist || []).some((card) => card.type === "video" && String(card.url || "").includes("/media/cache/"));
+    return body.state.theme === "halloween" && cached;
+  }, { timeout: 150000 }).toBeTruthy();
   await page.goto("/display/1?shot=1");
   await expect(page.locator("#screen")).toBeVisible();
   await page.goto("/admin");

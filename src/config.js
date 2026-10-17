@@ -76,6 +76,25 @@ function httpBaseUrl(value) {
   }
 }
 
+function defaultSlogans() {
+  return {
+    pinnacle: "",
+    halloween: "Happy Halloween",
+    christmas: "Merry Christmas",
+  };
+}
+
+function normalizeSlogans(raw) {
+  const incoming = raw && typeof raw === "object" ? raw : {};
+  const slogans = defaultSlogans();
+  if (!raw || typeof raw !== "object") return slogans;
+  for (const key of Object.keys(slogans)) {
+    if (incoming[key] === undefined) continue;
+    slogans[key] = String(incoming[key] || "").trim().slice(0, 80);
+  }
+  return slogans;
+}
+
 function normalizePhotos(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   const eventName = String(incoming.eventName || "Tonight").trim().slice(0, 60);
@@ -146,6 +165,7 @@ function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
     media: normalizeMediaSettings(fileConfig.media),
     motion: normalizeMotion(fileConfig.motion),
     photos: normalizePhotos(fileConfig.photos),
+    slogans: normalizeSlogans(fileConfig.slogans),
     youtube: normalizeYoutubeLists(fileConfig.youtube),
     updates: normalizeUpdates(fileConfig.updates),
   };
@@ -231,6 +251,9 @@ function createConfigStore(configPath) {
       if (patch.photos) {
         raw.photos = normalizePhotos({ ...normalizePhotos(raw.photos), ...patch.photos });
       }
+      if (patch.slogans) {
+        raw.slogans = normalizeSlogans({ ...normalizeSlogans(raw.slogans), ...patch.slogans });
+      }
       if (patch.youtube) raw.youtube = normalizeYoutubeLists(patch.youtube);
       if (patch.updates) {
         raw.updates = normalizeUpdates({ ...normalizeUpdates(raw.updates), ...patch.updates });
@@ -262,5 +285,6 @@ module.exports = {
   normalizeMediaSettings,
   normalizeMotion,
   normalizePhotos,
+  normalizeSlogans,
   normalizeUpdates,
 };

@@ -64,6 +64,7 @@ test("playlist stagger keeps neighboring TVs on different cards", () => {
       "leaderboard:mach",
     ]
   );
+  assert.equal(playlist.some((card) => card.type === "video"), false);
   assert.ok(playlist.length >= 3);
   for (let tick = 0; tick < playlist.length * 2; tick += 1) {
     const left = cardForSlot(playlist, tick, 0);
@@ -170,7 +171,7 @@ test("leaderboard and pinboard subtypes count as one card, and video mode plays 
     { type: "collage", id: "collage" },
     { type: "logo", key: "pinnacle" },
     { type: "clock", id: "clock" },
-    { type: "video", id: "bundled:arcade-lights", url: "/media/bundled/arcade-lights.mp4", durationSec: 6, local: true },
+    { type: "video", id: "starter:skeleton-dance-1929", url: "/media/cache/skeleton-dance-1929", durationSec: 331, local: true },
   ];
   assert.equal(rotationKey(playlist[0]), "leaderboard");
   assert.equal(rotationKey(playlist[0]), rotationKey(playlist[1]));
@@ -192,8 +193,36 @@ test("leaderboard and pinboard subtypes count as one card, and video mode plays 
     const keys = ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
     assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
     assert.equal(plan["1"].type, "video");
-    assert.equal(plan["1"].url, "/media/bundled/arcade-lights.mp4");
+    assert.equal(plan["1"].url, "/media/cache/skeleton-dance-1929");
     assert.equal(keys.filter((key) => key === "leaderboard").length <= 1, true);
     assert.equal(keys.filter((key) => key === "pinboard").length <= 1, true);
+  }
+});
+
+test("a pinned video with no cached clip is replaced by an unused card", () => {
+  const playlist = [
+    { type: "logo", key: "pinnacle" },
+    { type: "logo", key: "pinball-land" },
+    { type: "amenity", id: "amenities", cycle: true },
+    { type: "clock", id: "clock" },
+    { type: "pinboard", id: "pinboard" },
+  ];
+  const layout = {
+    1: { content: "video", enabled: true },
+    2: { content: "logos", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  for (let tick = 0; tick < 8; tick += 1) {
+    const plan = planRotation(playlist, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now: tick * 30000,
+    });
+    const keys = ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
+    assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
+    assert.notEqual(plan["1"] && plan["1"].type, "video");
+    assert.ok(keys[0]);
   }
 });
