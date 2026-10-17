@@ -5,8 +5,11 @@ const {
   buildPlaylist,
   cardForSlot,
   currentTick,
+  tickForSlot,
+  amenityAt,
   slotIndexForDisplay,
   normalizeRotation,
+  AMENITY_DWELL_SEC,
 } = require("../src/playlist");
 
 test("amenity cards are arcade, oasis, and events — never pool", () => {
@@ -19,12 +22,21 @@ test("amenity cards are arcade, oasis, and events — never pool", () => {
   assert.equal(blob.includes("collage"), false);
 });
 
-test("rotation defaults on with a 14s interval", () => {
+test("rotation defaults on with a 25s interval and one amenities card", () => {
   const rotation = normalizeRotation(undefined);
   assert.equal(rotation.enabled, true);
-  assert.equal(rotation.intervalSec, 14);
+  assert.equal(rotation.intervalSec, 25);
   assert.equal(rotation.items.logoPinnacle, true);
-  assert.equal(rotation.items.amenityOasis, true);
+  assert.equal(rotation.items.amenities, true);
+  assert.equal(normalizeRotation({ intervalSec: 14 }).intervalSec, 25);
+  assert.equal(normalizeRotation({ intervalSec: 20 }).intervalSec, 20);
+  assert.equal(normalizeRotation({ intervalSec: 8 }).intervalSec, 10);
+  assert.equal(normalizeRotation({ intervalSec: 200 }).intervalSec, 120);
+  const legacy = normalizeRotation({
+    items: { amenityArcade: false, amenityOasis: true, amenityEvents: false },
+  });
+  assert.equal(legacy.items.amenities, true);
+  assert.equal(normalizeRotation({ items: { amenities: false, amenityArcade: true } }).items.amenities, false);
 });
 
 test("playlist stagger keeps neighboring TVs on different cards", () => {
@@ -41,9 +53,7 @@ test("playlist stagger keeps neighboring TVs on different cards", () => {
     [
       "logo:pinnacle",
       "logo:pinball-land",
-      "amenity:arcade",
-      "amenity:oasis",
-      "amenity:events",
+      "amenity:amenities",
       "clock:clock",
       "pinboard:pinboard",
       "leaderboard:evt",
@@ -72,9 +82,7 @@ test("currentTick advances by interval and disabled boards drop out", () => {
       items: {
         logoPinnacle: false,
         logoEntertainment: true,
-        amenityArcade: false,
-        amenityOasis: false,
-        amenityEvents: false,
+        amenities: false,
       },
     }),
     leaderboards: [
@@ -86,4 +94,15 @@ test("currentTick advances by interval and disabled boards drop out", () => {
     playlist.map((card) => card.type + ":" + (card.key || card.id)),
     ["logo:pinball-land", "clock:clock", "pinboard:pinboard", "leaderboard:shown"]
   );
+});
+
+test("screens change apart and amenities cycle inside one card", () => {
+  const startedAt = 1_000_000;
+  assert.equal(tickForSlot(startedAt, 25, 0, 3, startedAt + 25000), 1);
+  assert.equal(tickForSlot(startedAt, 25, 1, 3, startedAt + 25000), 0);
+  assert.equal(tickForSlot(startedAt, 25, 1, 3, startedAt + 25000 + 25000 / 3), 1);
+  assert.equal(amenityAt(0, 0, 0), "arcade");
+  assert.equal(amenityAt(0, 0, AMENITY_DWELL_SEC * 1000), "oasis");
+  assert.equal(amenityAt(0, 0, AMENITY_DWELL_SEC * 2000), "events");
+  assert.equal(amenityAt(0, 0, AMENITY_DWELL_SEC * 3000), "arcade");
 });

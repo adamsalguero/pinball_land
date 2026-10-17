@@ -42,7 +42,6 @@
 
       <div class="tab-panels">
         <div data-panel="screens">
-          <button id="off-all" class="btn danger huge" type="button">Off — black all screens</button>
           <section id="displays-section">
             <h2>Displays</h2>
             <p class="muted">Use 1, 2, or 3 screens. The wall opens a window only for each enabled display, left to right. Changes apply live. Restart kiosk windows if a screen stays stuck.</p>
@@ -59,14 +58,14 @@
           </section>
           <section>
             <h2>Wall rotation</h2>
-            <p class="muted">On by default. Every TV shares one playlist — Pinnacle Group logo, Entertainment Center logo, 2-story arcade, Outdoor Oasis, Flexible Event Options, and enabled leaderboards — staggered so neighbors are not on the same card.</p>
+            <p class="muted">On by default. Every TV shares one playlist — logos, amenities, the clock, the live pinboard, videos, and enabled leaderboards. Amenities cycles the 2-story arcade, Outdoor Oasis, and Flexible Event Options. Screens are staggered so they do not change at the same moment.</p>
             <div class="theme-toggle">
               <button id="rotation-on" class="btn" type="button">Rotation on</button>
               <button id="rotation-off" class="btn" type="button">Rotation off</button>
             </div>
             <label class="interval-label">
               Seconds per card
-              <input id="interval" type="number" min="3" max="180" step="1" />
+              <input id="interval" type="number" min="10" max="120" step="1" />
             </label>
             <p class="choice-heading">Include in the playlist</p>
             <div id="rotation-items" class="toggle-stack"></div>
@@ -149,10 +148,10 @@
             <div id="plugs-root"></div>
           </section>
           <section>
-            <h2>Wall motion</h2>
+            <h2>Transitions</h2>
+            <p class="muted">A short crossfade between cards, or off. Screens change a few seconds apart.</p>
             <div class="theme-toggle" id="motion-toggle">
               <button class="btn" type="button" data-motion="subtle">Subtle</button>
-              <button class="btn" type="button" data-motion="full">Full</button>
               <button class="btn" type="button" data-motion="off">Off</button>
             </div>
           </section>

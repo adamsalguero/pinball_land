@@ -1,7 +1,6 @@
 const SLOT = location.pathname.split("/").pop();
 
 const screen = document.getElementById("screen");
-const offPanel = document.getElementById("off");
 const logoPanel = document.getElementById("logo");
 const logoImage = document.getElementById("logo-image");
 const logoFallback = document.getElementById("logo-fallback");
@@ -38,7 +37,6 @@ const collagePanel = document.getElementById("collage");
 const collageGrid = document.getElementById("collage-grid");
 const youtubePanel = document.getElementById("youtube");
 const motionCanvas = document.getElementById("motion");
-const wipe = document.getElementById("wipe");
 const podium = document.getElementById("podium");
 
 let payload = null;
@@ -53,18 +51,81 @@ let helloId = null;
 let mirrorId = null;
 let syncTimer = null;
 const pendingMessages = [];
+const params = new URLSearchParams(location.search);
+const SHOT = params.has("shot");
+const FIXTURE = params.get("fixture") === "long";
+const LONG_TEXT = "Flexible event options for charity fundraisers, client appreciation, team gatherings, and outdoor oasis receptions at Pinnacle Entertainment Center ".repeat(4);
+const AMENITY_ORDER = ["arcade", "oasis", "events"];
+const LOGO_ORDER = ["pinnacle", "pinball-land"];
+const AMENITY_DWELL_MS = 12000;
+let transitionToken = 0;
+let motionField = null;
+let motionTheme = "";
+let lastFrame = 0;
+
+function queryTheme() {
+  const theme = params.get("theme");
+  return theme === "halloween" || theme === "christmas" || theme === "pinnacle" ? theme : "";
+}
+
+function transitionsOn() {
+  return !SHOT && payload?.motion !== "off";
+}
+
+function setFit(el, text) {
+  if (!el) return;
+  const value = text || "";
+  el.dataset.full = value;
+  el.textContent = value;
+}
+
+function fitText(el) {
+  if (!el || el.closest("[hidden]")) return;
+  const full = el.dataset.full ?? "";
+  if (!full) return;
+  el.style.fontSize = "";
+  el.style.lineHeight = "1.25";
+  el.textContent = full;
+  if (el.clientWidth < 2 || el.clientHeight < 2) return;
+  const overflows = () => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+  if (!overflows()) return;
+  let lo = 0;
+  let hi = full.length;
+  let best = "…";
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    el.textContent = mid >= full.length ? full : `${full.slice(0, mid).trimEnd()}…`;
+    if (overflows()) hi = mid - 1;
+    else {
+      best = el.textContent;
+      lo = mid + 1;
+    }
+  }
+  el.textContent = best;
+  while (el.textContent.length > 1 && overflows()) {
+    el.textContent = `${el.textContent.slice(0, -2).trimEnd()}…`;
+  }
+}
+
+function fitVisibleText() {
+  for (const el of document.querySelectorAll("[data-fit], [data-full]")) {
+    if (el.closest("[hidden]")) continue;
+    fitText(el);
+  }
+}
 
 function formatScore(score) {
   return Number(score || 0).toLocaleString("en-US");
 }
 
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme === "halloween" || theme === "christmas" ? theme : "pinnacle";
+  const forced = queryTheme();
+  const name = forced || (theme === "halloween" || theme === "christmas" ? theme : "pinnacle");
+  document.documentElement.dataset.theme = name;
 }
 
 function setMode(mode) {
   screen.dataset.mode = mode;
-  offPanel.hidden = mode !== "off";
   logoPanel.hidden = mode !== "logo";
   amenityPanel.hidden = mode !== "amenity";
   boardPanel.hidden = mode !== "board";
@@ -113,10 +174,7 @@ function teardownPresent() {
 }
 
 function showOff() {
-  setMode("off");
-  stopVideo();
-  stopWallVideo();
-  teardownPresent();
+  showLogo("", "Pinball Land");
 }
 
 function showLogo(url, label) {
@@ -125,7 +183,7 @@ function showLogo(url, label) {
   stopWallVideo();
   teardownPresent();
   logoImage.alt = label;
-  logoFallback.textContent = `${label} — add the file in public/logos`;
+  setFit(logoFallback, FIXTURE ? `${label} ${LONG_TEXT}` : `${label} — add the file in public/logos`);
   if (url) {
     logoFallback.hidden = true;
     logoImage.hidden = false;
@@ -147,14 +205,15 @@ function showAmenity(amenity, photos) {
   stopVideo();
   stopWallVideo();
   teardownPresent();
-  amenityHeadline.textContent = amenity?.headline || "";
-  amenityBody.textContent = amenity?.body || "";
-  if (amenity?.eventTypes) {
+  setFit(amenityHeadline, FIXTURE ? `${amenity?.headline || "Amenities"} ${LONG_TEXT}` : (amenity?.headline || ""));
+  setFit(amenityBody, FIXTURE ? LONG_TEXT : (amenity?.body || ""));
+  const types = FIXTURE ? LONG_TEXT : (amenity?.eventTypes || "");
+  if (types) {
     amenityTypes.hidden = false;
-    amenityTypes.textContent = amenity.eventTypes;
+    setFit(amenityTypes, types);
   } else {
     amenityTypes.hidden = true;
-    amenityTypes.textContent = "";
+    setFit(amenityTypes, "");
   }
   const photoUrl = amenity?.photo ? photos?.[amenity.photo] : null;
   if (photoUrl) {
@@ -187,9 +246,9 @@ function renderRows(rows) {
       const place = top.indexOf(row) + 1;
       const card = document.createElement("article");
       card.className = `podium-card place-${place}`;
-      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who"></span><span class="points"></span>`;
-      card.querySelector(".who").textContent = row.name || "—";
-      card.querySelector(".points").textContent = formatScore(row.score);
+      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="2"></span><span class="points" data-fit="1"></span>`;
+      setFit(card.querySelector(".who"), row.name || "—");
+      setFit(card.querySelector(".points"), formatScore(row.score));
       podium.append(card);
     });
   }
@@ -201,10 +260,12 @@ function renderRows(rows) {
     rank.textContent = String(index + 4).padStart(2, "0");
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = row.name || "—";
+    name.setAttribute("data-fit", "1");
+    setFit(name, row.name || "—");
     const score = document.createElement("span");
     score.className = "score";
-    score.textContent = formatScore(row.score);
+    score.setAttribute("data-fit", "1");
+    setFit(score, formatScore(row.score));
     li.append(rank, name, score);
     boardRows.append(li);
   });
@@ -215,11 +276,19 @@ function showBoard(board) {
   setMode("board");
   stopWallVideo();
   teardownPresent();
-  boardTitle.textContent = board?.name || "Leaderboard";
+  const rows = FIXTURE
+    ? (board?.rows || []).concat([
+      { id: "long-a", name: LONG_TEXT, score: 2450000 },
+      { id: "long-b", name: LONG_TEXT, score: 1810000 },
+      { id: "long-c", name: LONG_TEXT, score: 960000 },
+      { id: "long-d", name: LONG_TEXT, score: 420000 },
+    ]).map((row) => ({ ...row, name: `${row.name || ""} ${LONG_TEXT}` }))
+    : (board?.rows || []);
+  setFit(boardTitle, FIXTURE ? `${board?.name || "Leaderboard"} ${LONG_TEXT}` : (board?.name || "Leaderboard"));
   const meta = [board?.manufacturer, board?.year].filter(Boolean).join(" · ");
   boardMeta.hidden = !meta;
-  boardMeta.textContent = meta;
-  renderRows(board?.rows || []);
+  setFit(boardMeta, FIXTURE && meta ? `${meta} ${LONG_TEXT}` : meta);
+  renderRows(rows);
 
   const isMachine = board?.kind === "machine";
   const videoUrl = isMachine && board?.videoUrl && /\.(mp4|webm|ogg)(\?|$)/i.test(board.videoUrl)
@@ -250,11 +319,29 @@ function showBoard(board) {
   }
 }
 
-function currentTick(startedAt, intervalSec, now = Date.now()) {
-  const ms = Math.max(3, Number(intervalSec) || 14) * 1000;
+function dwellMs(intervalSec) {
+  const n = Number.parseInt(intervalSec, 10);
+  const sec = Number.isFinite(n) ? Math.min(120, Math.max(10, n)) : 25;
+  return sec * 1000;
+}
+
+function tickForSlot(startedAt, intervalSec, slot, screens, now) {
+  const ms = dwellMs(intervalSec);
+  const count = Math.max(1, Number(screens) || 1);
+  const index = Math.max(0, Number(slot) || 0) % count;
+  const offset = index * (ms / count);
   const start = Number(startedAt);
   const origin = Number.isFinite(start) ? start : now;
-  return Math.floor(Math.max(0, now - origin) / ms);
+  return Math.floor(Math.max(0, now - origin - offset) / ms);
+}
+
+function cyclePick(order, dwell, slot) {
+  const count = order.length;
+  const screens = Math.max(1, Number(payload?.displays?.count) || 3);
+  const index = Math.max(0, Number(slot) || 0) % screens;
+  const offset = (index % count) * (dwell / count);
+  const now = Date.now() - clockSkew - offset;
+  return order[Math.floor(Math.max(0, now) / dwell) % count];
 }
 
 function cardForSlot(playlist, tick, slotIndex) {
@@ -268,39 +355,51 @@ function slotIndex() {
   return Number.isFinite(n) && n > 0 ? n - 1 : 0;
 }
 
+function pinnedVideo() {
+  const card = (payload?.playlist || []).find((item) => item.type === "video");
+  if (card) return { ...card, mode: card.mode || "card" };
+  const video = payload?.media?.videos?.[0];
+  if (video?.url) {
+    return { type: "video", id: video.id, url: video.url, title: video.title || "Video", loop: true, mode: "card" };
+  }
+  return { type: "video", id: "empty", url: "", title: "Video", empty: true, mode: "card" };
+}
+
 function cardFromContent(content, leaderboardId) {
-  if (!content || content === "off" || content === "rotation") return { type: "off" };
-  if (content === "pinnacle") return { type: "logo", key: "pinnacle" };
-  if (content === "pinball-land") return { type: "logo", key: "pinball-land" };
-  if (content === "amenity-arcade") return { type: "amenity", id: "arcade" };
-  if (content === "amenity-oasis") return { type: "amenity", id: "oasis" };
-  if (content === "amenity-events") return { type: "amenity", id: "events" };
+  if (!content || content === "rotation" || content === "off" || content === "black" || content === "dark") return null;
+  if (content === "logos") return { type: "logo", cycle: true };
+  if (content === "pinnacle" || content === "pinball-land") return { type: "logo", key: content };
+  if (content === "amenities") return { type: "amenity", id: "amenities", cycle: true };
+  if (content === "amenity-arcade" || content === "amenity-oasis" || content === "amenity-events") {
+    return { type: "amenity", id: content.replace("amenity-", "") };
+  }
   if (content === "leaderboard") return { type: "leaderboard", id: leaderboardId };
-  return { type: "off" };
+  if (content === "pinboard" || content === "photos") {
+    return payload?.guest?.style === "collage" ? { type: "collage" } : { type: "pinboard" };
+  }
+  if (content === "collage") return { type: "collage" };
+  if (content === "video") return pinnedVideo();
+  if (content === "clock") return { type: "clock" };
+  return null;
 }
 
 function cardFromSlot(state) {
   const slot = state.slots?.[SLOT];
-  if (!slot || slot.content === "off") return { type: "off" };
-  if (slot.content === "pinnacle") return { type: "logo", key: "pinnacle" };
-  if (slot.content === "pinball-land") return { type: "logo", key: "pinball-land" };
-  if (slot.content === "amenity-arcade") return { type: "amenity", id: "arcade" };
-  if (slot.content === "amenity-oasis") return { type: "amenity", id: "oasis" };
-  if (slot.content === "amenity-events") return { type: "amenity", id: "events" };
-  if (["photos", "arcade", "bar", "pool", "collage", "venue"].includes(slot.content)) {
-    return { type: "amenity", id: slot.content === "pool" || slot.content === "bar" ? "oasis" : "arcade" };
-  }
-  return { type: "leaderboard", id: slot.leaderboardId };
+  return cardFromContent(slot?.content, slot?.leaderboardId) || { type: "logo", cycle: true };
 }
 
 function previewCard() {
-  const preview = new URLSearchParams(location.search).get("preview");
+  const preview = params.get("preview");
   if (!preview || !payload) return null;
-  if (preview === "logo") return { type: "logo", key: "pinnacle" };
-  if (preview === "amenity") return { type: "amenity", id: "arcade" };
+  if (preview === "logo" || preview === "logos") return { type: "logo", key: params.get("logo") || "pinnacle" };
+  if (preview === "amenities") return { type: "amenity", id: "amenities", cycle: true };
+  if (preview === "amenity") {
+    const id = params.get("amenity");
+    return { type: "amenity", id: AMENITY_ORDER.includes(id) ? id : "arcade" };
+  }
   if (preview === "board") return { type: "leaderboard", id: payload.state?.leaderboards?.[0]?.id };
-  if (preview === "pinboard" || preview === "collage" || preview === "clock") return { type: preview, span: true };
-  if (preview === "video") return { type: "video", id: "preview", url: payload.photos?.arcade, title: "Preview", loop: true, mode: "card" };
+  if (preview === "pinboard" || preview === "collage" || preview === "clock") return { type: preview, span: false };
+  if (preview === "video") return { type: "video", id: "preview", url: "", title: "Video", empty: true, mode: "card" };
   return null;
 }
 
@@ -308,7 +407,7 @@ function resolveCard() {
   const forced = previewCard();
   if (forced) return forced;
   const state = payload?.state;
-  if (!state || state.blackout) return { type: "off" };
+  if (!state) return { type: "logo", key: "pinnacle" };
   const presentation = payload.presentations?.[SLOT];
   if (presentation?.source) return { type: "present", presentation };
   const playback = payload.playback;
@@ -329,18 +428,31 @@ function resolveCard() {
   }
   const layout = payload.layout?.[SLOT];
   if (layout && layout.content && layout.content !== "rotation") {
-    return cardFromContent(layout.content, layout.leaderboardId);
+    const pinned = cardFromContent(layout.content, layout.leaderboardId);
+    if (pinned) return pinned;
   }
   const stagger = Number.isInteger(layout?.staggerIndex) ? layout.staggerIndex : slotIndex();
-  if (state.rotation?.enabled) {
-    const tick = currentTick(state.rotation.startedAt, state.rotation.intervalSec);
+  if (state.rotation?.enabled !== false) {
+    const screens = Math.max(1, Number(payload.displays?.count) || 3);
+    const tick = tickForSlot(state.rotation.startedAt, state.rotation.intervalSec, stagger, screens, Date.now() - clockSkew);
     const shared = cardForSlot(payload.playlist, tick, 0);
     if (payload.guest?.span && (shared?.type === "pinboard" || shared?.type === "collage")) {
       return { ...shared, span: true, slotIndex: stagger };
     }
-    return cardForSlot(payload.playlist, tick, stagger) || { type: "off" };
+    return cardForSlot(payload.playlist, tick, stagger) || { type: "logo", cycle: true };
   }
   return cardFromSlot(state);
+}
+
+function decorate(card) {
+  if (!card || card.type === "off") return { type: "logo", cycle: true };
+  if (card.type === "amenity" && (card.cycle || card.id === "amenities")) {
+    return { ...card, type: "amenity", id: cyclePick(AMENITY_ORDER, AMENITY_DWELL_MS, slotIndex()) };
+  }
+  if (card.type === "logo" && card.cycle) {
+    return { ...card, key: cyclePick(LOGO_ORDER, AMENITY_DWELL_MS, slotIndex()) };
+  }
+  return card;
 }
 
 function cardKey(card) {
@@ -370,20 +482,10 @@ function boardKey(board) {
   return `board:${board.id}:${board.artUrl || ""}:${board.videoUrl || ""}:${rows}`;
 }
 
-function renderCard(card) {
+function paintCard(card) {
   const logos = payload?.logos || {};
   const photos = payload?.photos || {};
   const amenities = payload?.amenities || [];
-  let key = cardKey(card);
-  if (card?.type === "leaderboard") {
-    const board = (payload.state.leaderboards || []).find((item) => item.id === card.id);
-    key = boardKey(board);
-  }
-  if (key === lastKey) {
-    return;
-  }
-  lastKey = key;
-
   if (!card || card.type === "off") {
     showOff();
     return;
@@ -393,15 +495,14 @@ function renderCard(card) {
     return;
   }
   if (card.type === "logo") {
-    const label = card.key === "pinnacle"
-      ? "Pinnacle Group Financial Services"
-      : "Pinnacle Entertainment Center";
+    const label = card.key === "pinball-land"
+      ? "Pinnacle Entertainment Center"
+      : "Pinnacle Group Financial Services";
     showLogo(logos[card.key], card.label || label);
     return;
   }
   if (card.type === "amenity") {
-    const amenity = amenities.find((item) => item.id === card.id);
-    showAmenity(amenity, photos);
+    showAmenity(amenities.find((item) => item.id === card.id), photos);
     return;
   }
   if (card.type === "video") {
@@ -428,6 +529,42 @@ function renderCard(card) {
   showBoard(board);
 }
 
+function renderCard(raw) {
+  const card = decorate(raw);
+  let key = cardKey(card);
+  if (card?.type === "leaderboard") {
+    const board = (payload.state.leaderboards || []).find((item) => item.id === card.id);
+    key = boardKey(board);
+  }
+  if (FIXTURE) key += ":long";
+  if (queryTheme()) key += `:${queryTheme()}`;
+  if (key === lastKey) return;
+  const first = !lastKey;
+  lastKey = key;
+  const run = () => {
+    paintCard(card);
+    const fit = () => requestAnimationFrame(() => fitVisibleText());
+    fit();
+    document.fonts?.ready.then(fit).catch(() => {});
+  };
+  if (first || !transitionsOn()) {
+    screen.classList.remove("is-leaving", "is-entering");
+    run();
+    return;
+  }
+  const token = ++transitionToken;
+  screen.classList.add("is-leaving");
+  window.setTimeout(() => {
+    if (token !== transitionToken) return;
+    run();
+    screen.classList.remove("is-leaving");
+    screen.classList.add("is-entering");
+    window.setTimeout(() => {
+      if (token === transitionToken) screen.classList.remove("is-entering");
+    }, 720);
+  }, 420);
+}
+
 function alignVideo(startedAt) {
   if (!wallVideo.duration || !Number.isFinite(wallVideo.duration)) return;
   const elapsed = ((Date.now() - Number(startedAt)) / 1000) % wallVideo.duration;
@@ -439,6 +576,18 @@ function showVideo(card) {
   stopVideo();
   teardownPresent();
   clearSync();
+  const fallback = document.getElementById("video-fallback");
+  if (!card?.url || card.empty) {
+    stopWallVideo();
+    wallVideo.hidden = true;
+    if (fallback) {
+      fallback.hidden = false;
+      setFit(fallback, FIXTURE ? `${card?.title || "Video"} ${LONG_TEXT}` : (card?.title || "Video"));
+    }
+    return;
+  }
+  wallVideo.hidden = false;
+  if (fallback) fallback.hidden = true;
   const slots = card.slots || [SLOT];
   const primary = String(slots[0] || SLOT);
   if (card.mode === "span") {
@@ -659,11 +808,21 @@ function paintClock() {
   const now = new Date(Date.now() - clockSkew);
   clockTime.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const event = (payload?.state?.leaderboards || []).find((board) => board.kind !== "machine");
-  clockEvent.textContent = event?.name || payload?.guest?.eventName || "Tonight";
+  setFit(clockEvent, FIXTURE ? LONG_TEXT : (event?.name || payload?.guest?.eventName || "Tonight"));
 }
 
 function placePhotos(target, card) {
-  const photos = payload?.guest?.photos || [];
+  let photos = payload?.guest?.photos || [];
+  if (FIXTURE) {
+    const pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    photos = [0, 1, 2].map((i) => ({
+      id: `fixture-${i}`,
+      url: photos[i]?.url || pixel,
+      caption: LONG_TEXT,
+      guestName: "Guest",
+      createdAt: 0,
+    }));
+  }
   const enabled = payload?.layout ? Object.values(payload.layout).filter((slot) => slot.enabled).length : 3;
   const screens = card?.span ? Math.max(1, enabled) : 1;
   const slot = card?.span ? (Number.isInteger(card.slotIndex) ? card.slotIndex : slotIndex()) : 0;
@@ -674,7 +833,12 @@ function placePhotos(target, card) {
   const positions = window.PinballMotion ? window.PinballMotion.pinPositions(photos.length, screens) : [];
   target.replaceChildren();
   photos.forEach((photo, index) => {
-    const pos = positions[index] || { x: 10, y: 10, tilt: 0 };
+    const raw = positions[index] || { x: 10, y: 10, tilt: 0 };
+    const pos = {
+      x: Math.min(74, Math.max(4, raw.x * 0.7)),
+      y: Math.min(46, Math.max(6, raw.y * 0.5)),
+      tilt: Math.max(-2, Math.min(2, raw.tilt || 0)),
+    };
     if (target === collageGrid) {
       const img = document.createElement("img");
       img.src = photo.url;
@@ -686,12 +850,13 @@ function placePhotos(target, card) {
     el.className = `pin-card${Date.now() - Number(photo.createdAt) < 20000 ? " is-new" : ""}`;
     el.style.left = `${pos.x}%`;
     el.style.top = `${pos.y}%`;
-    el.style.transform = `rotate(${pos.tilt}deg)`;
+    el.style.transform = "none";
     const img = document.createElement("img");
     img.src = photo.url;
     img.alt = photo.caption || "Guest photo";
     const cap = document.createElement("span");
-    cap.textContent = [photo.guestName, photo.caption].filter(Boolean).join(" — ");
+    cap.setAttribute("data-fit", "2");
+    setFit(cap, FIXTURE ? LONG_TEXT : [photo.guestName, photo.caption].filter(Boolean).join(" — "));
     el.append(img, cap);
     target.append(el);
   });
@@ -747,39 +912,38 @@ window.addEventListener("message", (event) => {
 
 let clockSkew = 0;
 
-function paintMotion() {
-  if (!motionCanvas || document.documentElement.classList.contains("is-shot")) {
-    if (wipe) wipe.hidden = true;
-    return;
-  }
-  const mode = payload?.motion || "subtle";
+function paintMotion(dt) {
+  if (!motionCanvas) return;
   const ctx = motionCanvas.getContext("2d");
-  const width = motionCanvas.width = window.innerWidth;
-  const height = motionCanvas.height = window.innerHeight;
-  ctx.clearRect(0, 0, width, height);
-  if (!window.PinballMotion || mode === "off") {
-    wipe.hidden = true;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, window.innerWidth);
+  const height = Math.max(1, window.innerHeight);
+  if (motionCanvas.width !== Math.round(width * dpr) || motionCanvas.height !== Math.round(height * dpr)) {
+    motionCanvas.width = Math.round(width * dpr);
+    motionCanvas.height = Math.round(height * dpr);
+    motionCanvas.style.width = `${width}px`;
+    motionCanvas.style.height = `${height}px`;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (SHOT || !window.PinballMotion || payload?.motion === "off") {
+    ctx.clearRect(0, 0, width, height);
+    motionField = null;
     return;
   }
-  const now = Date.now() - clockSkew;
-  const screens = payload?.guest?.span ? Math.max(1, Object.values(payload.layout || {}).filter((slot) => slot.enabled).length || 1) : 1;
-  const theme = payload?.state?.theme;
-  const kind = mode === "subtle" && theme !== "pinnacle" ? "subtle" : mode;
-  for (const part of window.PinballMotion.particlesForSlot({
-    now,
-    mode: kind,
-    theme,
-    slotIndex: slotIndex(),
-    screenCount: Math.max(screens, 3),
-  })) {
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--particle") || "rgba(248,248,245,0.4)";
-    ctx.beginPath();
-    ctx.arc(part.x * width, part.y * height, Math.max(1.5, part.size / 3), 0, Math.PI * 2);
-    ctx.fill();
+  const theme = queryTheme() || payload?.state?.theme || "pinnacle";
+  if (!motionField || motionTheme !== theme) {
+    motionTheme = theme;
+    motionField = window.PinballMotion.createField(theme, slotIndex() + 1);
   }
-  const phase = window.PinballMotion.wallPhase(now);
-  wipe.hidden = mode === "off";
-  wipe.style.transform = `translateX(${(phase * Math.max(screens, 3) - slotIndex()) * 100}vw)`;
+  window.PinballMotion.stepField(motionField, dt);
+  window.PinballMotion.drawField(ctx, motionField, width, height);
+}
+
+function motionFrame(ts) {
+  const dt = lastFrame ? (ts - lastFrame) / 1000 : 0.016;
+  lastFrame = ts;
+  paintMotion(dt);
+  requestAnimationFrame(motionFrame);
 }
 
 function tick() {
@@ -787,7 +951,7 @@ function tick() {
   applyTheme(payload.state?.theme);
   renderCard(resolveCard());
   if (screen.dataset.mode === "clock") paintClock();
-  paintMotion();
+  if (screen.dataset.mode === "clock" || FIXTURE) requestAnimationFrame(() => fitVisibleText());
 }
 
 function applyPayload(next) {
@@ -836,3 +1000,7 @@ fetch("/api/state")
 
 connect();
 setInterval(tick, 250);
+requestAnimationFrame(motionFrame);
+if (document.fonts?.ready) {
+  document.fonts.ready.then(() => fitVisibleText()).catch(() => {});
+}

@@ -13,7 +13,7 @@ const { createConfigStore } = require("./config");
 const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
 const { getLanIPv4s, isLanAddress, forwardedAddress, lanRequired, loopbackRequired } = require("./lan");
 const { Presentations } = require("./presentations");
-const { DISPLAY_CONTENTS, layoutForDisplays, mapDisplaysToSlots } = require("./displays");
+const { canonicalDisplayContent, layoutForDisplays, mapDisplaysToSlots } = require("./displays");
 const { PlugService, createTplinkClient } = require("./plugs");
 const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./media");
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
@@ -793,7 +793,7 @@ function createApp({
         for (const slot of ["1", "2", "3"]) {
           const screen = body.screens[slot];
           if (!screen) continue;
-          if (screen.content !== undefined && !DISPLAY_CONTENTS.includes(screen.content)) {
+          if (screen.content !== undefined && !canonicalDisplayContent(screen.content)) {
             return sendJson(res, 400, { error: "Unknown display content" });
           }
           if (screen.leaderboardId && !store.findBoard(screen.leaderboardId)) {

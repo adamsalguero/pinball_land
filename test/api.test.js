@@ -72,10 +72,10 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
   }
 });
 
-test("PIN gates mutations; login cookie allows off and live WS update", async () => {
+test("PIN gates mutations; login cookie allows a live update and black does not blank the wall", async () => {
   const { server, origin, port } = await startServer();
   try {
-    const denied = await json(origin, "/api/off", { method: "POST" });
+    const denied = await json(origin, "/api/theme", { method: "PUT", body: { theme: "halloween" } });
     assert.equal(denied.res.status, 401);
 
     const login = await json(origin, "/api/login", { method: "POST", body: { pin: "2224" } });
@@ -91,21 +91,28 @@ test("PIN gates mutations; login cookie allows off and live WS update", async ()
     const wsState = new Promise((resolve, reject) => {
       socket.on("message", (raw) => {
         const message = JSON.parse(raw.toString());
-        if (message.state?.blackout === true) {
+        if (message.state?.theme === "halloween") {
           socket.close();
           resolve(true);
         }
       });
       socket.on("error", reject);
-      setTimeout(() => reject(new Error("timed out waiting for off broadcast")), 3000);
+      setTimeout(() => reject(new Error("timed out waiting for theme broadcast")), 3000);
     });
 
+    const themed = await json(origin, "/api/theme", {
+      method: "PUT",
+      headers: { cookie: cookie.split(";")[0] },
+      body: { theme: "halloween" },
+    });
+    assert.equal(themed.res.status, 200);
+    assert.equal(themed.data.state.theme, "halloween");
     const off = await json(origin, "/api/off", {
       method: "POST",
       headers: { cookie: cookie.split(";")[0] },
     });
     assert.equal(off.res.status, 200);
-    assert.equal(off.data.state.blackout, true);
+    assert.equal(off.data.state.blackout, false);
     assert.equal(off.data.state.rotation.enabled, true);
     await wsState;
   } finally {
@@ -272,13 +279,13 @@ test("display settings, restart, and monitor order are PIN protected and live", 
       body: {
         count: 2,
         mirror: true,
-        screens: { 1: { content: "pinnacle" }, 2: { content: "off" } },
+        screens: { 1: { content: "logos" }, 2: { content: "black" } },
       },
     });
     assert.equal(updated.data.displays.count, 2);
     assert.equal(updated.data.displays.mirror, true);
-    assert.equal(updated.data.displays.screens["2"].content, "off");
-    assert.equal(updated.data.layout["2"].content, "pinnacle");
+    assert.equal(updated.data.displays.screens["2"].content, "rotation");
+    assert.equal(updated.data.layout["2"].content, "logos");
     assert.equal(updated.data.layout["2"].staggerIndex, 0);
     assert.equal(updated.data.layout["3"].enabled, false);
 

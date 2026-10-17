@@ -1,7 +1,23 @@
-const { CONTENTS } = require("./store");
-
 const SLOT_IDS = ["1", "2", "3"];
-const DISPLAY_CONTENTS = ["rotation", ...CONTENTS];
+const DISPLAY_CONTENTS = ["rotation", "logos", "amenities", "leaderboard", "pinboard", "video"];
+const BLACK_DISPLAY = new Set(["off", "black", "dark"]);
+const LEGACY_DISPLAY = {
+  pinnacle: "logos",
+  "pinball-land": "logos",
+  "amenity-arcade": "amenities",
+  "amenity-oasis": "amenities",
+  "amenity-events": "amenities",
+  photos: "pinboard",
+  collage: "pinboard",
+  clock: "rotation",
+};
+
+function canonicalDisplayContent(content) {
+  const value = String(content || "");
+  if (BLACK_DISPLAY.has(value)) return "rotation";
+  const mapped = LEGACY_DISPLAY[value] || value;
+  return DISPLAY_CONTENTS.includes(mapped) ? mapped : null;
+}
 
 function clampCount(value) {
   const n = Number.parseInt(value, 10);
@@ -11,7 +27,7 @@ function clampCount(value) {
 
 function normalizeScreen(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
-  const content = DISPLAY_CONTENTS.includes(incoming.content) ? incoming.content : "rotation";
+  const content = canonicalDisplayContent(incoming.content) || "rotation";
   const leaderboardId = incoming.leaderboardId ? String(incoming.leaderboardId) : null;
   return {
     enabled: incoming.enabled !== false,
@@ -128,6 +144,7 @@ function slotLabel(slot, count) {
 module.exports = {
   SLOT_IDS,
   DISPLAY_CONTENTS,
+  canonicalDisplayContent,
   DEFAULT_DISPLAYS,
   clampCount,
   normalizeDisplays,

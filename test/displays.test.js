@@ -80,15 +80,15 @@ test("mirror keeps each screen's saved content but shows screen 1 and the same r
     count: 3,
     mirror: true,
     screens: {
-      1: { enabled: true, content: "pinnacle" },
-      2: { enabled: true, content: "off" },
+      1: { enabled: true, content: "logos" },
+      2: { enabled: true, content: "video" },
       3: { enabled: false, content: "leaderboard", leaderboardId: "board-a" },
     },
   });
-  assert.equal(config.screens["2"].content, "off");
+  assert.equal(config.screens["2"].content, "video");
   const layout = layoutForDisplays(config);
-  assert.equal(layout["1"].content, "pinnacle");
-  assert.equal(layout["2"].content, "pinnacle");
+  assert.equal(layout["1"].content, "logos");
+  assert.equal(layout["2"].content, "logos");
   assert.equal(layout["2"].staggerIndex, 0);
   assert.equal(layout["3"].enabled, false);
   assert.equal(layout["1"].staggerIndex, 0);
@@ -96,7 +96,7 @@ test("mirror keeps each screen's saved content but shows screen 1 and the same r
 
 test("window layout ignores content changes and follows count, enable, order, and restart", () => {
   const base = { count: 3, screens: { 1: { content: "rotation", enabled: true } } };
-  const changedContent = { count: 3, screens: { 1: { content: "off", enabled: true } } };
+  const changedContent = { count: 3, screens: { 1: { content: "video", enabled: true } } };
   assert.equal(windowLayoutKey(base, 1), windowLayoutKey(changedContent, 1));
   assert.notEqual(windowLayoutKey(base, 1), windowLayoutKey({ count: 2 }, 1));
   assert.notEqual(windowLayoutKey(base, 1), windowLayoutKey(base, 2));
@@ -104,6 +104,29 @@ test("window layout ignores content changes and follows count, enable, order, an
     windowLayoutKey(base, 1),
     windowLayoutKey({ count: 3, screens: { 2: { enabled: false } } }, 1)
   );
+});
+
+test("black, dark, and split amenities become rotation or one amenities mode", () => {
+  const config = normalizeDisplays({
+    screens: {
+      1: { content: "black" },
+      2: { content: "dark" },
+      3: { content: "off" },
+    },
+  });
+  assert.equal(config.screens["1"].content, "rotation");
+  assert.equal(config.screens["2"].content, "rotation");
+  assert.equal(config.screens["3"].content, "rotation");
+  const legacy = normalizeDisplays({
+    screens: {
+      1: { content: "amenity-arcade" },
+      2: { content: "pinnacle" },
+      3: { content: "photos" },
+    },
+  });
+  assert.equal(legacy.screens["1"].content, "amenities");
+  assert.equal(legacy.screens["2"].content, "logos");
+  assert.equal(legacy.screens["3"].content, "pinboard");
 });
 
 test("slot labels follow the active count", () => {

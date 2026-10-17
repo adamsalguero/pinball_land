@@ -58,8 +58,7 @@ function normalizeMediaSettings(raw) {
 }
 
 function normalizeMotion(raw) {
-  const value = String(raw || "subtle");
-  return ["off", "subtle", "full"].includes(value) ? value : "subtle";
+  return String(raw || "") === "off" ? "off" : "subtle";
 }
 
 function httpBaseUrl(value) {
