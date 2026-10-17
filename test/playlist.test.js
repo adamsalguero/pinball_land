@@ -9,6 +9,9 @@ const {
   amenityAt,
   slotIndexForDisplay,
   normalizeRotation,
+  planRotation,
+  rotationKey,
+  videoStartSec,
   AMENITY_DWELL_SEC,
 } = require("../src/playlist");
 
@@ -22,13 +25,14 @@ test("amenity cards are arcade, oasis, and events — never pool", () => {
   assert.equal(blob.includes("collage"), false);
 });
 
-test("rotation defaults on with a 25s interval and one amenities card", () => {
+test("rotation defaults on with a 30s interval and one amenities card", () => {
   const rotation = normalizeRotation(undefined);
   assert.equal(rotation.enabled, true);
-  assert.equal(rotation.intervalSec, 25);
+  assert.equal(rotation.intervalSec, 30);
   assert.equal(rotation.items.logoPinnacle, true);
   assert.equal(rotation.items.amenities, true);
-  assert.equal(normalizeRotation({ intervalSec: 14 }).intervalSec, 25);
+  assert.equal(normalizeRotation({ intervalSec: 14 }).intervalSec, 30);
+  assert.equal(normalizeRotation({ intervalSec: 25 }).intervalSec, 30);
   assert.equal(normalizeRotation({ intervalSec: 20 }).intervalSec, 20);
   assert.equal(normalizeRotation({ intervalSec: 8 }).intervalSec, 10);
   assert.equal(normalizeRotation({ intervalSec: 200 }).intervalSec, 120);
@@ -70,6 +74,28 @@ test("playlist stagger keeps neighboring TVs on different cards", () => {
   }
   assert.equal(slotIndexForDisplay("1"), 0);
   assert.equal(slotIndexForDisplay("3"), 2);
+  const layout = {
+    1: { content: "rotation", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "pinboard", enabled: true },
+  };
+  for (let tick = 0; tick < 12; tick += 1) {
+    const plan = planRotation(playlist, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now: tick * 30000,
+    });
+    const keys = ["1", "2", "3"].map((slot) => rotationKey(plan[slot])).filter(Boolean);
+    assert.equal(new Set(keys).size, keys.length);
+    assert.equal(rotationKey(plan["3"]), "pinboard");
+    assert.notEqual(rotationKey(plan["1"]), "pinboard");
+    assert.notEqual(rotationKey(plan["2"]), "pinboard");
+  }
+  const start = videoStartSec("starter:skeleton-dance-1929", 3, 331);
+  assert.ok(start > 10);
+  assert.ok(start < 300);
 });
 
 test("currentTick advances by interval and disabled boards drop out", () => {

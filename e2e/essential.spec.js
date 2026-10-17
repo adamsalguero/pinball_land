@@ -11,7 +11,7 @@ async function unlock(page) {
 test("PIN unlock, displays, rotation, leaderboard, theme, present", async ({ page, request }) => {
   await unlock(page);
   await expect(page.getByRole("heading", { name: "Displays" })).toBeVisible();
-  await page.getByRole("button", { name: "2 screens" }).click();
+  await page.getByRole("button", { name: "Auto (rotate all)" }).click();
   await page.getByRole("button", { name: "Halloween party" }).click();
   const state = await request.get("/api/state");
   const body = await state.json();
@@ -21,11 +21,9 @@ test("PIN unlock, displays, rotation, leaderboard, theme, present", async ({ pag
   await expect(page.locator("#screen")).toBeVisible();
   await page.goto("/admin");
   await page.getByRole("button", { name: "Boards", exact: true }).click();
-  const name = page.getByLabel("Event name");
-  await name.fill("Friday finals");
-  await name.press("Tab");
-  await page.getByRole("button", { name: "Present" }).click();
-  await expect(page.getByText("isn't practical")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Score submissions" })).toBeVisible();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "AirPlay" })).toBeVisible();
 });
 
 test("guest upload has no PIN and admin approves it", async ({ page, request }) => {
@@ -44,7 +42,7 @@ test("guest upload has no PIN and admin approves it", async ({ page, request }) 
   const approve = page.getByRole("button", { name: "Approve", exact: true });
   await expect(approve.first()).toBeVisible();
   await approve.first().click();
-  await expect(page.getByText("approved:", { exact: false })).toBeVisible();
+  await expect(page.getByText("approved:", { exact: false }).first()).toBeVisible();
 });
 
 test("mock plug toggle and video section", async ({ page }) => {
@@ -57,8 +55,7 @@ test("mock plug toggle and video section", async ({ page }) => {
   await expect(page.getByRole("button", { name: "On" }).first()).toBeEnabled();
   await page.getByRole("button", { name: "All on" }).click();
   await expect(page.getByText("· On")).toBeVisible();
-  await page.getByRole("button", { name: "Media" }).click();
-  await expect(page.getByRole("heading", { name: "Videos" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Videos", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "YouTube" })).toBeVisible();
 });
 
@@ -68,7 +65,7 @@ test("wall and controller snapshots", async ({ page }) => {
   await page.screenshot({ path: "e2e/artifacts/wall-logo.png" });
   await expect(page).toHaveScreenshot("wall-logo.png");
 
-  await page.goto("/display/1?preview=board&shot=1");
+  await page.goto("/display/1?preview=board&fixture=long&shot=1");
   await expect(page.getByText("First")).toBeVisible();
   await page.screenshot({ path: "e2e/artifacts/wall-board.png" });
   await expect(page).toHaveScreenshot("wall-board.png");

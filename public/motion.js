@@ -28,11 +28,13 @@ function wrap(value) {
 }
 
 function makeParticle(rng, kind) {
-  const drift = kind === "snow" ? 0.015 + rng() * 0.03 : kind === "spider" ? 0.012 + rng() * 0.02 : 0.01 + rng() * 0.025;
+  const drift = kind === "snow" ? 0.015 + rng() * 0.03 : kind === "spider" ? 0.08 + rng() * 0.06 : 0.01 + rng() * 0.025;
+  const x = rng();
   return {
     kind,
-    x: rng(),
-    y: rng(),
+    x,
+    y: kind === "spider" ? rng() * 0.22 : rng(),
+    anchorX: x,
     vx: (rng() - 0.5) * (kind === "bat" ? 0.07 : 0.02),
     vy: kind === "bat" ? (rng() - 0.5) * 0.01 : drift,
     size: kind === "mote" ? 1.5 + rng() * 1.5 : kind === "snow" ? 1.4 + rng() * 2.6 : 16 + rng() * 14,
@@ -65,8 +67,10 @@ function stepField(field, dt) {
       particle.x += particle.vx * sec;
       particle.y += Math.sin(particle.phase) * 0.015 * sec * 8;
     } else if (particle.kind === "spider") {
-      particle.y += particle.vy * sec;
-      particle.x += Math.sin(particle.phase) * 0.004;
+      particle.phase += sec * particle.vy;
+      const drop = (Math.sin(particle.phase) + 1) / 2;
+      particle.y = 0.03 + drop * 0.28;
+      particle.x = wrap((particle.anchorX ?? particle.x) + Math.sin(particle.phase * 0.65) * 0.025);
     } else if (particle.kind === "mote") {
       particle.x += particle.vx * sec * 0.35;
       particle.y += particle.vy * sec * 0.25;
@@ -76,10 +80,7 @@ function stepField(field, dt) {
       if (particle.kind === "candy" || particle.kind === "ornament") particle.spin += sec * 0.15;
     }
     if (particle.kind === "spider") {
-      if (particle.y > 1.08) {
-        particle.y = -0.08;
-        particle.x = wrap(particle.x + 0.17);
-      }
+      particle.y = Math.min(0.33, Math.max(0.02, particle.y));
     } else {
       particle.x = wrap(particle.x);
       particle.y = wrap(particle.y);
@@ -88,22 +89,52 @@ function stepField(field, dt) {
 }
 
 function drawPumpkin(ctx, size) {
-  ctx.fillStyle = "#e26a1a";
-  ctx.beginPath();
-  ctx.ellipse(0, 1, size * 0.46, size * 0.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#9a3d08";
-  ctx.lineWidth = Math.max(1, size * 0.06);
-  ctx.beginPath();
-  ctx.moveTo(0, -size * 0.28);
-  ctx.quadraticCurveTo(0, 0, 0, size * 0.36);
-  ctx.stroke();
+  const lobes = [-0.22, 0, 0.22];
+  for (const offset of lobes) {
+    ctx.fillStyle = offset === 0 ? "#ef7a22" : "#e15f12";
+    ctx.beginPath();
+    ctx.ellipse(offset * size, size * 0.06, size * 0.26, size * 0.36, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = "#b8430c";
+  ctx.lineWidth = Math.max(1, size * 0.045);
+  for (const offset of [-0.12, 0.12]) {
+    ctx.beginPath();
+    ctx.moveTo(offset * size, -size * 0.2);
+    ctx.quadraticCurveTo(offset * size, size * 0.08, offset * size, size * 0.36);
+    ctx.stroke();
+  }
   ctx.strokeStyle = "#2f6b32";
-  ctx.lineWidth = Math.max(1.25, size * 0.1);
+  ctx.lineWidth = Math.max(1.6, size * 0.11);
+  ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(0, -size * 0.28);
-  ctx.quadraticCurveTo(size * 0.16, -size * 0.48, size * 0.22, -size * 0.34);
+  ctx.moveTo(0, -size * 0.26);
+  ctx.quadraticCurveTo(size * 0.16, -size * 0.5, size * 0.22, -size * 0.36);
   ctx.stroke();
+  ctx.fillStyle = "#2a1408";
+  const eye = (x) => {
+    ctx.beginPath();
+    ctx.moveTo(x * size, -size * 0.04);
+    ctx.lineTo((x + (x < 0 ? -0.1 : 0.1)) * size, size * 0.08);
+    ctx.lineTo((x + (x < 0 ? 0.08 : -0.08)) * size, size * 0.08);
+    ctx.closePath();
+    ctx.fill();
+  };
+  eye(-0.14);
+  eye(0.14);
+  ctx.beginPath();
+  ctx.moveTo(0, size * 0.08);
+  ctx.lineTo(size * 0.05, size * 0.16);
+  ctx.lineTo(-size * 0.05, size * 0.16);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.16, size * 0.22);
+  ctx.quadraticCurveTo(0, size * 0.38, size * 0.16, size * 0.22);
+  ctx.lineTo(size * 0.08, size * 0.26);
+  ctx.quadraticCurveTo(0, size * 0.3, -size * 0.08, size * 0.26);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function drawSpider(ctx, size, yNorm) {
@@ -133,30 +164,23 @@ function drawSpider(ctx, size, yNorm) {
 }
 
 function drawCandy(ctx, size) {
-  const h = size * 0.72;
-  const w = size * 0.42;
+  const h = size * 0.86;
+  const w = size * 0.5;
   ctx.beginPath();
   ctx.moveTo(0, -h * 0.5);
-  ctx.lineTo(w * 0.55, h * 0.15);
-  ctx.lineTo(-w * 0.55, h * 0.15);
+  ctx.quadraticCurveTo(w * 0.62, h * 0.05, w * 0.46, h * 0.42);
+  ctx.quadraticCurveTo(0, h * 0.56, -w * 0.46, h * 0.42);
+  ctx.quadraticCurveTo(-w * 0.62, h * 0.05, 0, -h * 0.5);
   ctx.closePath();
-  ctx.fillStyle = "#f4f0e6";
+  ctx.fillStyle = "#f6c431";
   ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(-w * 0.55, h * 0.15);
-  ctx.lineTo(w * 0.55, h * 0.15);
-  ctx.lineTo(w * 0.38, h * 0.42);
-  ctx.lineTo(-w * 0.38, h * 0.42);
-  ctx.closePath();
-  ctx.fillStyle = "#f0a202";
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(-w * 0.38, h * 0.42);
-  ctx.lineTo(w * 0.38, h * 0.42);
-  ctx.lineTo(0, h * 0.62);
-  ctx.closePath();
-  ctx.fillStyle = "#e23d28";
-  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = "#f7f3ea";
+  ctx.fillRect(-size, -h * 0.52, size * 2, h * 0.28);
+  ctx.fillStyle = "#f08a1a";
+  ctx.fillRect(-size, -h * 0.24, size * 2, h * 0.3);
+  ctx.restore();
 }
 
 function drawBat(ctx, size, flap) {

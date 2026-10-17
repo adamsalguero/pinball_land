@@ -251,8 +251,9 @@ test("catalog and youtube inputs are explicit", () => {
   const items = loadCatalog(path.join(__dirname, "..", "media", "catalog.json"));
   assert.ok(items.length >= 4);
   assert.ok(items.every((item) => item.streamUrl.startsWith("https://")));
-  assert.equal(items.find((item) => item.id === "night-of-the-living-dead-1968").allAges, false);
-  assert.equal(items.find((item) => item.id === "a-christmas-carol-1910").holiday, "christmas");
+  assert.ok(items.filter((item) => item.holiday === "christmas").every((item) => item.color === true));
+  assert.equal(items.find((item) => item.id === "christmas-comes-1936").holiday, "christmas");
+  assert.equal(items.some((item) => item.id === "a-christmas-carol-1910"), false);
   const video = parseYoutubeInput("https://www.youtube.com/watch?v=abcdefghijk");
   assert.deepEqual(video, { kind: "video", id: "abcdefghijk" });
   const list = parseYoutubeInput("https://www.youtube.com/playlist?list=PLabcdefghijklmnop");

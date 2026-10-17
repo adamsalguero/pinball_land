@@ -56,8 +56,9 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
     assert.match(controlText, /Kiosk control/);
     assert.match(controlText, /Outdoor Oasis/);
     assert.match(controlText, /Displays/);
-    assert.match(controlText, /isn't practical/);
-    assert.match(controlText, /Chromecast/);
+    assert.match(controlText, /Auto \(rotate all\)/);
+    assert.match(controlText, /Test videos/);
+    assert.doesNotMatch(controlText, /Chromecast/);
     assert.doesNotMatch(controlText, /\bpool\b/i);
     const present = await fetch(`${origin}/present`);
     assert.equal(present.status, 200);
@@ -126,7 +127,9 @@ test("rotation payload, amenity copy, theme, and machine enable", async () => {
     const headers = { "x-pin": "2224" };
     const state = await json(origin, "/api/state");
     assert.equal(state.data.state.rotation.enabled, true);
-    assert.ok(state.data.playlist.length >= 6);
+    assert.ok(state.data.playlist.length >= 5);
+    assert.ok(state.data.rotationPlan["1"]);
+    assert.notEqual(state.data.rotationPlan["1"] && state.data.rotationPlan["1"].type + (state.data.rotationPlan["1"].key || state.data.rotationPlan["1"].id), state.data.rotationPlan["2"] && state.data.rotationPlan["2"].type + (state.data.rotationPlan["2"].key || state.data.rotationPlan["2"].id));
     assert.deepEqual(
       state.data.amenities.map((item) => item.id),
       ["arcade", "oasis", "events"]
@@ -144,7 +147,7 @@ test("rotation payload, amenity copy, theme, and machine enable", async () => {
     const added = await json(origin, "/api/machines", {
       method: "POST",
       headers,
-      body: { name: "Attack From Mars" },
+      body: { name: "Attack From Mars", opdbId: "GTEST-AFM" },
     });
     const machine = added.data.state.leaderboards.at(-1);
     assert.equal(machine.kind, "machine");
@@ -169,9 +172,13 @@ test("rotation payload, amenity copy, theme, and machine enable", async () => {
 test("can switch a slot and add a score with the PIN header", async () => {
   const { server, origin } = await startServer();
   try {
-    const state = await json(origin, "/api/state");
-    const boardId = state.data.state.leaderboards[0].id;
     const headers = { "x-pin": "2224" };
+    const created = await json(origin, "/api/machines", {
+      method: "POST",
+      headers,
+      body: { name: "Attack From Mars", opdbId: "GTEST-AFM" },
+    });
+    const boardId = created.data.state.leaderboards[0].id;
     const slot = await json(origin, "/api/slots/1", {
       method: "PUT",
       headers,

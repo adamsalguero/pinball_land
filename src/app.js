@@ -7,7 +7,7 @@ const express = require("express");
 const { WebSocketServer } = require("ws");
 const { resolveLogos, resolvePhotos, LOGO_KEYS, PHOTO_KEYS } = require("./logos");
 const { AMENITIES } = require("./amenities");
-const { buildPlaylist } = require("./playlist");
+const { buildPlaylist, planRotation } = require("./playlist");
 const { createOpdb, manufacturerName, manufactureYear, safeId } = require("./opdb");
 const { createConfigStore } = require("./config");
 const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
@@ -57,16 +57,21 @@ function sendJson(res, status, body) {
   res.status(status).json(body);
 }
 
-function artUrlFor(board) {
-  if (!board?.artFile) return null;
-  return `/media/machines/${board.id}/art`;
+function machineAssetUrl(board, kind) {
+  const file = kind === "playfield" ? board?.playfieldFile : kind === "logo" ? board?.logoFile : board?.artFile;
+  if (!file) return null;
+  return `/media/machines/${encodeURIComponent(board.id)}/${kind === "playfield" ? "playfield" : kind === "logo" ? "logo" : "art"}`;
 }
 
 function publicLeaderboards(leaderboards) {
   return (leaderboards || []).map((board) => ({
     ...board,
-    artUrl: artUrlFor(board),
+    artUrl: machineAssetUrl(board, "art"),
+    playfieldUrl: machineAssetUrl(board, "playfield"),
+    logoUrl: machineAssetUrl(board, "logo"),
     artFile: undefined,
+    playfieldFile: undefined,
+    logoFile: undefined,
   }));
 }
 
@@ -233,30 +238,40 @@ function createApp({
     const displays = config.displays;
     const mapped = mapDisplaysToSlots(monitors, displays);
     const air = airplayController.ready();
+    const layout = layoutForDisplays(displays);
+    const playlist = buildPlaylist(state, {
+      videos: library.list(),
+      allAges: config.media.allAges,
+      starters: starterCards(catalogItems, {
+        theme: state.theme,
+        allAges: config.media.allAges,
+        mediaRoot: mediaRoot,
+        urlFor: (id) => `/media/starter/${id}`,
+        disabledIds: config.media.disabledIds,
+      }),
+      youtube: config.youtube?.[state.theme] || [],
+    });
+    const rotationPlan = planRotation(playlist, {
+      startedAt: state.rotation.startedAt,
+      intervalSec: state.rotation.intervalSec,
+      screenCount: displays.count,
+      layout,
+      now: Date.now(),
+    });
     return {
       state: {
         ...state,
         leaderboards: publicLeaderboards(state.leaderboards),
+        archivedLeaderboards: publicLeaderboards(state.archivedLeaderboards),
       },
       logos: urlsFor(resolveLogos(logosDir)),
       photos: urlsFor(resolvePhotos(photosDir)),
       amenities: AMENITIES,
-      playlist: buildPlaylist(state, {
-        videos: library.list(),
-        allAges: config.media.allAges,
-        starters: starterCards(catalogItems, {
-          theme: state.theme,
-          allAges: config.media.allAges,
-          mediaRoot: mediaRoot,
-          urlFor: (id) => `/media/starter/${id}`,
-        }),
-        youtube: config.youtube?.[state.theme] || [],
-        photoStyle: config.photos.style,
-        photoSpan: config.photos.span,
-      }),
+      playlist,
+      rotationPlan,
       opdb: { configured: opdb.configured },
       displays,
-      layout: layoutForDisplays(displays),
+      layout,
       presentations: presentations.publicState(),
       presentation: { idleMinutes: config.presentation.idleMinutes },
       share: shareInfo(config),
@@ -273,7 +288,12 @@ function createApp({
       plugs: plugService.publicState(),
       media: {
         allAges: config.media.allAges,
+        disabledIds: config.media.disabledIds || [],
         videos: library.list(),
+        catalog: catalogItems.map((item) => ({
+          ...item,
+          disabled: (config.media.disabledIds || []).includes(item.id),
+        })),
       },
       playback: publicPlayback(),
       motion: config.motion,
@@ -305,10 +325,16 @@ function createApp({
 
   function publicPayload(full) {
     return {
-      state: full.state,
+      state: {
+        ...full.state,
+        archivedLeaderboards: undefined,
+        scoreSubmissions: undefined,
+      },
       logos: full.logos,
       photos: full.photos,
       amenities: full.amenities,
+      playlist: full.playlist,
+      rotationPlan: full.rotationPlan,
       guest: {
         path: full.guest.path,
         eventName: full.guest.eventName,
@@ -662,6 +688,8 @@ function createApp({
             manufacturer: manufacturerName(cached.machine),
             year: manufactureYear(cached.machine),
             artFile: cached.artFile,
+            playfieldFile: cached.playfieldFile,
+            logoFile: cached.logoFile,
             videoUrl: cached.videoUrl,
           };
         } catch {
@@ -711,6 +739,33 @@ function createApp({
         }
       }
       if (dirty) await localStore.update({ displays: { screens } });
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/leaderboards/:id/archive", requirePin, async (req, res, next) => {
+    try {
+      await store.archiveLeaderboard(req.params.id);
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/leaderboards/:id/restore", requirePin, async (req, res, next) => {
+    try {
+      await store.restoreLeaderboard(req.params.id);
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete("/api/leaderboards/:id/archive", requirePin, async (req, res, next) => {
+    try {
+      await store.deleteArchivedLeaderboard(req.params.id);
       sendJson(res, 200, payload());
     } catch (err) {
       next(err);
@@ -794,21 +849,33 @@ function createApp({
     sendMedia(res, resolvePhotos(photosDir), req.params.key, "Photo");
   });
 
-  app.get("/media/machines/:id/art", (req, res) => {
-    const board = store.findBoard(req.params.id);
-    if (!board?.artFile || !cacheDir) {
-      return res.status(404).send("No machine art");
-    }
-    const filePath = path.join(cacheDir, board.artFile);
-    const resolved = path.resolve(filePath);
-    if (!isInside(cacheDir, resolved)) {
-      return res.status(404).send("No machine art");
-    }
-    if (!fs.existsSync(resolved)) {
+  function sendMachineFile(res, board, file) {
+    if (!board || !file || !cacheDir) return res.status(404).send("No machine art");
+    const resolved = path.resolve(cacheDir, file);
+    if (!isInside(cacheDir, resolved) || !fs.existsSync(resolved)) {
       return res.status(404).send("No machine art");
     }
     res.setHeader("Cache-Control", "no-store");
-    res.sendFile(resolved);
+    return res.sendFile(resolved);
+  }
+
+  function machineById(id) {
+    return store.findBoard(id) || (store.getState().archivedLeaderboards || []).find((board) => board.id === id);
+  }
+
+  app.get("/media/machines/:id/art", (req, res) => {
+    const board = machineById(req.params.id);
+    sendMachineFile(res, board, board?.artFile);
+  });
+
+  app.get("/media/machines/:id/playfield", (req, res) => {
+    const board = machineById(req.params.id);
+    sendMachineFile(res, board, board?.playfieldFile);
+  });
+
+  app.get("/media/machines/:id/logo", (req, res) => {
+    const board = machineById(req.params.id);
+    sendMachineFile(res, board, board?.logoFile);
   });
 
   app.put("/api/displays", requirePin, async (req, res, next) => {
@@ -967,12 +1034,41 @@ function createApp({
 
   app.put("/api/media/settings", lanRequired, requirePin, async (req, res, next) => {
     try {
-      await localStore.update({ media: { allAges: req.body?.allAges !== false } });
+      const patch = {};
+      if (req.body?.allAges !== undefined) patch.allAges = req.body.allAges !== false;
+      if (Array.isArray(req.body?.disabledIds)) patch.disabledIds = req.body.disabledIds;
+      await localStore.update({ media: patch });
       broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
       next(err);
     }
+  });
+
+  app.put("/api/media/catalog/:id", lanRequired, requirePin, async (req, res, next) => {
+    try {
+      const item = catalogItems.find((entry) => entry.id === req.params.id);
+      if (!item) return sendJson(res, 404, { error: "Unknown video" });
+      const disabled = new Set(currentConfig().media.disabledIds || []);
+      if (req.body?.disabled === false) disabled.delete(item.id);
+      else disabled.add(item.id);
+      await localStore.update({ media: { disabledIds: [...disabled] } });
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/media/failure", lanRequired, (req, res) => {
+    const reason = req.body?.reason === "failed" ? "failed" : "stalled";
+    const id = String(req.body?.id || "").replace(/[^\w:-]/g, "").slice(0, 80);
+    const title = String(req.body?.title || "").replace(/\s+/g, " ").slice(0, 80);
+    const root = dataDir || path.dirname(store.filePath);
+    const dir = path.join(root, "logs");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "video.log"), `${new Date().toISOString()} ${reason} ${id} ${title}\n`);
+    sendJson(res, 200, { ok: true });
   });
 
   app.put("/api/media/:id", lanRequired, requirePin, async (req, res, next) => {
@@ -1288,6 +1384,101 @@ function createApp({
     }
   });
 
+  const proofDir = path.join(dataDir || path.dirname(store.filePath), "score-proofs");
+
+  async function saveScoreProof(buffer) {
+    const sharp = require("sharp");
+    const processed = await sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+    const proofFile = `${crypto.randomUUID()}.jpg`;
+    fs.mkdirSync(proofDir, { recursive: true });
+    fs.writeFileSync(path.join(proofDir, proofFile), processed);
+    return proofFile;
+  }
+
+  app.post("/api/scores", (req, res, next) => {
+    const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (mime.startsWith("image/")) {
+      return express.raw({ limit: "12mb", type: () => true })(req, res, () => acceptScore(req, res, next, true));
+    }
+    return acceptScore(req, res, next, false);
+  });
+
+  async function acceptScore(req, res, next, withPhoto) {
+    try {
+      let boardId;
+      let name;
+      let score;
+      let proofFile = null;
+      if (withPhoto) {
+        const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+        if (!["image/jpeg", "image/png", "image/webp"].includes(mime)) {
+          return sendJson(res, 400, { error: "Upload a JPEG, PNG, or WEBP of the score." });
+        }
+        boardId = safeHeader(req.get("x-board-id"));
+        name = safeHeader(req.get("x-name"));
+        score = safeHeader(req.get("x-score"));
+        proofFile = await saveScoreProof(req.body);
+      } else {
+        boardId = req.body?.boardId;
+        name = req.body?.name;
+        score = req.body?.score;
+      }
+      const submission = await store.submitScore({
+        boardId,
+        name,
+        score,
+        proofFile,
+        ip: req.socket?.remoteAddress || "",
+      });
+      broadcast();
+      sendJson(res, 200, {
+        submission: {
+          id: submission.id,
+          boardId: submission.boardId,
+          name: submission.name,
+          score: submission.score,
+          status: submission.status,
+          createdAt: submission.createdAt,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  app.post("/api/scores/:id/approve", requirePin, async (req, res, next) => {
+    try {
+      await store.reviewScore(req.params.id, "approved");
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/scores/:id/reject", requirePin, async (req, res, next) => {
+    try {
+      await store.reviewScore(req.params.id, "rejected");
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/media/score-proofs/:file", requirePin, (req, res) => {
+    const name = String(req.params.file || "");
+    if (!/^[0-9a-f-]{36}\.jpg$/i.test(name)) return res.status(404).send("Not found");
+    const submission = (store.getState().scoreSubmissions || []).find((row) => row.proofFile === name);
+    if (!submission) return res.status(404).send("Not found");
+    const filePath = path.resolve(proofDir, name);
+    if (!isInside(proofDir, filePath) || !fs.existsSync(filePath)) return res.status(404).send("Not found");
+    res.setHeader("Cache-Control", "no-store");
+    res.type("jpeg").sendFile(filePath);
+  });
+
   app.get("/api/guest-photos/feed", (_req, res) => {
     sendJson(res, 200, { photos: album.feed(), events: album.events });
   });
@@ -1350,6 +1541,34 @@ function createApp({
     }
   });
 
+  app.post("/api/guest-photos/:id/archive", requirePin, async (req, res, next) => {
+    try {
+      const photo = await album.archivePhoto(req.params.id);
+      broadcast();
+      sendJson(res, 200, { photo });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/guest-photos/:id/restore", requirePin, async (req, res, next) => {
+    try {
+      const photo = await album.restorePhoto(req.params.id);
+      broadcast();
+      sendJson(res, 200, { photo });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/guest-photos/zip", requirePin, async (req, res, next) => {
+    try {
+      await album.zipApproved(res);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post("/api/guest-photos/events/:id/clear", requirePin, async (req, res, next) => {
     try {
       const result = await album.clearEvent(req.params.id);
@@ -1378,6 +1597,9 @@ function createApp({
     const filePath = album.filePath(photo);
     if (!filePath || !fs.existsSync(filePath)) return res.status(404).send("Not found");
     res.setHeader("Cache-Control", "no-store");
+    if (String(req.query.download || "") === "1") {
+      res.setHeader("Content-Disposition", `attachment; filename="${id}.jpg"`);
+    }
     res.type("jpeg").sendFile(filePath);
   });
 

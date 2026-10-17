@@ -59,6 +59,28 @@ function pickArtUrl(machine) {
   return null;
 }
 
+function imageText(img) {
+  return `${img?.type || ""} ${img?.title || ""} ${img?.kind || ""} ${img?.category || ""}`.toLowerCase();
+}
+
+function pickTypedUrl(machine, includes) {
+  for (const img of collectImages(machine)) {
+    const text = imageText(img);
+    if (!includes.some((word) => text.includes(word))) continue;
+    const url = imageUrl(img);
+    if (url && /^https?:\/\//i.test(url)) return url;
+  }
+  return null;
+}
+
+function pickPlayfieldUrl(machine) {
+  return pickTypedUrl(machine, ["playfield"]);
+}
+
+function pickLogoUrl(machine) {
+  return pickTypedUrl(machine, ["logo", "backglass logo", "manufacturer logo"]);
+}
+
 function pickVideoUrl(machine) {
   const candidates = [];
   for (const key of ["video_url", "trailer_url", "tutorial_url"]) {
@@ -172,31 +194,32 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
     async cacheMachine(opdbId) {
       const id = safeId(opdbId);
       if (!id || !cacheDir || !key) {
-        return { machine: null, artFile: null, videoUrl: null };
+        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, videoUrl: null };
       }
       const dir = path.join(cacheDir, id);
       await fs.mkdir(dir, { recursive: true });
       const machine = await this.getMachine(id);
       if (!machine) {
-        return { machine: null, artFile: null, videoUrl: null };
+        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, videoUrl: null };
       }
       await fs.writeFile(path.join(dir, "machine.json"), JSON.stringify(machine, null, 2));
-      let artFile = null;
-      const artUrl = pickArtUrl(machine);
-      if (artUrl) {
+      async function saveNamed(url, stem) {
+        if (!url) return null;
         try {
-          const res = await fetchFn(artUrl, { headers: { "User-Agent": USER_AGENT } });
-          if (res.ok) {
-            const ext = extFromUrl(artUrl);
-            const dest = path.join(dir, `art${ext}`);
-            await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
-            artFile = path.join(id, `art${ext}`);
-          }
+          const res = await fetchFn(url, { headers: { "User-Agent": USER_AGENT } });
+          if (!res.ok) return null;
+          const ext = extFromUrl(url);
+          const dest = path.join(dir, `${stem}${ext}`);
+          await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+          return path.join(id, `${stem}${ext}`);
         } catch {
-          // Wall still works from typed-in scores if art cannot be fetched.
+          return null;
         }
       }
-      return { machine, artFile, videoUrl: pickVideoUrl(machine) };
+      const artFile = await saveNamed(pickArtUrl(machine), "art");
+      const playfieldFile = await saveNamed(pickPlayfieldUrl(machine), "playfield");
+      const logoFile = await saveNamed(pickLogoUrl(machine), "logo");
+      return { machine, artFile, playfieldFile, logoFile, videoUrl: pickVideoUrl(machine) };
     },
   };
 }
@@ -205,6 +228,8 @@ module.exports = {
   OPDB_BASE,
   createOpdb,
   pickArtUrl,
+  pickPlayfieldUrl,
+  pickLogoUrl,
   pickVideoUrl,
   manufacturerName,
   manufactureYear,

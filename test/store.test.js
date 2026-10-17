@@ -12,43 +12,43 @@ beforeEach(async () => {
   filePath = path.join(dir, "state.json");
 });
 
-test("seeds a Halloween board, rotation on, and three slots on first load", async () => {
+test("starts with machine boards only, rotation on, and a 30s dwell", async () => {
   const store = await Store.load(filePath);
   const state = store.getState();
-  assert.equal(state.leaderboards[0].name, "Halloween party");
-  assert.equal(state.leaderboards[0].kind, "event");
-  assert.equal(state.leaderboards[0].inRotation, true);
+  assert.equal(state.leaderboards.length, 0);
   assert.equal(state.rotation.enabled, true);
   assert.equal(state.blackout, false);
   assert.equal(state.slots["1"].content, "logos");
   assert.equal(state.slots["2"].content, "amenities");
   assert.equal(state.slots["3"].content, "leaderboard");
-  assert.equal(state.rotation.intervalSec, 25);
-  const saved = JSON.parse(await fs.readFile(filePath, "utf8"));
-  assert.equal(saved.leaderboards[0].rows.length, 3);
+  assert.equal(state.rotation.intervalSec, 30);
 });
 
-test("assigns a slot, edits rows, and reloads from disk", async () => {
+async function addMachine(store, name = "Medieval Madness") {
+  await store.createLeaderboard(name, { kind: "machine", opdbId: "GTEST-M1", manufacturer: "Williams", year: "1997" });
+  return store.getState().leaderboards.at(-1).id;
+}
+
+test("assigns a slot, sorts scores, and reloads from disk", async () => {
   const store = await Store.load(filePath);
-  const boardId = store.getState().leaderboards[0].id;
+  const boardId = await addMachine(store);
 
   await store.setSlot("1", { content: "leaderboard", leaderboardId: boardId });
   await store.addRow(boardId, { name: "Alex", score: "12000" });
-  const added = store.getState().leaderboards[0].rows.at(-1);
+  await store.addRow(boardId, { name: "Sam", score: "40000" });
+  const added = store.getState().leaderboards[0].rows.find((row) => row.name === "Alex");
   await store.updateRow(boardId, added.id, { name: "Alex P", score: 12500 });
-  await store.moveRow(boardId, added.id, "up");
 
   const reloaded = await Store.load(filePath);
   const board = reloaded.getState().leaderboards[0];
-  const names = board.rows.map((row) => row.name);
   assert.equal(reloaded.getState().slots["1"].content, "leaderboard");
-  assert.ok(names.includes("Alex P"));
+  assert.deepEqual(board.rows.map((row) => row.name), ["Sam", "Alex P"]);
   assert.equal(board.rows.find((row) => row.name === "Alex P").score, 12500);
 });
 
 test("clear board keeps slot assignments and black does not blank the wall", async () => {
   const store = await Store.load(filePath);
-  const boardId = store.getState().leaderboards[0].id;
+  const boardId = await addMachine(store);
   await store.clearLeaderboard(boardId);
   await store.blackAll();
   const reloaded = await Store.load(filePath);
@@ -74,7 +74,7 @@ test("a saved black wall loads as rotation", async () => {
   const state = (await Store.load(filePath)).getState();
   assert.equal(state.blackout, false);
   assert.equal(state.rotation.enabled, true);
-  assert.equal(state.rotation.intervalSec, 25);
+  assert.equal(state.rotation.intervalSec, 30);
   assert.equal(state.slots["1"].content, "logos");
   assert.equal(state.slots["2"].content, "logos");
   assert.equal(state.slots["3"].content, "logos");
@@ -100,8 +100,8 @@ test("migrates legacy photo slots and persists halloween theme", async () => {
   assert.equal(state.slots["1"].content, "pinboard");
   assert.equal(state.slots["2"].content, "amenities");
   assert.equal(state.slots["3"].content, "amenities");
-  assert.equal(state.leaderboards[0].name, "Keep me");
-  assert.equal(state.leaderboards[0].inRotation, true);
+  assert.equal(state.leaderboards.length, 0);
+  assert.equal(state.archivedLeaderboards[0].name, "Keep me");
   await store.setTheme("pinnacle");
   const reloaded = await Store.load(filePath);
   assert.equal(reloaded.getState().theme, "pinnacle");
@@ -283,14 +283,34 @@ test("a stale temp that cannot be removed does not block load", async () => {
   assert.equal(store.getState().theme, "pinnacle");
 });
 
-test("delete and reorder rows", async () => {
+test("delete a score and archive a party board", async () => {
   const store = await Store.load(filePath);
-  const boardId = store.getState().leaderboards[0].id;
-  const first = store.getState().leaderboards[0].rows[0];
-  await store.deleteRow(boardId, first.id);
-  assert.equal(store.getState().leaderboards[0].rows.length, 2);
-  const [a, b] = store.getState().leaderboards[0].rows;
-  await store.moveRow(boardId, b.id, "up");
-  assert.equal(store.getState().leaderboards[0].rows[0].id, b.id);
-  assert.equal(store.getState().leaderboards[0].rows[1].id, a.id);
+  const boardId = await addMachine(store);
+  await store.addRow(boardId, { name: "Low", score: 10 });
+  await store.addRow(boardId, { name: "High", score: 90 });
+  const low = store.getState().leaderboards[0].rows.find((row) => row.name === "Low");
+  await store.deleteRow(boardId, low.id);
+  assert.equal(store.getState().leaderboards[0].rows.length, 1);
+  await store.archiveLeaderboard(boardId);
+  assert.equal(store.getState().leaderboards.length, 0);
+  assert.equal(store.getState().archivedLeaderboards[0].name, "Medieval Madness");
+  await store.restoreLeaderboard(boardId);
+  assert.equal(store.getState().leaderboards[0].rows[0].name, "High");
+});
+
+test("guest scores wait for approval and are rate limited", async () => {
+  const store = await Store.load(filePath);
+  const boardId = await addMachine(store);
+  const submitted = await store.submitScore({ boardId, name: "Ava", score: "5000", ip: "10.0.0.8", now: 1_000 });
+  assert.equal(submitted.status, "pending");
+  assert.equal(store.getState().leaderboards[0].rows.length, 0);
+  await store.reviewScore(submitted.id, "approved");
+  assert.equal(store.getState().leaderboards[0].rows[0].name, "Ava");
+  for (let i = 0; i < 5; i += 1) {
+    await store.submitScore({ boardId, name: "Ava", score: i, ip: "10.0.0.8", now: 2_000 + i });
+  }
+  await assert.rejects(
+    () => store.submitScore({ boardId, name: "Ava", score: 9, ip: "10.0.0.8", now: 3_000 }),
+    (err) => err.status === 429
+  );
 });

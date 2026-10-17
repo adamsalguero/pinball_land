@@ -108,11 +108,13 @@ function isSlotActive(content, optionId) {
 }
 
 function renderRotation() {
-  const rotation = current.state.rotation || { enabled: true, intervalSec: 25, items: {} };
-  document.getElementById("rotation-on").classList.toggle("active", rotation.enabled !== false);
+  const rotationOn = document.getElementById("rotation-on");
+  if (!rotationOn || !intervalInput || !rotationItemsEl) return;
+  const rotation = current.state.rotation || { enabled: true, intervalSec: 30, items: {} };
+  rotationOn.classList.toggle("active", rotation.enabled !== false);
   document.getElementById("rotation-off").classList.toggle("active", rotation.enabled === false);
   if (document.activeElement !== intervalInput) {
-    intervalInput.value = String(rotation.intervalSec || 25);
+    intervalInput.value = String(rotation.intervalSec || 30);
   }
   rotationItemsEl.replaceChildren();
   for (const item of ROTATION_TOGGLES) {
@@ -134,6 +136,7 @@ function renderRotation() {
 }
 
 function renderSlots() {
+  if (!slotsEl) return;
   slotsEl.replaceChildren();
   for (const meta of SLOT_META) {
     const slot = current.state.slots[meta.id];
@@ -235,7 +238,7 @@ function renderBoardEditor() {
   }
 
   const nameLabel = document.createElement("label");
-  nameLabel.textContent = board.kind === "machine" ? "Machine name" : "Event name";
+  nameLabel.textContent = "Machine name";
   const nameInput = document.createElement("input");
   nameInput.value = board.name;
   nameInput.addEventListener("change", async () => {
@@ -270,7 +273,7 @@ function renderBoardEditor() {
 
   const orderHint = document.createElement("p");
   orderHint.className = "muted";
-  orderHint.textContent = "Rows stay in the order you set. Use Up/Down to change rank.";
+  orderHint.textContent = "Scores sort highest first when you enter a name and score.";
   boardEditor.append(orderHint);
 
   const actions = document.createElement("div");
@@ -284,15 +287,23 @@ function renderBoardEditor() {
     applyPayload(await api(`/api/leaderboards/${board.id}/clear`, { method: "POST" }));
     toast("Board cleared");
   });
+  const archiveBtn = document.createElement("button");
+  archiveBtn.type = "button";
+  archiveBtn.className = "btn";
+  archiveBtn.textContent = "Archive";
+  archiveBtn.addEventListener("click", async () => {
+    applyPayload(await api(`/api/leaderboards/${board.id}/archive`, { method: "POST" }));
+    toast("Board archived");
+  });
   const deleteBtn = document.createElement("button");
   deleteBtn.type = "button";
   deleteBtn.className = "btn danger";
-  deleteBtn.textContent = board.kind === "machine" ? "Remove machine" : "Delete event";
+  deleteBtn.textContent = "Delete";
   deleteBtn.addEventListener("click", async () => {
-    if (!confirm(`Delete ${board.name}?`)) return;
+    if (!confirm(`Delete ${board.name}? This cannot be undone.`)) return;
     applyPayload(await api(`/api/leaderboards/${board.id}`, { method: "DELETE" }));
   });
-  actions.append(clearBtn, deleteBtn);
+  actions.append(clearBtn, archiveBtn, deleteBtn);
   boardEditor.append(actions);
 
   for (const row of board.rows) {
@@ -321,21 +332,6 @@ function renderBoardEditor() {
 
     const icons = document.createElement("div");
     icons.className = "icon-row";
-    const makeMove = (direction, label) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "btn compact";
-      button.textContent = label;
-      button.addEventListener("click", async () => {
-        applyPayload(
-          await api(`/api/leaderboards/${board.id}/rows/${row.id}/move`, {
-            method: "POST",
-            body: { direction },
-          })
-        );
-      });
-      return button;
-    };
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "btn compact danger";
@@ -343,7 +339,7 @@ function renderBoardEditor() {
     remove.addEventListener("click", async () => {
       applyPayload(await api(`/api/leaderboards/${board.id}/rows/${row.id}`, { method: "DELETE" }));
     });
-    icons.append(makeMove("up", "Up"), makeMove("down", "Down"), remove);
+    icons.append(remove);
     wrap.append(fields, icons);
     boardEditor.append(wrap);
   }
@@ -382,11 +378,11 @@ function displayLabel(slot, count) {
 }
 
 const DISPLAY_CONTENT = [
-  { id: "rotation", label: "Rotation" },
+  { id: "rotation", label: "Auto" },
   { id: "logos", label: "Logos" },
   { id: "amenities", label: "Amenities" },
-  { id: "leaderboard", label: "Leaderboards" },
-  { id: "pinboard", label: "Live Pinboard/Photos" },
+  { id: "leaderboard", label: "Leaderboard" },
+  { id: "pinboard", label: "Pinboard" },
   { id: "video", label: "Video" },
 ];
 
@@ -406,55 +402,33 @@ function renderDisplays() {
   const root = document.getElementById("displays-root");
   if (!root) return;
   const displays = current.displays || { count: 3, mirror: false, order: [], screens: {} };
-  const count = displays.count || 3;
+  const count = 3;
   root.replaceChildren();
-
-  const countRow = document.createElement("div");
-  countRow.className = "choice-row";
-  for (const value of [1, 2, 3]) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `btn${count === value ? " active" : ""}`;
-    button.textContent = `${value} screen${value === 1 ? "" : "s"}`;
-    button.addEventListener("click", () => saveDisplays({ count: value }).then(() => toast("Display count saved")));
-    countRow.append(button);
-  }
-  root.append(countRow);
-
-  const mirror = document.createElement("button");
-  mirror.type = "button";
-  mirror.className = `btn toggle${displays.mirror ? " active" : ""}`;
-  mirror.textContent = displays.mirror ? "Mirroring screen 1 to all" : "Mirror one layout to all";
-  mirror.addEventListener("click", () => {
-    saveDisplays({ mirror: !displays.mirror }).then(() => toast(displays.mirror ? "Each screen can differ" : "Mirroring screen 1"));
-  });
-  root.append(mirror);
 
   for (const slot of ["1", "2", "3"]) {
     const screenCfg = displays.screens?.[slot] || { enabled: true, content: "rotation" };
     const layout = current.layout?.[slot] || screenCfg;
     const card = document.createElement("article");
-    card.className = `slot-card screen-card${Number(slot) > count ? " dimmed" : ""}`;
+    card.className = "slot-card screen-card";
     const title = document.createElement("h3");
     title.className = "slot-label";
     title.textContent = displayLabel(slot, count);
     card.append(title);
 
-    if (Number(slot) > count) {
-      const note = document.createElement("p");
-      note.className = "muted";
-      note.textContent = "Not in use until the display count includes it.";
-      card.append(note);
+    const power = document.createElement("div");
+    power.className = "choice-row";
+    for (const on of [true, false]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn";
+      button.textContent = on ? "On" : "Off";
+      button.addEventListener("click", async () => {
+        applyPayload(await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on } }));
+        toast(on ? `${displayLabel(slot, count)} power on` : `${displayLabel(slot, count)} power off`);
+      });
+      power.append(button);
     }
-
-    const enable = document.createElement("button");
-    enable.type = "button";
-    enable.className = `btn toggle${screenCfg.enabled !== false ? " active" : ""}`;
-    enable.textContent = screenCfg.enabled !== false ? "Enabled" : "Disabled";
-    enable.addEventListener("click", () => {
-      saveDisplays({ screens: { [slot]: { enabled: screenCfg.enabled === false } } }).then(() => toast("Display updated"));
-    });
-    card.append(enable);
+    card.append(power);
 
     if (displays.mirror && slot !== "1") {
       const note = document.createElement("p");
@@ -1108,7 +1082,10 @@ function render() {
   renderSlots();
   renderBoardSelect();
   renderBoardEditor();
+  renderScoreQueue();
+  renderArchive();
   renderYoutube();
+  renderVideoTests();
   renderPhotos();
   renderAdmin();
   renderMotion();
@@ -1175,29 +1152,31 @@ document.getElementById("theme-christmas").addEventListener("click", async () =>
   toast("Christmas theme on");
 });
 
-document.getElementById("rotation-on").addEventListener("click", async () => {
-  applyPayload(await api("/api/rotation", { method: "PUT", body: { enabled: true } }));
+document.getElementById("rotate-all")?.addEventListener("click", async () => {
+  applyPayload(await api("/api/displays", {
+    method: "PUT",
+    body: {
+      screens: {
+        1: { content: "rotation" },
+        2: { content: "rotation" },
+        3: { content: "rotation" },
+      },
+    },
+  }));
+  toast("All screens are rotating");
 });
 
-document.getElementById("rotation-off").addEventListener("click", async () => {
-  applyPayload(await api("/api/rotation", { method: "PUT", body: { enabled: false } }));
+document.getElementById("guest-toggle")?.addEventListener("click", () => {
+  const view = document.getElementById("guest-view");
+  const frame = document.getElementById("guest-frame");
+  if (!view || !frame) return;
+  if (!frame.src || frame.src === "about:blank") frame.src = "/?from=admin";
+  view.hidden = false;
 });
 
-intervalInput.addEventListener("change", async () => {
-  applyPayload(
-    await api("/api/rotation", {
-      method: "PUT",
-      body: { intervalSec: intervalInput.value },
-    })
-  );
-});
-
-document.getElementById("new-board").addEventListener("click", async () => {
-  const name = prompt("Event name", "New event");
-  if (!name) return;
-  const payload = await api("/api/leaderboards", { method: "POST", body: { name } });
-  selectedBoardId = payload.state.leaderboards.at(-1)?.id || selectedBoardId;
-  applyPayload(payload);
+document.getElementById("guest-back")?.addEventListener("click", () => {
+  const view = document.getElementById("guest-view");
+  if (view) view.hidden = true;
 });
 
 boardSelect.addEventListener("change", () => {
@@ -1205,7 +1184,7 @@ boardSelect.addEventListener("change", () => {
   render();
 });
 
-document.getElementById("manual-machine").addEventListener("submit", async (event) => {
+document.getElementById("manual-machine")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = document.getElementById("manual-machine-name").value.trim();
   if (!name) return;
@@ -1282,6 +1261,182 @@ function connect() {
   socket.addEventListener("close", () => setTimeout(connect, 1000));
 }
 
+function renderScoreQueue() {
+  const root = document.getElementById("score-queue");
+  if (!root) return;
+  root.replaceChildren();
+  const pending = (current.state?.scoreSubmissions || []).filter((row) => row.status === "pending");
+  if (!pending.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No scores waiting.";
+    root.append(empty);
+    return;
+  }
+  for (const row of pending) {
+    const card = document.createElement("article");
+    card.className = "card";
+    const board = (current.state.leaderboards || []).find((item) => item.id === row.boardId);
+    const copy = document.createElement("p");
+    copy.textContent = `${row.name} · ${Number(row.score).toLocaleString("en-US")} on ${board?.name || "a machine"}`;
+    card.append(copy);
+    if (row.proofFile) {
+      const img = document.createElement("img");
+      img.src = `/media/score-proofs/${row.proofFile}`;
+      img.alt = "Score photo";
+      img.style.width = "120px";
+      card.append(img);
+    }
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "btn primary";
+    approve.textContent = "Approve";
+    approve.addEventListener("click", async () => {
+      applyPayload(await api(`/api/scores/${row.id}/approve`, { method: "POST" }));
+      toast("Score approved");
+    });
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "btn";
+    reject.textContent = "Reject";
+    reject.addEventListener("click", async () => {
+      applyPayload(await api(`/api/scores/${row.id}/reject`, { method: "POST" }));
+    });
+    card.append(approve, reject);
+    root.append(card);
+  }
+}
+
+function renderArchive() {
+  const root = document.getElementById("archive-root");
+  if (!root) return;
+  root.replaceChildren();
+  const boards = current.state?.archivedLeaderboards || [];
+  if (!boards.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "Nothing archived.";
+    root.append(empty);
+    return;
+  }
+  for (const board of boards) {
+    const card = document.createElement("article");
+    card.className = "card";
+    const copy = document.createElement("p");
+    copy.textContent = `${board.name} · ${board.rows?.length || 0} scores`;
+    card.append(copy);
+    if (board.kind === "machine" && board.opdbId) {
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "btn";
+      restore.textContent = "Restore";
+      restore.addEventListener("click", async () => {
+        applyPayload(await api(`/api/leaderboards/${board.id}/restore`, { method: "POST" }));
+        toast("Board restored");
+      });
+      card.append(restore);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn danger";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Delete archived board ${board.name}?`)) return;
+      applyPayload(await api(`/api/leaderboards/${board.id}/archive`, { method: "DELETE" }));
+    });
+    card.append(remove);
+    root.append(card);
+  }
+}
+
+const videoStatus = new Map();
+
+function probeVideo(item) {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    let moved = false;
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(moved ? "ok" : "stalled");
+    }, 5000);
+    function cleanup() {
+      clearTimeout(timer);
+      video.removeAttribute("src");
+      video.load();
+    }
+    video.addEventListener("timeupdate", () => {
+      if (video.currentTime > 0.2) moved = true;
+    });
+    video.addEventListener("error", () => {
+      cleanup();
+      resolve("failed");
+    });
+    video.src = item.streamUrl;
+    const start = Math.min(20, Math.max(8, Math.floor((item.durationSec || 60) * 0.08)));
+    video.addEventListener("loadedmetadata", () => {
+      try { video.currentTime = start; } catch { /* seek after data */ }
+      video.play().catch(() => {});
+    });
+  });
+}
+
+function renderVideoTests() {
+  const root = document.getElementById("video-test-root");
+  if (!root) return;
+  root.replaceChildren();
+  const catalog = current.media?.catalog || [];
+  for (const holiday of ["halloween", "christmas"]) {
+    const heading = document.createElement("h3");
+    heading.textContent = holiday === "halloween" ? "Halloween" : "Christmas";
+    root.append(heading);
+    for (const item of catalog.filter((entry) => entry.holiday === holiday)) {
+      const card = document.createElement("article");
+      card.className = "card";
+      const status = videoStatus.get(item.id) || (item.disabled ? "disabled" : "—");
+      const copy = document.createElement("p");
+      copy.textContent = `${item.title} · ${status}`;
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "btn";
+      play.textContent = "Play preview";
+      play.addEventListener("click", async () => {
+        videoStatus.set(item.id, "checking");
+        renderVideoTests();
+        const result = await probeVideo(item);
+        videoStatus.set(item.id, result);
+        renderVideoTests();
+      });
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "btn";
+      toggle.textContent = item.disabled ? "Enable" : "Disable";
+      toggle.addEventListener("click", async () => {
+        applyPayload(await api(`/api/media/catalog/${item.id}`, {
+          method: "PUT",
+          body: { disabled: !item.disabled },
+        }));
+      });
+      card.append(copy, play, toggle);
+      root.append(card);
+    }
+  }
+}
+
+document.getElementById("test-all-videos")?.addEventListener("click", async () => {
+  const catalog = current.media?.catalog || [];
+  for (const item of catalog) {
+    videoStatus.set(item.id, "checking");
+    renderVideoTests();
+    const result = await probeVideo(item);
+    videoStatus.set(item.id, result);
+    renderVideoTests();
+  }
+  toast("Video test finished");
+});
+
 function renderYoutube() {
   const root = document.getElementById("youtube-root");
   if (!root || !current.youtube) return;
@@ -1321,17 +1476,11 @@ async function renderPhotos() {
     applyPayload(await api("/api/guest-photos/settings", { method: "PUT", body: { autoApprove: !data.settings?.autoApprove } }));
     renderPhotos();
   });
-  const style = document.createElement("button");
-  style.type = "button";
-  style.className = "btn";
-  style.textContent = data.settings?.style === "collage" ? "Collage mode" : "Pinboard mode";
-  style.addEventListener("click", async () => {
-    applyPayload(await api("/api/guest-photos/settings", {
-      method: "PUT",
-      body: { style: data.settings?.style === "collage" ? "pinboard" : "collage" },
-    }));
-  });
-  root.append(auto, style);
+  const downloadAll = document.createElement("a");
+  downloadAll.className = "btn";
+  downloadAll.href = "/api/guest-photos/zip";
+  downloadAll.textContent = "Download all";
+  root.append(auto, downloadAll);
   for (const photo of data.photos || []) {
     if (photo.status === "rejected") continue;
     const card = document.createElement("article");
@@ -1341,8 +1490,34 @@ async function renderPhotos() {
     img.alt = photo.caption || "Guest photo";
     img.style.width = "120px";
     const copy = document.createElement("p");
-    copy.textContent = `${photo.status}: ${[photo.guestName, photo.caption].filter(Boolean).join(" — ") || "No caption"}`;
-    card.append(img, copy);
+    const when = photo.createdAt ? new Date(photo.createdAt).toLocaleString() : "";
+    copy.textContent = `${photo.status}: ${[when, photo.guestName, photo.caption].filter(Boolean).join(" — ") || "No caption"}`;
+    const download = document.createElement("a");
+    download.className = "btn";
+    download.href = `${photo.url}?download=1`;
+    download.textContent = "Download";
+    card.append(img, copy, download);
+    if (photo.status !== "archived") {
+      const archive = document.createElement("button");
+      archive.type = "button";
+      archive.className = "btn";
+      archive.textContent = "Archive";
+      archive.addEventListener("click", async () => {
+        await api(`/api/guest-photos/${photo.id}/archive`, { method: "POST" });
+        renderPhotos();
+      });
+      card.append(archive);
+    } else {
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "btn";
+      restore.textContent = "Restore";
+      restore.addEventListener("click", async () => {
+        await api(`/api/guest-photos/${photo.id}/restore`, { method: "POST" });
+        renderPhotos();
+      });
+      card.append(restore);
+    }
     if (photo.status === "pending") {
       const approve = document.createElement("button");
       approve.type = "button";
