@@ -1,3 +1,4 @@
+process.env.PINBALL_KIOSK = "1";
 const { app, BrowserWindow, Menu, Tray, nativeImage, screen, session, desktopCapturer } = require("electron");
 
 app.commandLine.appendSwitch("ignore-gpu-blocklist");

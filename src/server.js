@@ -8,7 +8,7 @@ const { Store } = require("./store");
 const { getLanIPv4s } = require("./lan");
 const { ensureCertificate } = require("./certs");
 const { slotLabel } = require("./displays");
-const { defaultDataDir, dataLayout, migrateData } = require("./paths");
+const { defaultDataDir, dataLayout, migrateData, resolveDataDir } = require("./paths");
 
 function printBanner(config, httpsReady) {
   const port = config.port;
@@ -76,9 +76,19 @@ async function startHttps({ app, attachWebSocket, config, certDir }) {
 }
 
 const SERVER_LOG = "server.log";
+let activeDataDir = null;
+
+function addrInUseMessage(port) {
+  return `Another server is already listening on port ${port}. Pinball Land did not start a second copy. Close the other npm start window, or end that node.exe in Task Manager, then start again.`;
+}
+
+function reportListenError(err, port, log = console.error) {
+  if (err && err.code === "EADDRINUSE") log(addrInUseMessage(port));
+  return err;
+}
 
 async function logStartupFailure(err, logsDir) {
-  const dir = logsDir || dataLayout(defaultDataDir()).logs;
+  const dir = logsDir || dataLayout(activeDataDir || defaultDataDir()).logs;
   await fs.promises.mkdir(dir, { recursive: true });
   const body = err && err.stack ? err.stack : String(err);
   const file = path.join(dir, SERVER_LOG);
@@ -88,7 +98,8 @@ async function logStartupFailure(err, logsDir) {
 
 async function launchServer() {
   const root = path.join(__dirname, "..");
-  const migrated = await migrateData({ appRoot: root });
+  activeDataDir = await resolveDataDir();
+  const migrated = await migrateData({ appRoot: root, dataDir: activeDataDir });
   const paths = dataLayout(migrated.dataDir);
   if (!fs.existsSync(paths.config)) {
     await fs.promises.copyFile(path.join(root, "config.json"), paths.config);
@@ -121,7 +132,10 @@ async function launchServer() {
   attachWebSocket(server);
 
   await new Promise((resolve, reject) => {
-    server.once("error", reject);
+    server.once("error", (err) => {
+      reportListenError(err, config.port);
+      reject(err);
+    });
     server.listen(config.port, "0.0.0.0", () => {
       server.removeListener("error", reject);
       resolve();
@@ -165,4 +179,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { startServer, printBanner, logStartupFailure };
+module.exports = { startServer, printBanner, logStartupFailure, addrInUseMessage, reportListenError };

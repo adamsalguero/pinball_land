@@ -3,6 +3,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { AMENITY_IDS } = require("./amenities");
 const { normalizeRotation, ROTATION_ITEM_IDS, clampInterval } = require("./playlist");
+const { icaclsRepairCommand } = require("./paths");
 
 const SLOT_IDS = ["1", "2", "3"];
 const CONTENTS = ["logos", "amenities", "leaderboard", "pinboard", "video"];
@@ -24,6 +25,7 @@ const LEGACY_CONTENT = {
 
 const LOCKED_RENAME = new Set(["EPERM", "EBUSY", "EACCES"]);
 const RENAME_BACKOFF_MS = [50, 100, 200, 400];
+const PERSIST_RETRY_MS = [1000, 2000, 5000, 10000, 30000];
 
 function id() {
   return crypto.randomUUID();
@@ -37,9 +39,80 @@ function isLockedRename(err) {
   return Boolean(err && LOCKED_RENAME.has(err.code));
 }
 
-// Windows rename over an existing file returns EPERM/EBUSY when Defender or the
-// indexer still has state.json open. Retry, then copy over the destination.
+function stateDir(filePath) {
+  if (filePath.includes("\\") || /^[A-Za-z]:/.test(filePath)) return path.win32.dirname(filePath);
+  return path.dirname(filePath);
+}
+
+function warnUnpersisted(filePath, err) {
+  const code = err && err.code ? err.code : "EPERM";
+  const detail = err && err.message ? `: ${err.message}` : "";
+  console.warn(
+    [
+      `Could not write ${filePath} (${code}${detail}).`,
+      "Pinball Land will keep running with this state in memory and retry the save.",
+      "Likely causes:",
+      "- state.json is owned by Administrators from an earlier elevated run",
+      "- the file has the read-only attribute",
+      "- another node process already has the file open",
+      "- antivirus software is locking the file",
+      "From an elevated Command Prompt, grant Users modify:",
+      icaclsRepairCommand(stateDir(filePath)),
+    ].join("\n")
+  );
+}
+
+// A read-only attribute makes Windows refuse the replace with EPERM. Node maps
+// that attribute to a missing owner-write bit; putting the bit back clears it.
+async function clearReadOnly(dest, fsImpl) {
+  if (typeof fsImpl.stat !== "function" || typeof fsImpl.chmod !== "function") return;
+  let stat;
+  try {
+    stat = await fsImpl.stat(dest);
+  } catch {
+    return;
+  }
+  if (!stat || typeof stat.mode !== "number" || (stat.mode & 0o200) !== 0) return;
+  try {
+    await fsImpl.chmod(dest, stat.mode | 0o200);
+  } catch {
+    // Still try the replace. The direct write and the in-memory fallback cover this.
+  }
+}
+
+async function writeDirectFallback(tmp, dest, fsImpl) {
+  if (typeof fsImpl.readFile !== "function" || typeof fsImpl.open !== "function") return false;
+  await clearReadOnly(dest, fsImpl);
+  const data = await fsImpl.readFile(tmp);
+  const handle = await fsImpl.open(dest, "w");
+  try {
+    if (typeof handle.writeFile === "function") await handle.writeFile(data);
+    else await handle.write(data);
+    if (typeof handle.sync === "function") await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await fsImpl.unlink(tmp);
+  } catch (err) {
+    if (!err || err.code !== "ENOENT") {
+      console.warn(`Saved ${dest} but could not remove ${tmp}: ${err && err.message ? err.message : err}`);
+    }
+  }
+  return true;
+}
+
+function attachRenameError(err, renameError) {
+  if (renameError && renameError !== err) err.renameError = renameError;
+  return err;
+}
+
+// Windows rename over an existing file returns EPERM/EBUSY/EACCES when Defender,
+// the indexer, or another node process still has state.json open, and also when
+// the file is read-only or owned by Administrators. Retry, copy, then write the
+// destination directly and fsync.
 async function replaceFile(tmp, dest, fsImpl = fs, { delays = RENAME_BACKOFF_MS, sleepFn = sleep } = {}) {
+  await clearReadOnly(dest, fsImpl);
   let lastErr = null;
   for (let attempt = 0; attempt <= delays.length; attempt += 1) {
     try {
@@ -63,14 +136,21 @@ async function replaceFile(tmp, dest, fsImpl = fs, { delays = RENAME_BACKOFF_MS,
       return;
     } catch (err) {
       fallbackErr = err;
-      if (!isLockedRename(err) || attempt >= delays.length) {
-        if (lastErr && lastErr !== err) err.renameError = lastErr;
-        throw err;
-      }
+      if (!isLockedRename(err)) throw attachRenameError(err, lastErr);
+      if (attempt >= delays.length) break;
       await sleepFn(delays[attempt]);
     }
   }
-  throw fallbackErr;
+  if (fallbackErr && isLockedRename(fallbackErr)) {
+    try {
+      const wrote = await writeDirectFallback(tmp, dest, fsImpl);
+      if (wrote) return;
+    } catch (err) {
+      throw attachRenameError(err, lastErr);
+    }
+  }
+  if (fallbackErr) throw attachRenameError(fallbackErr, lastErr);
+  throw lastErr;
 }
 
 async function removeStaleTemp(filePath, fsImpl = fs) {
@@ -249,27 +329,78 @@ function normalizeState(raw) {
 }
 
 class Store {
-  constructor(filePath, state) {
+  constructor(filePath, state, options = {}) {
     this.filePath = filePath;
     this.state = normalizeState(state);
     this.listeners = new Set();
     this.scoreHits = new Map();
+    this.fsImpl = options.fsImpl || fs;
+    this.sleepFn = options.sleepFn || sleep;
+    this.renameDelays = options.renameDelays || RENAME_BACKOFF_MS;
+    this.retryDelays = options.retryDelays || PERSIST_RETRY_MS;
+    this.unpersisted = false;
+    this.lastPersistError = null;
+    this.retryTimer = null;
+    this.announcedPersistFailure = false;
   }
 
-  static async load(filePath) {
-    await removeStaleTemp(filePath);
+  static async load(filePath, options = {}) {
+    const fsImpl = options.fsImpl || fs;
+    await removeStaleTemp(filePath, fsImpl);
     let parsed = null;
     try {
-      const raw = await fs.readFile(filePath, "utf8");
+      const raw = await fsImpl.readFile(filePath, "utf8");
       parsed = JSON.parse(raw);
     } catch (err) {
       if (err.code !== "ENOENT") {
         console.error(`Could not read state file (${filePath}), starting from defaults:`, err.message);
       }
     }
-    const store = new Store(filePath, parsed || defaultState());
-    await store.persist();
+    const store = new Store(filePath, parsed || defaultState(), options);
+    try {
+      await store.persist();
+    } catch (err) {
+      if (!isLockedRename(err)) throw err;
+      store.notePersistFailure(err);
+    }
     return store;
+  }
+
+  notePersistFailure(err) {
+    this.unpersisted = true;
+    this.lastPersistError = err;
+    if (!this.announcedPersistFailure) {
+      this.announcedPersistFailure = true;
+      warnUnpersisted(this.filePath, err);
+    }
+    this.schedulePersistRetry();
+  }
+
+  schedulePersistRetry() {
+    if (this.retryTimer) return;
+    const delays = this.retryDelays.length ? this.retryDelays : [1000];
+    let index = 0;
+    const tick = async () => {
+      this.retryTimer = null;
+      try {
+        await this.persist();
+        console.warn(`Saved state after a permission error (${this.filePath}).`);
+      } catch (err) {
+        if (!isLockedRename(err)) {
+          console.error(`Could not save state (${this.filePath}):`, err.message);
+          return;
+        }
+        this.unpersisted = true;
+        this.lastPersistError = err;
+        const wait = delays[Math.min(index, delays.length - 1)];
+        index += 1;
+        this.retryTimer = setTimeout(tick, wait);
+        if (typeof this.retryTimer.unref === "function") this.retryTimer.unref();
+      }
+    };
+    this.retryTimer = setTimeout(tick, delays[0]);
+    index = 1;
+    if (typeof this.retryTimer.unref === "function") this.retryTimer.unref();
   }
 
   onChange(fn) {
@@ -282,14 +413,30 @@ class Store {
   }
 
   async persist() {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    const fsImpl = this.fsImpl;
+    await fsImpl.mkdir(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(this.state, null, 2), "utf8");
-    await replaceFile(tmp, this.filePath);
+    const body = JSON.stringify(this.state, null, 2);
+    await fsImpl.writeFile(tmp, body, "utf8");
+    await replaceFile(tmp, this.filePath, fsImpl, {
+      delays: this.renameDelays,
+      sleepFn: this.sleepFn,
+    });
+    this.unpersisted = false;
+    this.lastPersistError = null;
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
   }
 
   async commit() {
-    await this.persist();
+    try {
+      await this.persist();
+    } catch (err) {
+      if (isLockedRename(err)) this.notePersistFailure(err);
+      throw err;
+    }
     const snapshot = this.getState();
     for (const fn of this.listeners) {
       fn(snapshot);
@@ -636,8 +783,10 @@ module.exports = {
   Store,
   replaceFile,
   removeStaleTemp,
+  clearReadOnly,
   LOCKED_RENAME,
   RENAME_BACKOFF_MS,
+  PERSIST_RETRY_MS,
   SLOT_IDS,
   CONTENTS,
   THEMES,
