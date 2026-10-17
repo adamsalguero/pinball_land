@@ -122,11 +122,40 @@ test("currentTick advances by interval and disabled boards drop out", () => {
   );
 });
 
-test("screens change apart and amenities cycle inside one card", () => {
+test("screens advance together every dwell and stay on different cards", () => {
   const startedAt = 1_000_000;
-  assert.equal(tickForSlot(startedAt, 25, 0, 3, startedAt + 25000), 1);
-  assert.equal(tickForSlot(startedAt, 25, 1, 3, startedAt + 25000), 0);
-  assert.equal(tickForSlot(startedAt, 25, 1, 3, startedAt + 25000 + 25000 / 3), 1);
+  assert.equal(tickForSlot(startedAt, 30, 0, 3, startedAt + 29999), 0);
+  assert.equal(tickForSlot(startedAt, 30, 1, 3, startedAt + 29999), 0);
+  assert.equal(tickForSlot(startedAt, 30, 2, 3, startedAt + 30000), 1);
+  assert.equal(tickForSlot(startedAt, 30, 0, 3, startedAt + 30000), 1);
+  const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] });
+  const layout = {
+    1: { content: "rotation", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  const keysOf = (now) => {
+    const plan = planRotation(playlist, {
+      startedAt,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now,
+    });
+    return ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
+  };
+  const first = keysOf(startedAt + 1000);
+  const second = keysOf(startedAt + 31000);
+  const third = keysOf(startedAt + 61000);
+  for (const keys of [first, second, third]) {
+    assert.equal(new Set(keys).size, 3);
+  }
+  assert.notDeepEqual(first, second);
+  assert.notDeepEqual(second, third);
+  for (let i = 0; i < 3; i += 1) {
+    assert.notEqual(first[i], second[i]);
+    assert.notEqual(second[i], third[i]);
+  }
   assert.equal(amenityAt(0, 0, 0), "arcade");
   assert.equal(amenityAt(0, 0, AMENITY_DWELL_SEC * 1000), "oasis");
   assert.equal(amenityAt(0, 0, AMENITY_DWELL_SEC * 2000), "events");

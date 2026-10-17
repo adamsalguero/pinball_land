@@ -46,6 +46,31 @@ async function json(origin, url, options = {}) {
   return { res, data };
 }
 
+test("admin can permanently delete a guest photo", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const jpeg = await sharp({
+      create: { width: 400, height: 300, channels: 3, background: "#224466" },
+    }).jpeg().toBuffer();
+    const uploaded = await fetch(`${origin}/api/guest-photos`, {
+      method: "POST",
+      headers: { "content-type": "image/jpeg" },
+      body: jpeg,
+    });
+    const photo = await uploaded.json();
+    const headers = { "x-pin": "2224" };
+    const removed = await json(origin, `/api/guest-photos/${photo.photo.id}`, { method: "DELETE", headers });
+    assert.equal(removed.res.status, 200);
+    assert.equal(removed.data.deleted, photo.photo.id);
+    const list = await json(origin, "/api/guest-photos", { headers });
+    assert.equal((list.data.photos || []).some((item) => item.id === photo.photo.id), false);
+    const file = await fetch(`${origin}/media/guest/${photo.photo.id}.jpg`);
+    assert.equal(file.status, 404);
+  } finally {
+    server.close();
+  }
+});
+
 test("guest app is public and admin app is separate", async () => {
   const { server, origin } = await startServer();
   try {

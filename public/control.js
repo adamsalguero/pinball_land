@@ -1351,35 +1351,92 @@ function renderArchive() {
 
 const videoStatus = new Map();
 
+function shareOrDownload(url, filename) {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  if (ios && typeof navigator.share === "function") {
+    return fetch(url).then((res) => res.blob()).then(async (blob) => {
+      const file = new File([blob], filename, { type: blob.type || "image/jpeg" });
+      const payload = { files: [file], title: "Pinball Land" };
+      if (typeof navigator.canShare !== "function" || navigator.canShare(payload)) {
+        await navigator.share(payload);
+        return;
+      }
+      triggerDownload(url, filename);
+    }).catch((err) => {
+      if (err && err.name === "AbortError") return;
+      triggerDownload(url, filename);
+    });
+  }
+  triggerDownload(url, filename);
+  return Promise.resolve();
+}
+
+function triggerDownload(url, filename) {
+  const link = document.createElement("a");
+  link.href = `${url}${url.includes("?") ? "&" : "?"}download=1`;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 function probeVideo(item) {
+  const url = item.playUrl || item.streamUrl || item.url;
+  const start = window.PinballRotation
+    ? window.PinballRotation.videoStartSec(item.id, 0, item.durationSec || 0)
+    : 0;
   return new Promise((resolve) => {
     const video = document.createElement("video");
     video.muted = true;
     video.playsInline = true;
     video.preload = "auto";
-    let moved = false;
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve(moved ? "ok" : "stalled");
-    }, 5000);
-    function cleanup() {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      video.pause();
       video.removeAttribute("src");
       video.load();
-    }
-    video.addEventListener("timeupdate", () => {
-      if (video.currentTime > 0.2) moved = true;
-    });
-    video.addEventListener("error", () => {
-      cleanup();
-      resolve("failed");
-    });
-    video.src = item.streamUrl;
-    const start = Math.min(20, Math.max(8, Math.floor((item.durationSec || 60) * 0.08)));
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish("stalled"), 8000);
+    video.addEventListener("error", () => finish("failed"));
     video.addEventListener("loadedmetadata", () => {
-      try { video.currentTime = start; } catch { /* seek after data */ }
-      video.play().catch(() => {});
-    });
+      const duration = video.duration;
+      let at = start;
+      if (Number.isFinite(duration) && duration > 0) {
+        at = Math.min(at, Math.max(0, duration - 0.35));
+      }
+      const confirmAdvance = () => {
+        const origin = video.currentTime || 0;
+        const onTime = () => {
+          if (video.currentTime > origin + 0.2) finish("ok");
+        };
+        video.addEventListener("timeupdate", onTime);
+        video.play().catch(() => finish("failed"));
+      };
+      if (at > 0.05) {
+        const onSeeked = () => {
+          video.removeEventListener("seeked", onSeeked);
+          confirmAdvance();
+        };
+        video.addEventListener("seeked", onSeeked);
+        try {
+          video.currentTime = at;
+        } catch {
+          confirmAdvance();
+        }
+      } else {
+        confirmAdvance();
+      }
+    }, { once: true });
+    if (!url) {
+      finish("failed");
+      return;
+    }
+    video.src = url;
   });
 }
 
@@ -1492,11 +1549,24 @@ async function renderPhotos() {
     const copy = document.createElement("p");
     const when = photo.createdAt ? new Date(photo.createdAt).toLocaleString() : "";
     copy.textContent = `${photo.status}: ${[when, photo.guestName, photo.caption].filter(Boolean).join(" — ") || "No caption"}`;
-    const download = document.createElement("a");
+    const download = document.createElement("button");
+    download.type = "button";
     download.className = "btn";
-    download.href = `${photo.url}?download=1`;
-    download.textContent = "Download";
+    download.textContent = "Save photo";
+    download.addEventListener("click", () => {
+      shareOrDownload(photo.url, `${photo.id}.jpg`).catch(() => {});
+    });
     card.append(img, copy, download);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn danger";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      if (!confirm("Delete this photo permanently?")) return;
+      await api(`/api/guest-photos/${photo.id}`, { method: "DELETE" });
+      renderPhotos();
+    });
+    card.append(remove);
     if (photo.status !== "archived") {
       const archive = document.createElement("button");
       archive.type = "button";

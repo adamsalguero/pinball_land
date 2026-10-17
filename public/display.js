@@ -331,22 +331,6 @@ function showBoard(board) {
   }
 }
 
-function dwellMs(intervalSec) {
-  const n = Number.parseInt(intervalSec, 10);
-  const sec = Number.isFinite(n) ? Math.min(120, Math.max(10, n)) : 30;
-  return sec * 1000;
-}
-
-function tickForSlot(startedAt, intervalSec, slot, screens, now) {
-  const ms = dwellMs(intervalSec);
-  const count = Math.max(1, Number(screens) || 1);
-  const index = Math.max(0, Number(slot) || 0) % count;
-  const offset = index * (ms / count);
-  const start = Number(startedAt);
-  const origin = Number.isFinite(start) ? start : now;
-  return Math.floor(Math.max(0, now - origin - offset) / ms);
-}
-
 function cyclePick(order, dwell, slot) {
   const count = order.length;
   const screens = Math.max(1, Number(payload?.displays?.count) || 3);
@@ -354,12 +338,6 @@ function cyclePick(order, dwell, slot) {
   const offset = (index % count) * (dwell / count);
   const now = Date.now() - clockSkew - offset;
   return order[Math.floor(Math.max(0, now) / dwell) % count];
-}
-
-function cardForSlot(playlist, tick, slotIndex) {
-  if (!playlist?.length) return null;
-  const n = playlist.length;
-  return playlist[(((tick + slotIndex) % n) + n) % n];
 }
 
 function slotIndex() {
@@ -438,21 +416,41 @@ function resolveCard() {
       slots: playback.slots.map(String),
     };
   }
+  if (state.rotation?.enabled !== false && window.PinballRotation) {
+    const plan = window.PinballRotation.planRotation(payload.playlist || [], {
+      startedAt: state.rotation.startedAt,
+      intervalSec: state.rotation.intervalSec,
+      screenCount: Math.max(1, Number(payload.displays?.count) || 3),
+      layout: payload.layout || {},
+      now: Date.now() - clockSkew,
+    });
+    let planned = plan?.[SLOT] || plan?.[String(SLOT)] || null;
+    if (planned?.type === "video" && (planned.empty || !planned.url || failedVideoIds.has(planned.id))) {
+      planned = substituteCard(planned);
+    }
+    if (planned) return { ...planned, span: false };
+  }
   const layout = payload.layout?.[SLOT];
   if (layout && layout.content && layout.content !== "rotation") {
     const pinned = cardFromContent(layout.content, layout.leaderboardId);
     if (pinned) return pinned;
   }
-  const stagger = Number.isInteger(layout?.staggerIndex) ? layout.staggerIndex : slotIndex();
-  if (state.rotation?.enabled !== false) {
-    const planned = payload.rotationPlan?.[SLOT] || payload.rotationPlan?.[String(SLOT)];
-    if (planned) return { ...planned, span: false };
-    const screens = Math.max(1, Number(payload.displays?.count) || 3);
-    const tick = tickForSlot(state.rotation.startedAt, state.rotation.intervalSec, stagger, screens, Date.now() - clockSkew);
-    const card = cardForSlot(payload.playlist, tick, 0);
-    return card ? { ...card, span: false } : { type: "logo", cycle: true };
-  }
   return cardFromSlot(state);
+}
+
+function substituteCard(blocked) {
+  const list = payload?.playlist || [];
+  const start = Math.max(0, list.findIndex((item) => item && item.type === blocked?.type && item.id === blocked?.id));
+  for (let step = 1; step <= list.length; step += 1) {
+    const candidate = list[(start + step) % list.length];
+    if (!candidate) continue;
+    if (candidate.type === "video") {
+      if (!candidate.url || candidate.empty || failedVideoIds.has(candidate.id)) continue;
+      return candidate;
+    }
+    return candidate;
+  }
+  return { type: "logo", cycle: true };
 }
 
 function decorate(card) {
@@ -476,7 +474,7 @@ function cardKey(card) {
   if (card.type === "amenity") return `amenity:${card.id}`;
   if (card.type === "leaderboard") return `board:${card.id}`;
   if (card.type === "video") {
-    return `video:${card.id}:${card.mode}:${card.startedAt || ""}:${(card.slots || []).join(",")}`;
+    return `video:${card.id}:${card.mode}:${card.startSec || ""}:${card.startedAt || ""}:${(card.slots || []).join(",")}`;
   }
   if (card.type === "pinboard" || card.type === "collage") {
     const ids = (payload?.guest?.photos || []).map((photo) => photo.id).join(",");
@@ -549,6 +547,7 @@ function renderCard(raw) {
   }
   if (FIXTURE) key += ":long";
   if (queryTheme()) key += `:${queryTheme()}`;
+  screen.dataset.card = key;
   if (key === lastKey) return;
   const first = !lastKey;
   lastKey = key;
@@ -582,32 +581,27 @@ function alignVideo(startedAt) {
   if (Math.abs(wallVideo.currentTime - elapsed) > 0.35) wallVideo.currentTime = elapsed;
 }
 
-function hashStart(id, duration) {
-  let h = 2166136261;
-  const s = String(id || "");
-  for (let i = 0; i < s.length; i += 1) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  const intro = Math.min(40, Math.max(15, duration * 0.07));
-  const endPad = Math.min(30, Math.max(12, duration * 0.06));
-  const span = duration - intro - endPad;
-  if (span < 20) return intro;
-  return intro + ((h >>> 0) % Math.floor(span));
-}
-
 function seekIntoCard(card) {
   const duration = wallVideo.duration;
   if (!Number.isFinite(duration) || duration < 20) return;
   let start = Number(card.startSec);
-  if (!Number.isFinite(start) || start <= 0) start = hashStart(card.id, duration);
+  if (!Number.isFinite(start) || start < 0) {
+    start = window.PinballRotation
+      ? window.PinballRotation.videoStartSec(card.id, 0, duration)
+      : 0;
+  }
   const cap = Math.max(0, duration - Math.min(20, duration * 0.05));
-  wallVideo.currentTime = Math.min(Math.max(0, start), cap);
+  try {
+    wallVideo.currentTime = Math.min(Math.max(0, start), cap);
+  } catch {
+    // A failed seek stays at the current frame. The stall watcher moves on quietly.
+  }
 }
 
 let stallTimer = null;
 let stallSkip = false;
 const stalledIds = new Set();
+const failedVideoIds = new Set();
 
 function clearStall() {
   if (stallTimer) clearInterval(stallTimer);
@@ -628,22 +622,19 @@ function reportVideo(card, reason) {
 function skipStalled(card) {
   if (stallSkip) return;
   stallSkip = true;
-  stalledIds.add(card.id);
-  const videos = (payload?.playlist || []).filter((item) => item.type === "video" && item.url && !stalledIds.has(item.id));
-  clearStall();
-  if (!videos.length) {
-    stopWallVideo();
-    wallVideo.hidden = true;
-    const fallback = document.getElementById("video-fallback");
-    if (fallback) {
-      fallback.hidden = false;
-      setFit(fallback, "Skipping a video that did not play");
-    }
-    return;
+  if (card?.id) {
+    stalledIds.add(card.id);
+    failedVideoIds.add(card.id);
   }
-  const index = Math.max(0, videos.findIndex((item) => item.id === card.id));
-  const next = videos[(index + 1) % videos.length] || videos[0];
-  showVideo({ ...next, mode: "card" });
+  clearStall();
+  const fallback = document.getElementById("video-fallback");
+  if (fallback) {
+    fallback.hidden = true;
+    fallback.textContent = "";
+  }
+  lastKey = "";
+  renderCard(resolveCard());
+  stallSkip = false;
 }
 
 function armStall(card) {
@@ -683,13 +674,14 @@ function showVideo(card) {
   if (!card?.url || card.empty) {
     stopWallVideo();
     wallVideo.hidden = true;
-    if (fallback) {
-      fallback.hidden = false;
-      setFit(fallback, FIXTURE ? `${card?.title || "Video"} ${LONG_TEXT}` : (card?.title || "Video"));
+    if (fallback) fallback.hidden = true;
+    if (card?.mode === "card" && card.id && card.id !== "preview" && card.id !== "empty") {
+      skipStalled(card);
     }
     return;
   }
   wallVideo.hidden = false;
+  wallVideo.style.opacity = "1";
   if (fallback) fallback.hidden = true;
   const slots = card.slots || [SLOT];
   const primary = String(slots[0] || SLOT);
@@ -1041,12 +1033,15 @@ function paintMotion(dt) {
     return;
   }
   const theme = queryTheme() || payload?.state?.theme || "pinnacle";
-  if (!motionField || motionTheme !== theme) {
+  const sync = payload?.motionSync || {};
+  const seed = sync.seed || 1;
+  if (!motionField || motionTheme !== theme || motionField.seed !== seed) {
     motionTheme = theme;
-    motionField = window.PinballMotion.createField(theme, slotIndex() + 1);
+    motionField = window.PinballMotion.createField(theme, seed);
   }
-  window.PinballMotion.stepField(motionField, dt);
-  window.PinballMotion.drawField(ctx, motionField, width, height);
+  const epoch = Number(sync.epoch) || 0;
+  const elapsed = Math.max(0, (Date.now() - clockSkew - epoch) / 1000);
+  window.PinballMotion.drawField(ctx, motionField, width, height, { slot: slotIndex(), elapsed });
 }
 
 function motionFrame(ts) {

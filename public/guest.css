@@ -43,6 +43,30 @@ input {
   display: block; width: 100%; margin-top: 6px; min-height: var(--touch);
   border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); background: #241f26; padding: 0 14px;
 }
+#take-file,
+#choose-file,
+input[type="file"][hidden] {
+  display: none !important;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.btn.download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 14px 14px;
+  padding: 0 16px;
+  min-height: var(--touch);
+  background: var(--purple);
+  color: var(--beige);
+  text-decoration: none;
+}
 .btn.primary { width: 100%; margin-top: 8px; }
 .status { color: var(--muted); min-height: 1.2em; }
 .feed, .scores { display: grid; gap: 12px; }

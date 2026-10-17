@@ -3,6 +3,8 @@ const path = require("path");
 
 const OPDB_BASE = "https://opdb.org/api";
 const USER_AGENT = "pinball-land-kiosk";
+// Adam's free OPDB token. config.json opdbApiKey and OPDB_API_KEY override it.
+const BUILTIN_OPDB_API_KEY = "f5NGaIVP6ojClmDXdbUwj8LPTTp69jGwYVaPtenJMOQhPNVO5GaqLcMNmKvy";
 
 function safeId(value) {
   return String(value || "").replace(/[^A-Za-z0-9_-]/g, "");
@@ -226,6 +228,7 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
 
 module.exports = {
   OPDB_BASE,
+  BUILTIN_OPDB_API_KEY,
   createOpdb,
   pickArtUrl,
   pickPlayfieldUrl,

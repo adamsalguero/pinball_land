@@ -8,7 +8,8 @@ const { WebSocketServer } = require("ws");
 const { resolveLogos, resolvePhotos, LOGO_KEYS, PHOTO_KEYS } = require("./logos");
 const { AMENITIES } = require("./amenities");
 const { buildPlaylist, planRotation } = require("./playlist");
-const { createOpdb, manufacturerName, manufactureYear, safeId } = require("./opdb");
+const { createOpdb, manufacturerName, manufactureYear, safeId, BUILTIN_OPDB_API_KEY } = require("./opdb");
+const { sendByteRange } = require("./media-range");
 const { createConfigStore } = require("./config");
 const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
 const { getLanIPv4s, isLanAddress, forwardedAddress, lanRequired, loopbackRequired } = require("./lan");
@@ -81,7 +82,7 @@ function createApp({
   publicDir,
   logosDir,
   photosDir,
-  opdbApiKey = "",
+  opdbApiKey = BUILTIN_OPDB_API_KEY,
   cacheDir,
   fetchImpl,
   configStore = null,
@@ -113,6 +114,13 @@ function createApp({
     now,
   });
   let restartToken = 0;
+  const motionSync = {
+    seed: 0x50494e,
+    epoch: Date.now(),
+    worldWidth: 5760,
+    worldHeight: 1080,
+    sliceWidth: 1920,
+  };
   let monitors = [];
   const clients = new Set();
   let broadcast = () => {};
@@ -293,10 +301,12 @@ function createApp({
         catalog: catalogItems.map((item) => ({
           ...item,
           disabled: (config.media.disabledIds || []).includes(item.id),
+          playUrl: starterFile(mediaRoot, item) ? `/media/starter/${item.id}` : item.streamUrl,
         })),
       },
       playback: publicPlayback(),
       motion: config.motion,
+      motionSync,
       serverNow: Date.now(),
       version: pkg.version,
       youtube: config.youtube,
@@ -1233,8 +1243,7 @@ function createApp({
       return res.status(404).send("Not found");
     }
     if (!fs.existsSync(filePath)) return res.status(404).send("Not found");
-    res.setHeader("Cache-Control", "private, max-age=3600");
-    res.sendFile(filePath);
+    sendByteRange(req, res, filePath);
   });
 
   app.post("/api/present/join", lanRequired, (req, res) => {
@@ -1541,6 +1550,16 @@ function createApp({
     }
   });
 
+  app.delete("/api/guest-photos/:id", requirePin, async (req, res, next) => {
+    try {
+      const result = await album.deletePhoto(req.params.id);
+      broadcast();
+      sendJson(res, 200, result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post("/api/guest-photos/:id/archive", requirePin, async (req, res, next) => {
     try {
       const photo = await album.archivePhoto(req.params.id);
@@ -1607,7 +1626,7 @@ function createApp({
     const item = catalogItems.find((entry) => entry.id === req.params.id);
     const filePath = item ? starterFile(mediaRoot, item) : null;
     if (!filePath) return res.status(404).send("Not downloaded");
-    res.sendFile(filePath);
+    sendByteRange(req, res, filePath);
   });
 
   app.get("/api/admin/bootstrap", requirePin, (req, res) => {
