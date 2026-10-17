@@ -122,10 +122,106 @@ test("video mode plays a bundled clip past three seconds", async ({ page, reques
 });
 
 test("sprite sheet draws a spider and a bat", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/sprite-preview.html");
-  await page.waitForFunction(() => window.PinballMotion && document.querySelector("#sheet"));
+  await page.waitForFunction(() => window.__sprites && window.PinballMotion);
+  const silk = await page.evaluate(() => {
+    const canvas = document.querySelector("#sheet");
+    const ctx = canvas.getContext("2d");
+    const spider = window.__sprites.spiders[0];
+    const top = ctx.getImageData(spider.x, 1, 1, 1).data;
+    const mid = ctx.getImageData(spider.x, Math.round(spider.y / 2), 1, 1).data;
+    const background = ctx.getImageData(20, 20, 1, 1).data;
+    const differs = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 24;
+    return { topReaches: differs(top, background), midReaches: differs(mid, background) };
+  });
+  expect(silk.topReaches).toBe(true);
+  expect(silk.midReaches).toBe(true);
   await page.screenshot({ path: "e2e/artifacts/sprites-spider-bat.png" });
+});
+
+test("leaderboard podium fits full names at 1080p", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto("/display/1?preview=board&fixture=long&art=1&theme=halloween&shot=1");
+  await expect(page.getByText("First")).toBeVisible();
+  await page.evaluate(async () => {
+    if (document.fonts?.ready) await document.fonts.ready;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  const report = await page.evaluate(() => {
+    const board = document.querySelector(".board-main");
+    const podium = document.querySelector("#podium");
+    const rows = document.querySelector("#board-rows");
+    const first = document.querySelector(".place-1");
+    const second = document.querySelector(".place-2");
+    const text = board ? board.innerText : "";
+    const problems = [];
+    for (const el of board.querySelectorAll("*")) {
+      if (el.closest("[hidden]")) continue;
+      if (el.clientWidth < 2 || el.clientHeight < 2) continue;
+      if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) {
+        problems.push({
+          className: String(el.className).slice(0, 40),
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
+          text: (el.textContent || "").slice(0, 40),
+        });
+      }
+    }
+    return {
+      text,
+      problems: problems.slice(0, 6),
+      podiumAboveRows: podium.getBoundingClientRect().top < rows.getBoundingClientRect().top,
+      firstTaller: first.getBoundingClientRect().height > second.getBoundingClientRect().height,
+      textAboveParticles: Number(getComputedStyle(board).zIndex) > Number(getComputedStyle(document.querySelector("#motion")).zIndex),
+    };
+  });
+  expect(report.text.toLowerCase()).toContain("the wizard of oz (75th anniversary edition)");
+  expect(report.text).toContain("Alexander Montgomery-Parra");
+  expect(report.text).not.toContain("…");
+  expect(report.text).not.toContain("...");
+  expect(report.problems, JSON.stringify(report.problems)).toEqual([]);
+  expect(report.podiumAboveRows).toBe(true);
+  expect(report.firstTaller).toBe(true);
+  expect(report.textAboveParticles).toBe(true);
+  await page.screenshot({ path: "e2e/artifacts/leaderboard-1080.png" });
+});
+
+test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  for (const count of [1, 5, 15, 40]) {
+    await page.goto(`/display/1?preview=pinboard&pins=${count}&shot=1`);
+    await page.waitForSelector(".pin-card");
+    await page.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    const report = await page.evaluate(() => {
+      const view = { w: window.innerWidth, h: window.innerHeight };
+      const cards = [...document.querySelectorAll(".pin-card")];
+      const outside = cards.filter((el) => {
+        const box = el.getBoundingClientRect();
+        return box.left < -1 || box.top < -1 || box.right > view.w + 1 || box.bottom > view.h + 1;
+      }).map((el) => {
+        const box = el.getBoundingClientRect();
+        return { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
+      });
+      const tilt = Math.abs(parseFloat(cards[0]?.style.getPropertyValue("--tilt")) || 0);
+      return {
+        view,
+        count: cards.length,
+        outside,
+        tilt,
+        caption: cards[0]?.innerText || "",
+      };
+    });
+    const cap = Math.min(count, 12);
+    expect(report.count, `pins ${count}`).toBe(cap);
+    expect(report.outside, `pins ${count} ${JSON.stringify(report.outside)}`).toEqual([]);
+    expect(report.tilt).toBeGreaterThanOrEqual(4);
+    expect(report.tilt).toBeLessThanOrEqual(8);
+    expect(report.caption).toContain("·");
+    if (count === 15) await page.screenshot({ path: "e2e/artifacts/pinboard-15-1080.png" });
+  }
 });
 
 test("camera hides the raw file inputs and opens a photo lightbox", async ({ page }) => {

@@ -5,11 +5,11 @@
     <title>Sprite preview</title>
     <style>
       body { margin: 0; background: #140c09; }
-      canvas { display: block; }
+      canvas { display: block; width: 100vw; height: 100vh; }
     </style>
   </head>
   <body>
-    <canvas id="sheet" width="1280" height="720"></canvas>
+    <canvas id="sheet" width="1920" height="1080"></canvas>
     <script src="/motion.js"></script>
     <script>
       const canvas = document.getElementById("sheet");
@@ -17,17 +17,29 @@
       ctx.fillStyle = "#1a100c";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       const motion = window.PinballMotion;
-      const frames = [0, 1.2, 2.4, 3.6];
-      frames.forEach((phase, index) => {
+      const size = 78;
+      const spiders = [
+        { x: 520, y: 280, phase: 0.4 },
+        { x: 980, y: 360, phase: 1.6 },
+      ];
+      const bats = [
+        { x: 700, y: 300, flap: 0.2 },
+        { x: 1160, y: 250, flap: -0.6 },
+      ];
+      window.__sprites = { spiders, bats, size };
+      for (const spider of spiders) {
+        motion.strokeSpiderSilk(ctx, spider, size);
         ctx.save();
-        ctx.translate(180 + index * 280, 250);
-        motion.drawSpider(ctx, 90, phase);
+        ctx.translate(spider.x, spider.y);
+        motion.drawSpider(ctx, size, spider.phase);
         ctx.restore();
+      }
+      for (const bat of bats) {
         ctx.save();
-        ctx.translate(180 + index * 280, 520);
-        motion.drawBat(ctx, 110, Math.sin(phase));
+        ctx.translate(bat.x, bat.y);
+        motion.drawBat(ctx, size, bat.flap);
         ctx.restore();
-      });
+      }
     </script>
   </body>
 </html>

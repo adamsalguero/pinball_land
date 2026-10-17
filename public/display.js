@@ -96,8 +96,9 @@ function fitText(el) {
   // Keep the laid-out box. An em max-height would shrink with the font and the line would never fit.
   el.style.maxHeight = `${boxHeight}px`;
   el.style.lineHeight = "1.15";
-  const absurd = full.length > 180;
-  const min = absurd ? 8 : 11;
+  const keepWhole = el.dataset.fitFull === "1";
+  const absurd = !keepWhole && full.length > 180;
+  const min = keepWhole ? 6 : absurd ? 8 : 11;
   let lo = min;
   let hi = start;
   let best = min;
@@ -111,7 +112,7 @@ function fitText(el) {
     }
   }
   el.style.fontSize = `${best}px`;
-  if (!overflows() || !absurd) return;
+  if (!overflows() || el.dataset.fitFull === "1" || !absurd) return;
   lo = 1;
   hi = full.length;
   let fitted = "…";
@@ -267,7 +268,7 @@ function renderRows(rows) {
       const place = top.indexOf(row) + 1;
       const card = document.createElement("article");
       card.className = `podium-card place-${place}`;
-      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="2"></span><span class="points" data-fit="1"></span>`;
+      card.innerHTML = `<p class="place">${place === 1 ? "First" : place === 2 ? "Second" : "Third"}</p><span class="who" data-fit="1" data-fit-full="1"></span><span class="points" data-fit="1" data-fit-full="1"></span>`;
       setFit(card.querySelector(".who"), row.name || "—");
       setFit(card.querySelector(".points"), formatScore(row.score));
       podium.append(card);
@@ -282,10 +283,12 @@ function renderRows(rows) {
     const name = document.createElement("span");
     name.className = "name";
     name.setAttribute("data-fit", "1");
+    name.setAttribute("data-fit-full", "1");
     setFit(name, row.name || "—");
     const score = document.createElement("span");
     score.className = "score";
     score.setAttribute("data-fit", "1");
+    score.setAttribute("data-fit-full", "1");
     setFit(score, formatScore(row.score));
     li.append(rank, name, score);
     boardRows.append(li);
@@ -332,19 +335,28 @@ function paintBoardArt() {
   }
 }
 
+const NAMED_BOARD_ROWS = [
+  { id: "named-1", name: "Alexander Montgomery-Parra", score: 500000000 },
+  { id: "named-2", name: "Adam Salguero", score: 6000 },
+  { id: "named-3", name: "RetroHardroc", score: 50 },
+  { id: "named-4", name: "John Smith", score: 200 },
+  { id: "named-5", name: "Montgomery Alexander-Parra", score: 5000 },
+];
+
 function showBoard(board) {
   setMode("board");
   stopWallVideo();
   teardownPresent();
   shownBoard = board || null;
-  const rows = FIXTURE
-    ? (board?.rows || []).concat([
-      { id: "long-a", name: LONG_TEXT, score: 2450000 },
-      { id: "long-b", name: LONG_TEXT, score: 1810000 },
-      { id: "long-c", name: LONG_TEXT, score: 960000 },
-      { id: "long-d", name: LONG_TEXT, score: 420000 },
-    ]).map((row) => ({ ...row, name: `${row.name || ""} ${LONG_TEXT}` }))
-    : (board?.rows || []);
+  if (FIXTURE && params.get("art") === "1") {
+    shownBoard = {
+      kind: "machine",
+      name: "The Wizard of Oz (75th Anniversary Edition)",
+      artUrl: "/photos/arcade.jpg",
+      artUrls: ["/photos/arcade.jpg", "/photos/oasis.jpg", "/photos/bar.jpg"],
+    };
+  }
+  const rows = FIXTURE ? NAMED_BOARD_ROWS : (board?.rows || []);
   const logo = document.getElementById("machine-logo");
   if (logo) {
     if (board?.logoUrl) {
@@ -356,10 +368,10 @@ function showBoard(board) {
       logo.removeAttribute("src");
     }
   }
-  setFit(boardTitle, FIXTURE ? `${board?.name || "Leaderboard"} ${LONG_TEXT}` : (board?.name || "Leaderboard"));
-  const meta = [board?.manufacturer, board?.year].filter(Boolean).join(" · ");
+  setFit(boardTitle, FIXTURE ? "The Wizard of Oz (75th Anniversary Edition)" : (board?.name || "Leaderboard"));
+  const meta = FIXTURE ? "Jersey Jack Pinball · 2014" : [board?.manufacturer, board?.year].filter(Boolean).join(" · ");
   boardMeta.hidden = !meta;
-  setFit(boardMeta, FIXTURE && meta ? `${meta} ${LONG_TEXT}` : meta);
+  setFit(boardMeta, meta);
   renderRows(rows);
 
   stopVideo();
@@ -903,9 +915,79 @@ function paintClock() {
   setFit(clockEvent, FIXTURE ? LONG_TEXT : (event?.name || payload?.guest?.eventName || "Tonight"));
 }
 
+const PIN_CAP = 12;
+
+function pinHash(text, salt) {
+  let h = 2166136261 ^ (Number(salt) || 0);
+  const value = String(text || "");
+  for (let i = 0; i < value.length; i += 1) h = Math.imul(h ^ value.charCodeAt(i), 16777619);
+  return (h >>> 0) / 4294967296;
+}
+
+function visiblePinPhotos(photos) {
+  const list = Array.isArray(photos) ? photos : [];
+  if (list.length <= PIN_CAP) return list;
+  const start = Math.floor(Math.max(0, Date.now() - clockSkew) / 12000) % list.length;
+  const shown = [];
+  for (let i = 0; i < PIN_CAP; i += 1) shown.push(list[(start + i) % list.length]);
+  return shown;
+}
+
+function pinCardBox(cardW, cardH, tilt, scale) {
+  const rad = Math.abs(tilt) * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return {
+    w: (cardW * Math.abs(cos) + cardH * Math.abs(sin)) * scale,
+    h: (cardW * Math.abs(sin) + cardH * Math.abs(cos)) * scale,
+  };
+}
+
+function layoutPins(count, width, height) {
+  const n = Math.max(1, count);
+  const cols = n === 1 ? 1 : n <= 2 ? 2 : n <= 6 ? 3 : 4;
+  const rows = Math.ceil(n / cols);
+  const margin = 10;
+  const usableW = Math.max(40, width - margin * 2);
+  const usableH = Math.max(40, height - margin * 2);
+  const overlap = n >= 8 ? 0.14 : n >= 4 ? 0.08 : 0;
+  const cellW = usableW / cols;
+  const cellH = usableH / rows;
+  const ratio = 1.36;
+  let cardW = Math.min(cellW * (1 + overlap), n === 1 ? 460 : 340);
+  let cardH = cardW * ratio;
+  if (cardH > cellH * (1 + overlap)) {
+    cardH = cellH * (1 + overlap);
+    cardW = cardH / ratio;
+  }
+  const worst = pinCardBox(cardW, cardH, 8, 1.05);
+  if (worst.w > usableW) {
+    cardW *= usableW / worst.w;
+    cardH = cardW * ratio;
+  }
+  if (worst.h > usableH && cardH > 0) {
+    const fitted = pinCardBox(cardW, cardH, 8, 1.05);
+    const scaleDown = Math.min(1, usableH / fitted.h, usableW / fitted.w);
+    cardW *= scaleDown;
+    cardH = cardW * ratio;
+  }
+  return { cols, rows, margin, cellW, cellH, cardW, cardH };
+}
+
 function placePhotos(target, card) {
   let photos = payload?.guest?.photos || [];
-  if (FIXTURE) {
+  const requested = Number.parseInt(params.get("pins") || "", 10);
+  if (Number.isFinite(requested) && requested > 0) {
+    const pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    const names = ["Alex Parra", "Jordan Hale", "Sam Okonkwo", "Riley Chen", "Morgan Blake"];
+    photos = Array.from({ length: requested }, (_, i) => ({
+      id: `pin-${i}`,
+      url: photos[i % Math.max(photos.length, 1)]?.url || pixel,
+      caption: i % 2 === 0 ? "High score on Oz" : "Friday night",
+      guestName: names[i % names.length],
+      createdAt: Date.now() - i * 60000,
+    }));
+  } else if (FIXTURE) {
     const pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
     photos = [0, 1, 2].map((i) => ({
       id: `fixture-${i}`,
@@ -915,32 +997,49 @@ function placePhotos(target, card) {
       createdAt: 0,
     }));
   }
-  const screens = 1;
-  if (target === pinWall) {
-    pinWall.style.width = "100%";
-    pinWall.style.transform = "";
-  }
-  const positions = window.PinballMotion ? window.PinballMotion.pinPositions(photos.length, screens) : [];
-  target.replaceChildren();
-  photos.forEach((photo, index) => {
-    const raw = positions[index] || { x: 10, y: 10, tilt: 0 };
-    const pos = {
-      x: Math.min(74, Math.max(4, raw.x * 0.7)),
-      y: Math.min(46, Math.max(6, raw.y * 0.5)),
-      tilt: Math.max(-2, Math.min(2, raw.tilt || 0)),
-    };
-    if (target === collageGrid) {
+  if (target === collageGrid) {
+    target.replaceChildren();
+    photos.forEach((photo) => {
       const img = document.createElement("img");
       img.src = photo.url;
       img.alt = photo.caption || "Guest photo";
       target.append(img);
-      return;
-    }
+    });
+    return;
+  }
+  const shown = visiblePinPhotos(photos);
+  const width = Math.max(1, target.clientWidth || window.innerWidth);
+  const height = Math.max(1, target.clientHeight || window.innerHeight);
+  const layout = layoutPins(shown.length, width, height);
+  target.replaceChildren();
+  shown.forEach((photo, index) => {
+    const col = index % layout.cols;
+    const row = Math.floor(index / layout.cols);
+    const seed = pinHash(photo.id, 1);
+    const seedB = pinHash(photo.id, 2);
+    const seedC = pinHash(photo.id, 3);
+    const tilt = (seed < 0.5 ? -1 : 1) * (4 + seedB * 4);
+    const scale = 0.94 + seedC * 0.1;
+    const box = pinCardBox(layout.cardW, layout.cardH, tilt, scale);
+    const jitterX = (seed - 0.5) * layout.cellW * 0.12;
+    const jitterY = (seedB - 0.5) * layout.cellH * 0.1;
+    let cx = layout.margin + layout.cellW * (col + 0.5) + jitterX;
+    let cy = layout.margin + layout.cellH * (row + 0.5) + jitterY;
+    const halfW = box.w / 2 + 8;
+    const halfH = box.h / 2 + 8;
+    cx = Math.min(width - halfW, Math.max(halfW, cx));
+    cy = Math.min(height - halfH, Math.max(halfH, cy));
     const el = document.createElement("article");
     el.className = `pin-card${Date.now() - Number(photo.createdAt) < 20000 ? " is-new" : ""}`;
-    el.style.left = `${pos.x}%`;
-    el.style.top = `${pos.y}%`;
-    el.style.transform = "none";
+    el.style.width = `${layout.cardW}px`;
+    el.style.left = `${cx}px`;
+    el.style.top = `${cy}px`;
+    el.style.zIndex = String(10 + Math.round(seedC * 20));
+    el.style.setProperty("--tilt", `${tilt.toFixed(2)}deg`);
+    el.style.setProperty("--pin-scale", scale.toFixed(3));
+    el.style.setProperty("--drift-x", `${((seed - 0.5) * 8).toFixed(1)}px`);
+    el.style.setProperty("--drift-y", `${((seedB - 0.5) * 6).toFixed(1)}px`);
+    el.style.transform = `translate(-50%, -50%) rotate(${tilt.toFixed(2)}deg) scale(${scale.toFixed(3)})`;
     const img = document.createElement("img");
     img.src = photo.url;
     img.alt = photo.caption || "Guest photo";
@@ -953,7 +1052,7 @@ function placePhotos(target, card) {
       minute: "2-digit",
     }) : "";
     const caption = [photo.guestName, photo.caption].filter(Boolean).join(" · ");
-    setFit(cap, FIXTURE ? LONG_TEXT : [taken, caption].filter(Boolean).join(" · "));
+    setFit(cap, FIXTURE && !(Number.isFinite(requested) && requested > 0) ? LONG_TEXT : [taken, caption].filter(Boolean).join(" · "));
     el.append(img, cap);
     target.append(el);
   });
