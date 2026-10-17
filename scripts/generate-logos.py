@@ -309,6 +309,7 @@ def hexagon_points(cx, cy, w, h) -> str:
 
 
 def generate_entertainment() -> str:
+    raise RuntimeError("pinball-land.svg is traced by scripts/trace-entertainment-logo.js")
     img = Image.open(LOGOS / "pinball-land.png")
     # mountains roughly y 280-365
     mountain, snow, mw, mh = extract_layers(
@@ -381,9 +382,7 @@ def main():
     pinnacle = generate_pinnacle()
     (LOGOS / "pinnacle.svg").write_text(pinnacle, encoding="utf-8")
     print("wrote", LOGOS / "pinnacle.svg", "bytes", len(pinnacle))
-    ent = generate_entertainment()
-    (LOGOS / "pinball-land.svg").write_text(ent, encoding="utf-8")
-    print("wrote", LOGOS / "pinball-land.svg", "bytes", len(ent))
+    print("pinball-land.svg is traced from pinball-land.png by scripts/trace-entertainment-logo.js")
 
 
 if __name__ == "__main__":

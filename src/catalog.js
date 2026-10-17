@@ -70,31 +70,32 @@ function starterFile(mediaRoot, item) {
   return null;
 }
 
-function starterCards(items, { theme, allAges = true, mediaRoot, urlFor, disabledIds = [] } = {}) {
+function starterCards(items, { theme, allAges = true, urlFor, disabledIds = [], isReady } = {}) {
   const disabled = new Set(disabledIds || []);
+  if (theme !== "halloween" && theme !== "christmas") return [];
   return (items || [])
     .filter((item) => {
       if (disabled.has(item.id)) return false;
       if (allAges && item.allAges === false) return false;
       if (item.holiday === "christmas" && item.color !== true) return false;
-      return item.holiday === theme;
+      if (item.holiday !== theme) return false;
+      return typeof isReady === "function" && isReady(item.id);
     })
-    .map((item) => {
-      const local = starterFile(mediaRoot, item);
-      return {
-        type: "video",
-        id: `starter:${item.id}`,
-        starterId: item.id,
-        url: local && urlFor ? urlFor(item.id) : item.streamUrl,
-        title: item.title,
-        loop: false,
-        mode: "card",
-        stream: !local,
-        durationSec: item.durationSec,
-        holiday: item.holiday,
-        color: item.color === true,
-      };
-    });
+    .map((item) => ({
+      type: "video",
+      id: `starter:${item.id}`,
+      starterId: item.id,
+      url: urlFor ? urlFor(item.id) : "",
+      title: item.title,
+      loop: false,
+      mode: "card",
+      stream: false,
+      local: true,
+      durationSec: item.durationSec,
+      holiday: item.holiday,
+      color: item.color === true,
+    }))
+    .filter((card) => card.url);
 }
 
 module.exports = { loadCatalog, starterFile, starterCards, catalogProblems, STREAM_HOSTS };

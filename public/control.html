@@ -106,8 +106,16 @@
             <div id="airplay-root"></div>
           </section>
           <section id="media-section">
+            <h2>Clock</h2>
+            <p class="muted">Shown under the time. Leave the default blank to show only the time.</p>
+            <form id="slogan-form" class="stack">
+              <label class="muted">Default slogan <input id="slogan-pinnacle" maxlength="80" placeholder="Leave blank for none" /></label>
+              <label class="muted">Halloween slogan <input id="slogan-halloween" maxlength="80" /></label>
+              <label class="muted">Christmas slogan <input id="slogan-christmas" maxlength="80" /></label>
+              <button class="btn" type="submit">Save clock slogans</button>
+            </form>
             <h2>Videos</h2>
-            <p class="muted">Upload mp4, m4v, webm, mov, or mkv. Bundled clips always play offline. Holiday streams join while that theme is on.</p>
+            <p class="muted">Upload mp4, m4v, webm, mov, or mkv. Halloween and Christmas cartoons play from the local cache after the PC downloads them. The default theme has no video card.</p>
             <div id="media-root"></div>
           </section>
           <section id="youtube-section">

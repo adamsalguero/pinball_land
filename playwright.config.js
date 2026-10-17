@@ -20,6 +20,7 @@ module.exports = defineConfig({
       PINBALL_DATA_DIR: "e2e-data",
       PINBALL_PLUG_MOCK: "1",
       PINBALL_ROTATION_SEC: "1",
+      PINBALL_CLIP_IDS: "skeleton-dance-1929",
       NODE_TEST_CONTEXT: "1",
     },
   },

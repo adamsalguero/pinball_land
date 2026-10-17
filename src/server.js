@@ -101,16 +101,6 @@ async function launchServer() {
   activeDataDir = await resolveDataDir();
   const migrated = await migrateData({ appRoot: root, dataDir: activeDataDir });
   const paths = dataLayout(migrated.dataDir);
-  const bundledSrc = path.join(root, "media", "bundled");
-  if (fs.existsSync(bundledSrc)) {
-    const bundledDest = path.join(paths.media, "bundled");
-    await fs.promises.mkdir(bundledDest, { recursive: true });
-    for (const name of await fs.promises.readdir(bundledSrc)) {
-      if (!name.endsWith(".mp4")) continue;
-      const dest = path.join(bundledDest, name);
-      if (!fs.existsSync(dest)) await fs.promises.copyFile(path.join(bundledSrc, name), dest);
-    }
-  }
   if (!fs.existsSync(paths.config)) {
     await fs.promises.copyFile(path.join(root, "config.json"), paths.config);
   }
@@ -134,6 +124,7 @@ async function launchServer() {
     catalogPath: path.join(root, "media", "catalog.json"),
     dataDir: migrated.dataDir,
     appRoot: root,
+    clipCache: process.env.PINBALL_CLIP_CACHE !== "0",
     configStore,
     isHttpsReady: () => httpsReady,
   });

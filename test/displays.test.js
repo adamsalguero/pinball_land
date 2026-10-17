@@ -129,6 +129,11 @@ test("black, dark, and split amenities become rotation or one amenities mode", (
   assert.equal(legacy.screens["3"].content, "pinboard");
 });
 
+test("clock is a real per-screen choice", () => {
+  const config = normalizeDisplays({ screens: { 2: { content: "clock" } } });
+  assert.equal(config.screens["2"].content, "clock");
+});
+
 test("slot labels follow the active count", () => {
   assert.equal(slotLabel(1, 1), "Screen");
   assert.equal(slotLabel(2, 2), "Right");

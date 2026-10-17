@@ -113,7 +113,7 @@ class GuestAlbum {
         width: processed.info.width,
         height: processed.info.height,
         caption: cleanText(caption, 80),
-        guestName: cleanText(guestName, 40),
+        guestName: cleanText(guestName, 80),
         status: autoApprove ? "approved" : "pending",
         createdAt: now || Date.now(),
       };

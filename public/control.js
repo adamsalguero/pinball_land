@@ -28,6 +28,7 @@ const CONTENT_GROUPS = [
       { id: "leaderboard", label: "Leaderboards" },
       { id: "pinboard", label: "Live Pinboard/Photos" },
       { id: "video", label: "Video" },
+      { id: "clock", label: "Clock" },
     ],
   },
 ];
@@ -384,6 +385,7 @@ const DISPLAY_CONTENT = [
   { id: "leaderboard", label: "Leaderboard" },
   { id: "pinboard", label: "Pinboard" },
   { id: "video", label: "Video" },
+  { id: "clock", label: "Clock" },
 ];
 
 function shareUrl() {
@@ -1047,6 +1049,15 @@ function render() {
   renderPhotos();
   renderAdmin();
   renderMotion();
+  fillSlogans();
+}
+
+function fillSlogans() {
+  const slogans = current.slogans || {};
+  for (const key of ["pinnacle", "halloween", "christmas"]) {
+    const input = document.getElementById(`slogan-${key}`);
+    if (input && document.activeElement !== input) input.value = slogans[key] || "";
+  }
 }
 
 function showApp() {
@@ -1517,6 +1528,18 @@ document.getElementById("revoke-all").addEventListener("click", async () => {
   await api("/api/devices/revoke-all", { method: "POST" });
   localStorage.removeItem("pl-admin-device");
   location.reload();
+});
+document.getElementById("slogan-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  applyPayload(await api("/api/slogans", {
+    method: "PUT",
+    body: {
+      pinnacle: document.getElementById("slogan-pinnacle").value,
+      halloween: document.getElementById("slogan-halloween").value,
+      christmas: document.getElementById("slogan-christmas").value,
+    },
+  }));
+  toast("Clock slogans saved");
 });
 document.getElementById("update-settings").addEventListener("submit", async (event) => {
   event.preventDefault();
