@@ -83,6 +83,15 @@ function normalizePhotos(raw) {
   };
 }
 
+function normalizeClock(value, fallback) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return fallback;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return fallback;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 function normalizeUpdates(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   const interval = Number.parseInt(incoming.intervalMin, 10);
@@ -96,6 +105,7 @@ function normalizeUpdates(raw) {
       : "adamsalguero/pinball_land",
     quietStart: String(incoming.quietStart || "02:00"),
     quietEnd: String(incoming.quietEnd || "06:00"),
+    nightlyAt: normalizeClock(incoming.nightlyAt, "03:17"),
   };
 }
 

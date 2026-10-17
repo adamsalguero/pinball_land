@@ -70,7 +70,7 @@ No Assigned Access / Windows Kiosk Mode is required.
    powershell -ExecutionPolicy Bypass -File scripts\install-kiosk-windows.ps1
    ```
 
-   This creates Task Scheduler job **PinballLandKiosk** at logon and runs `scripts\start-kiosk.cmd`. Uninstall:
+   This creates Task Scheduler jobs for the server, the wall, and the automatic update. Uninstall:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\uninstall-kiosk-windows.ps1
@@ -85,7 +85,19 @@ No Assigned Access / Windows Kiosk Mode is required.
 
    AirPlay also needs UxPlay allowed on private networks the first time it runs. Install it with `scripts\install-airplay-windows.ps1` (Administrator PowerShell). Details are in [PRESENTING.md](PRESENTING.md).
 
-9. Tests:
+9. On a PC that was installed before automatic updates, run this once, then restart:
+
+   ```powershell
+   cd C:\pinball-land
+   git pull
+   npm.cmd ci
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -RustDeskPassword "your-permanent-password"
+   shutdown /r /t 0
+   ```
+
+   That registers **PinballLandUpdateBoot** (at sign-in, before the server) and **PinballLandUpdateNightly** (default 3:17 AM local, `config.json` `updates.nightlyAt`). The log is `C:\ProgramData\PinballLand\logs\update.log`. Venue data in `C:\ProgramData\PinballLand` is not deleted. Admin, Settings shows the commit, the last result, and **Update now**.
+
+10. Tests:
    - Sign out and back in: kiosk windows should appear without clicking anything.
    - Reboot: same.
    - Pull the power brick: BIOS should power on, Windows auto-logon, kiosk windows on all TVs. If the PC comes on but TVs stay dark, fix step 2.

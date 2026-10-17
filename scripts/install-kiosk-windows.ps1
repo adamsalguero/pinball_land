@@ -277,6 +277,21 @@ function Read-KioskRegValue {
   }
 }
 
+function Test-TaskWaitsForUpdate {
+  param($Task)
+  if (-not $Task -or -not $Task.Triggers) { return $false }
+  foreach ($trigger in @($Task.Triggers)) {
+    $enabled = $true
+    if ($null -ne $trigger.Enabled) {
+      $raw = "$($trigger.Enabled)"
+      if ($raw -eq "False" -or $raw -eq "false") { $enabled = $false }
+    }
+    $className = [string]$trigger.CimClass.CimClassName
+    if ($enabled -and $className -match "Logon") { return $false }
+  }
+  return $true
+}
+
 function Write-KioskVerifySummary {
   param(
     [string]$AutoLogonUser,
@@ -293,6 +308,20 @@ function Write-KioskVerifySummary {
   $server = Get-ScheduledTask -TaskName $serverTask -ErrorAction SilentlyContinue
   Add-Row "Kiosk task" $(if ($kiosk) { "OK" } else { "FAIL" }) $(if ($kiosk) { $taskName } else { "missing" })
   Add-Row "Server task" $(if ($server) { "OK" } else { "FAIL" }) $(if ($server) { $serverTask } else { "missing" })
+  $boot = Get-ScheduledTask -TaskName "PinballLandUpdateBoot" -ErrorAction SilentlyContinue
+  $nightly = Get-ScheduledTask -TaskName "PinballLandUpdateNightly" -ErrorAction SilentlyContinue
+  $bootArg = ""
+  $nightlyArg = ""
+  if ($boot -and $boot.Actions) { $bootArg = [string]@($boot.Actions)[0].Arguments }
+  if ($nightly -and $nightly.Actions) { $nightlyArg = [string]@($nightly.Actions)[0].Arguments }
+  $bootOk = $boot -and $bootArg -match "invoke-update\.ps1" -and $bootArg -match "-Mode boot"
+  $nightlyOk = $nightly -and $nightlyArg -match "invoke-update\.ps1" -and $nightlyArg -match "-Mode nightly"
+  Add-Row "Update boot task" $(if ($bootOk) { "OK" } else { "FAIL" }) $(if ($bootOk) { "PinballLandUpdateBoot" } else { "missing" })
+  Add-Row "Update nightly task" $(if ($nightlyOk) { "OK" } else { "FAIL" }) $(if ($nightlyOk) { "PinballLandUpdateNightly" } else { "missing" })
+  $serverWaits = Test-TaskWaitsForUpdate -Task $server
+  $kioskWaits = Test-TaskWaitsForUpdate -Task $kiosk
+  $orderOk = $serverWaits -and $kioskWaits
+  Add-Row "Update before start" $(if ($orderOk) { "OK" } else { "FAIL" }) "server and kiosk start from the boot task"
   $nodePath = $null
   if ($server -and $server.Actions) {
     $nodePath = [string]@($server.Actions)[0].Execute
@@ -458,10 +487,17 @@ try {
     $serverAction = New-ScheduledTaskAction -Execute $nodeExe -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
     $serverTrigger = New-ScheduledTaskTrigger -AtLogOn
     Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
-    Write-Host "Registered '$serverTask' at logon with $nodeExe, and '$taskName' 20 seconds later."
+    Write-Host "Registered '$serverTask' with $nodeExe. The boot update task starts it after the update check."
   }
 } catch {
   Write-Warning "Scheduled tasks were not registered: $($_.Exception.Message)"
+}
+
+Write-Host "Registering boot and nightly update tasks..."
+try {
+  & (Join-Path $PSScriptRoot "register-update-tasks.ps1") -RepoRoot $RepoRoot
+} catch {
+  Write-Warning "Update tasks were not registered: $($_.Exception.Message)"
 }
 
 Write-Host "Hiding notifications, the screensaver, and update reboots during open hours..."
