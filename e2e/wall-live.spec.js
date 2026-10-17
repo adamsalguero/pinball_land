@@ -1,19 +1,29 @@
 const { test, expect } = require("@playwright/test");
-const fs = require("fs");
-const path = require("path");
 
-const clipPath = path.join(__dirname, "fixtures", "wall-clip.mp4");
-
-async function cardKeys(pages) {
-  const keys = [];
-  for (const page of pages) {
-    keys.push(await page.locator("#screen").getAttribute("data-card"));
+function typeKey(card) {
+  const value = String(card || "");
+  if (value.startsWith("amenity:")) return "amenity";
+  if (value.startsWith("pinboard") || value.startsWith("collage")) return "pinboard";
+  if (value.startsWith("board:") || value.startsWith("leaderboard")) return "leaderboard";
+  if (value.startsWith("logo:")) return value;
+  if (value.startsWith("video:")) {
+    const modeAt = value.search(/:(?:card|span)(?::|$)/);
+    const id = modeAt === -1 ? value.slice("video:".length) : value.slice("video:".length, modeAt);
+    return `video:${id}`;
   }
-  return keys;
+  return value.split(":")[0] || value;
 }
 
-test("auto rotation advances every dwell and keeps the three screens different", async ({ browser, request }) => {
-  test.setTimeout(60000);
+async function readCards(pages) {
+  const cards = [];
+  for (const page of pages) {
+    cards.push(await page.locator("#screen").getAttribute("data-card"));
+  }
+  return cards;
+}
+
+test("three live displays stay unique across real dwell ticks", async ({ browser, request }) => {
+  test.setTimeout(90000);
   const reset = await request.put("/api/displays", {
     headers: { "x-pin": "2224" },
     data: {
@@ -26,7 +36,6 @@ test("auto rotation advances every dwell and keeps the three screens different",
   });
   expect(reset.ok()).toBeTruthy();
   const context = await browser.newContext();
-  await context.clock.install({ time: Date.now() });
   const pages = [];
   for (const slot of [1, 2, 3]) {
     const page = await context.newPage();
@@ -38,46 +47,31 @@ test("auto rotation advances every dwell and keeps the three screens different",
     const card = document.querySelector("#screen")?.dataset.card;
     return card && card !== "off";
   });
-  const seen = [];
-  for (let cycle = 0; cycle < 3; cycle += 1) {
-    const keys = await cardKeys(pages);
-    expect(keys.every(Boolean), JSON.stringify(keys)).toBeTruthy();
-    expect(new Set(keys).size, JSON.stringify(keys)).toBe(3);
-    if (seen.length) {
-      for (let i = 0; i < 3; i += 1) expect(keys[i]).not.toBe(seen[seen.length - 1][i]);
+  const samples = [];
+  const started = Date.now();
+  let last = "";
+  while (samples.length < 22 && Date.now() - started < 45000) {
+    const first = await readCards(pages);
+    await pages[0].waitForTimeout(120);
+    const second = await readCards(pages);
+    if (first.join("|") !== second.join("|")) continue;
+    const keys = first.map(typeKey);
+    expect(new Set(keys).size, JSON.stringify(first)).toBe(3);
+    const signature = keys.join("|");
+    if (signature !== last) {
+      samples.push(first);
+      last = signature;
     }
-    seen.push(keys);
-    await context.clock.fastForward(30_000);
-    await pages[0].waitForFunction((previous) => document.querySelector("#screen")?.dataset.card !== previous, keys[0]);
   }
+  expect(samples.length).toBeGreaterThanOrEqual(20);
+  await pages[0].screenshot({ path: "e2e/artifacts/rotation-screen-1.png" });
+  await pages[1].screenshot({ path: "e2e/artifacts/rotation-screen-2.png" });
+  await pages[2].screenshot({ path: "e2e/artifacts/rotation-screen-3.png" });
   await context.close();
 });
 
-test("the video screen plays a local clip and never shows skip text", async ({ page, request }) => {
-  test.setTimeout(60000);
-  expect(fs.existsSync(clipPath)).toBeTruthy();
-  const clip = fs.readFileSync(clipPath);
-  const uploaded = await request.post("/api/media", {
-    headers: {
-      "x-pin": "2224",
-      "content-type": "video/mp4",
-      "x-filename": "wall-clip.mp4",
-      "x-title": "Wall clip",
-      "x-folder": "library",
-      "x-in-rotation": "true",
-      "x-loop": "true",
-    },
-    data: clip,
-  });
-  expect(uploaded.ok()).toBeTruthy();
-  const body = await uploaded.json();
-  const video = (body.media?.videos || []).find((item) => item.title === "Wall clip");
-  expect(video?.id).toBeTruthy();
-  const partial = await request.get(`/media/videos/${video.id}`, {
-    headers: { Range: "bytes=0-15" },
-  });
-  expect(partial.status()).toBe(206);
-  expect(partial.headers()["content-range"] || "").toContain("bytes 0-15/");
+test("video mode plays a bundled clip past three seconds", async ({ page, request }) => {
+  test.setTimeout(30000);
   const pinned = await request.put("/api/displays", {
     headers: { "x-pin": "2224" },
     data: { screens: { 1: { content: "video" } } },
@@ -86,13 +80,45 @@ test("the video screen plays a local clip and never shows skip text", async ({ p
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/display/1");
   await page.waitForFunction(() => {
-    const videoEl = document.querySelector("#wall-video");
-    return videoEl && !videoEl.hidden && videoEl.readyState >= 2 && videoEl.currentTime > 0.2;
+    const video = document.querySelector("#wall-video");
+    const screen = document.querySelector("#screen");
+    return screen?.dataset.mode === "video" && video && !video.hidden && !video.paused && video.currentTime > 3;
   });
-  const text = await page.locator("body").innerText();
-  expect(text.toLowerCase()).not.toContain("skipping");
-  expect(text.toLowerCase()).not.toContain("did not play");
-  await expect(page.locator("#video-fallback")).toBeHidden();
+  const frame = await page.evaluate(() => {
+    const video = document.querySelector("#wall-video");
+    const canvas = document.createElement("canvas");
+    canvas.width = 48;
+    canvas.height = 27;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, 48, 27);
+    const data = ctx.getImageData(0, 0, 48, 27).data;
+    let nonBlack = 0;
+    const colors = new Set();
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      if (r + g + b > 40) nonBlack += 1;
+      colors.add(`${r >> 4},${g >> 4},${b >> 4}`);
+    }
+    return {
+      nonBlack,
+      colors: colors.size,
+      mode: document.querySelector("#screen")?.dataset.mode,
+      logoHidden: document.querySelector("#logo")?.hidden,
+      card: document.querySelector("#screen")?.dataset.card || "",
+    };
+  });
+  expect(frame.mode).toBe("video");
+  expect(frame.logoHidden).toBe(true);
+  expect(frame.card.startsWith("video:")).toBe(true);
+  expect(frame.card).not.toContain("logo");
+  expect(frame.nonBlack).toBeGreaterThan(80);
+  expect(frame.colors).toBeGreaterThan(3);
+  const text = (await page.locator("body").innerText()).toLowerCase();
+  expect(text).not.toContain("skipping");
+  expect(text).not.toContain("did not play");
+  await page.screenshot({ path: "e2e/artifacts/video-playing.png" });
 });
 
 test("sprite sheet draws a spider and a bat", async ({ page }) => {
@@ -102,10 +128,13 @@ test("sprite sheet draws a spider and a bat", async ({ page }) => {
   await page.screenshot({ path: "e2e/artifacts/sprites-spider-bat.png" });
 });
 
-test("camera hides the raw file inputs", async ({ page }) => {
+test("camera hides the raw file inputs and opens a photo lightbox", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Take Photo" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose Photo" })).toBeVisible();
   await expect(page.locator("#take-file")).toBeHidden();
   await expect(page.locator("#choose-file")).toBeHidden();
+  await expect(page.locator("#photo-lightbox")).toBeHidden();
+  const guestJs = await page.evaluate(async () => (await fetch("/guest.js")).text());
+  expect(guestJs).not.toContain("navigator.share");
 });

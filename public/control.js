@@ -415,21 +415,6 @@ function renderDisplays() {
     title.textContent = displayLabel(slot, count);
     card.append(title);
 
-    const power = document.createElement("div");
-    power.className = "choice-row";
-    for (const on of [true, false]) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "btn";
-      button.textContent = on ? "On" : "Off";
-      button.addEventListener("click", async () => {
-        applyPayload(await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on } }));
-        toast(on ? `${displayLabel(slot, count)} power on` : `${displayLabel(slot, count)} power off`);
-      });
-      power.append(button);
-    }
-    card.append(power);
-
     if (displays.mirror && slot !== "1") {
       const note = document.createElement("p");
       note.className = "muted";
@@ -798,7 +783,7 @@ function renderPlugs() {
   const allOn = document.createElement("button");
   allOn.type = "button";
   allOn.className = "btn primary";
-  allOn.textContent = "All on";
+  allOn.textContent = "TVs On";
   allOn.addEventListener("click", async () => {
     applyPayload(await api("/api/plugs/power", { method: "POST", body: { on: true } }));
     toast("Plugs on");
@@ -806,7 +791,7 @@ function renderPlugs() {
   const allOff = document.createElement("button");
   allOff.type = "button";
   allOff.className = "btn danger";
-  allOff.textContent = "All off";
+  allOff.textContent = "TVs Off";
   allOff.addEventListener("click", async () => {
     applyPayload(await api("/api/plugs/power", { method: "POST", body: { on: false } }));
     toast("Plugs off");
@@ -907,26 +892,7 @@ function renderMedia() {
   const root = document.getElementById("media-root");
   if (!root) return;
   root.replaceChildren();
-  const media = current.media || { videos: [], allAges: true };
-  const toggle = document.createElement("div");
-  toggle.className = "theme-toggle";
-  const agesOn = document.createElement("button");
-  agesOn.type = "button";
-  agesOn.className = `btn${media.allAges ? " active" : ""}`;
-  agesOn.textContent = "All-ages on";
-  agesOn.addEventListener("click", async () => {
-    applyPayload(await api("/api/media/settings", { method: "PUT", body: { allAges: true } }));
-  });
-  const agesOff = document.createElement("button");
-  agesOff.type = "button";
-  agesOff.className = `btn${media.allAges ? "" : " active"}`;
-  agesOff.textContent = "All-ages off";
-  agesOff.addEventListener("click", async () => {
-    applyPayload(await api("/api/media/settings", { method: "PUT", body: { allAges: false } }));
-  });
-  toggle.append(agesOn, agesOff);
-  root.append(toggle);
-
+  const media = current.media || { videos: [] };
   const form = document.createElement("form");
   form.className = "stack";
   const file = document.createElement("input");
@@ -1004,19 +970,12 @@ function renderMedia() {
     const card = document.createElement("div");
     card.className = "card";
     const heading = document.createElement("p");
-    heading.textContent = `${video.title} · ${video.folder}${video.allAges ? "" : " · not all-ages"}`;
+    heading.textContent = `${video.title} · ${video.folder}`;
     const tagLine = document.createElement("p");
     tagLine.className = "muted";
     tagLine.textContent = video.tags?.length ? video.tags.join(", ") : "No tags";
     const flags = document.createElement("div");
     flags.className = "theme-toggle";
-    const age = document.createElement("button");
-    age.type = "button";
-    age.className = `btn${video.allAges ? " active" : ""}`;
-    age.textContent = video.allAges ? "All-ages" : "Not all-ages";
-    age.addEventListener("click", async () => {
-      applyPayload(await api(`/api/media/${video.id}`, { method: "PUT", body: { allAges: !video.allAges } }));
-    });
     const rotate = document.createElement("button");
     rotate.type = "button";
     rotate.className = `btn${video.inRotation ? " active" : ""}`;
@@ -1024,7 +983,7 @@ function renderMedia() {
     rotate.addEventListener("click", async () => {
       applyPayload(await api(`/api/media/${video.id}`, { method: "PUT", body: { inRotation: !video.inRotation } }));
     });
-    flags.append(age, rotate);
+    flags.append(rotate);
     const playRow = document.createElement("div");
     playRow.className = "choice-row";
     const playOne = document.createElement("button");
@@ -1085,7 +1044,6 @@ function render() {
   renderScoreQueue();
   renderArchive();
   renderYoutube();
-  renderVideoTests();
   renderPhotos();
   renderAdmin();
   renderMotion();
@@ -1349,150 +1307,26 @@ function renderArchive() {
   }
 }
 
-const videoStatus = new Map();
 
-function shareOrDownload(url, filename) {
-  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  if (ios && typeof navigator.share === "function") {
-    return fetch(url).then((res) => res.blob()).then(async (blob) => {
-      const file = new File([blob], filename, { type: blob.type || "image/jpeg" });
-      const payload = { files: [file], title: "Pinball Land" };
-      if (typeof navigator.canShare !== "function" || navigator.canShare(payload)) {
-        await navigator.share(payload);
-        return;
-      }
-      triggerDownload(url, filename);
-    }).catch((err) => {
-      if (err && err.name === "AbortError") return;
-      triggerDownload(url, filename);
-    });
+function openPhotoLightbox(url, filename) {
+  let box = document.getElementById("photo-lightbox");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "photo-lightbox";
+    box.className = "lightbox";
+    box.hidden = true;
+    box.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close">×</button><img alt=""><a class="btn download">Download</a>';
+    box.querySelector(".lightbox-close").addEventListener("click", () => { box.hidden = true; });
+    document.body.append(box);
   }
-  triggerDownload(url, filename);
-  return Promise.resolve();
-}
-
-function triggerDownload(url, filename) {
-  const link = document.createElement("a");
+  const img = box.querySelector("img");
+  const link = box.querySelector("a");
+  img.src = url;
+  img.alt = filename || "Guest photo";
   link.href = `${url}${url.includes("?") ? "&" : "?"}download=1`;
-  link.download = filename;
-  link.rel = "noopener";
-  document.body.append(link);
-  link.click();
-  link.remove();
+  link.download = filename || "photo.jpg";
+  box.hidden = false;
 }
-
-function probeVideo(item) {
-  const url = item.playUrl || item.streamUrl || item.url;
-  const start = window.PinballRotation
-    ? window.PinballRotation.videoStartSec(item.id, 0, item.durationSec || 0)
-    : 0;
-  return new Promise((resolve) => {
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    video.preload = "auto";
-    let settled = false;
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-      resolve(result);
-    };
-    const timer = setTimeout(() => finish("stalled"), 8000);
-    video.addEventListener("error", () => finish("failed"));
-    video.addEventListener("loadedmetadata", () => {
-      const duration = video.duration;
-      let at = start;
-      if (Number.isFinite(duration) && duration > 0) {
-        at = Math.min(at, Math.max(0, duration - 0.35));
-      }
-      const confirmAdvance = () => {
-        const origin = video.currentTime || 0;
-        const onTime = () => {
-          if (video.currentTime > origin + 0.2) finish("ok");
-        };
-        video.addEventListener("timeupdate", onTime);
-        video.play().catch(() => finish("failed"));
-      };
-      if (at > 0.05) {
-        const onSeeked = () => {
-          video.removeEventListener("seeked", onSeeked);
-          confirmAdvance();
-        };
-        video.addEventListener("seeked", onSeeked);
-        try {
-          video.currentTime = at;
-        } catch {
-          confirmAdvance();
-        }
-      } else {
-        confirmAdvance();
-      }
-    }, { once: true });
-    if (!url) {
-      finish("failed");
-      return;
-    }
-    video.src = url;
-  });
-}
-
-function renderVideoTests() {
-  const root = document.getElementById("video-test-root");
-  if (!root) return;
-  root.replaceChildren();
-  const catalog = current.media?.catalog || [];
-  for (const holiday of ["halloween", "christmas"]) {
-    const heading = document.createElement("h3");
-    heading.textContent = holiday === "halloween" ? "Halloween" : "Christmas";
-    root.append(heading);
-    for (const item of catalog.filter((entry) => entry.holiday === holiday)) {
-      const card = document.createElement("article");
-      card.className = "card";
-      const status = videoStatus.get(item.id) || (item.disabled ? "disabled" : "—");
-      const copy = document.createElement("p");
-      copy.textContent = `${item.title} · ${status}`;
-      const play = document.createElement("button");
-      play.type = "button";
-      play.className = "btn";
-      play.textContent = "Play preview";
-      play.addEventListener("click", async () => {
-        videoStatus.set(item.id, "checking");
-        renderVideoTests();
-        const result = await probeVideo(item);
-        videoStatus.set(item.id, result);
-        renderVideoTests();
-      });
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "btn";
-      toggle.textContent = item.disabled ? "Enable" : "Disable";
-      toggle.addEventListener("click", async () => {
-        applyPayload(await api(`/api/media/catalog/${item.id}`, {
-          method: "PUT",
-          body: { disabled: !item.disabled },
-        }));
-      });
-      card.append(copy, play, toggle);
-      root.append(card);
-    }
-  }
-}
-
-document.getElementById("test-all-videos")?.addEventListener("click", async () => {
-  const catalog = current.media?.catalog || [];
-  for (const item of catalog) {
-    videoStatus.set(item.id, "checking");
-    renderVideoTests();
-    const result = await probeVideo(item);
-    videoStatus.set(item.id, result);
-    renderVideoTests();
-  }
-  toast("Video test finished");
-});
 
 function renderYoutube() {
   const root = document.getElementById("youtube-root");
@@ -1549,14 +1383,9 @@ async function renderPhotos() {
     const copy = document.createElement("p");
     const when = photo.createdAt ? new Date(photo.createdAt).toLocaleString() : "";
     copy.textContent = `${photo.status}: ${[when, photo.guestName, photo.caption].filter(Boolean).join(" — ") || "No caption"}`;
-    const download = document.createElement("button");
-    download.type = "button";
-    download.className = "btn";
-    download.textContent = "Save photo";
-    download.addEventListener("click", () => {
-      shareOrDownload(photo.url, `${photo.id}.jpg`).catch(() => {});
-    });
-    card.append(img, copy, download);
+    img.addEventListener("click", () => openPhotoLightbox(photo.url, `${photo.id}.jpg`));
+    img.style.cursor = "pointer";
+    card.append(img, copy);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "btn danger";

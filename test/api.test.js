@@ -57,7 +57,9 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
     assert.match(controlText, /Outdoor Oasis/);
     assert.match(controlText, /Displays/);
     assert.match(controlText, /Auto \(rotate all\)/);
-    assert.match(controlText, /Test videos/);
+    assert.match(controlText, /Videos/);
+    assert.doesNotMatch(controlText, /Test videos/);
+    assert.doesNotMatch(controlText, /All-ages/);
     assert.doesNotMatch(controlText, /Chromecast/);
     assert.doesNotMatch(controlText, /\bpool\b/i);
     const present = await fetch(`${origin}/present`);
@@ -598,7 +600,7 @@ test("airplay target, mocked plugs, and a christmas video", async () => {
     const video = library.media.videos[0];
     assert.equal(video.title, "Snow loop");
     assert.equal(video.allAges, true);
-    assert.equal(library.playlist.some((card) => card.type === "video"), false);
+    assert.equal(library.playlist.some((card) => card.id === video.id), false);
     const themed = await json(origin, "/api/theme", {
       method: "PUT",
       headers,

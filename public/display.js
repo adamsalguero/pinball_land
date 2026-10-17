@@ -84,27 +84,47 @@ function fitText(el) {
   const full = el.dataset.full ?? "";
   if (!full) return;
   el.style.fontSize = "";
-  el.style.lineHeight = "1.25";
+  el.style.maxHeight = "";
+  el.style.lineHeight = "";
   el.textContent = full;
   if (el.clientWidth < 2 || el.clientHeight < 2) return;
+  const start = Math.max(11, Math.round(parseFloat(getComputedStyle(el).fontSize) || 32));
+  const boxHeight = el.clientHeight;
   const overflows = () => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+  el.style.fontSize = `${start}px`;
   if (!overflows()) return;
-  let lo = 0;
-  let hi = full.length;
-  let best = "…";
+  // Keep the laid-out box. An em max-height would shrink with the font and the line would never fit.
+  el.style.maxHeight = `${boxHeight}px`;
+  el.style.lineHeight = "1.15";
+  const absurd = full.length > 180;
+  const min = absurd ? 8 : 11;
+  let lo = min;
+  let hi = start;
+  let best = min;
   while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    el.textContent = mid >= full.length ? full : `${full.slice(0, mid).trimEnd()}…`;
+    const mid = (lo + hi) >> 1;
+    el.style.fontSize = `${mid}px`;
     if (overflows()) hi = mid - 1;
     else {
-      best = el.textContent;
+      best = mid;
       lo = mid + 1;
     }
   }
-  el.textContent = best;
-  while (el.textContent.length > 1 && overflows()) {
-    el.textContent = `${el.textContent.slice(0, -2).trimEnd()}…`;
+  el.style.fontSize = `${best}px`;
+  if (!overflows() || !absurd) return;
+  lo = 1;
+  hi = full.length;
+  let fitted = "…";
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    el.textContent = mid >= full.length ? full : `${full.slice(0, mid).trimEnd()}…`;
+    if (overflows()) hi = mid - 1;
+    else {
+      fitted = el.textContent;
+      lo = mid + 1;
+    }
   }
+  el.textContent = fitted;
 }
 
 function fitVisibleText() {
@@ -273,10 +293,50 @@ function renderRows(rows) {
   if (top.length && !rest.length) boardRows.hidden = true;
 }
 
+let shownBoard = null;
+
+function boardArtList(board) {
+  if (!board || board.kind !== "machine") return [];
+  const urls = Array.isArray(board.artUrls) ? board.artUrls.filter(Boolean) : [];
+  if (urls.length) return urls;
+  return board.artUrl ? [board.artUrl] : [];
+}
+
+function currentBoardArt(board) {
+  const urls = boardArtList(board);
+  if (!urls.length) return null;
+  const cursor = Math.floor(Math.max(0, Date.now() - clockSkew) / 8000);
+  return urls[cursor % urls.length];
+}
+
+function paintBoardArt() {
+  const board = shownBoard;
+  const artUrl = currentBoardArt(board);
+  const isMachine = board?.kind === "machine";
+  boardPanel.classList.toggle("has-art", Boolean(isMachine && artUrl));
+  if (!artUrl) {
+    machineArtWrap.hidden = true;
+    machineArt.hidden = true;
+    machineVideo.hidden = true;
+    machineArt.removeAttribute("src");
+    delete machineArt.dataset.src;
+    return;
+  }
+  machineVideo.hidden = true;
+  machineArtWrap.hidden = false;
+  machineArt.hidden = false;
+  machineArt.alt = board.name || "Machine art";
+  if (machineArt.dataset.src !== artUrl) {
+    machineArt.dataset.src = artUrl;
+    machineArt.src = artUrl;
+  }
+}
+
 function showBoard(board) {
   setMode("board");
   stopWallVideo();
   teardownPresent();
+  shownBoard = board || null;
   const rows = FIXTURE
     ? (board?.rows || []).concat([
       { id: "long-a", name: LONG_TEXT, score: 2450000 },
@@ -302,33 +362,8 @@ function showBoard(board) {
   setFit(boardMeta, FIXTURE && meta ? `${meta} ${LONG_TEXT}` : meta);
   renderRows(rows);
 
-  const isMachine = board?.kind === "machine";
-  const videoUrl = isMachine && board?.videoUrl && /\.(mp4|webm|ogg)(\?|$)/i.test(board.videoUrl)
-    ? board.videoUrl
-    : null;
-  const artUrl = isMachine ? board?.artUrl : null;
-  boardPanel.classList.toggle("has-art", Boolean(isMachine && (artUrl || videoUrl)));
-
-  if (videoUrl) {
-    machineArtWrap.hidden = false;
-    machineArt.hidden = true;
-    machineVideo.hidden = false;
-    if (machineVideo.getAttribute("src") !== videoUrl) {
-      machineVideo.src = videoUrl;
-    }
-    machineVideo.play().catch(() => {});
-  } else if (artUrl) {
-    stopVideo();
-    machineArtWrap.hidden = false;
-    machineArt.hidden = false;
-    machineArt.alt = board.name || "Machine art";
-    if (machineArt.src !== artUrl) machineArt.src = artUrl;
-  } else {
-    stopVideo();
-    machineArtWrap.hidden = true;
-    machineArt.hidden = true;
-    machineArt.removeAttribute("src");
-  }
+  stopVideo();
+  paintBoardArt();
 }
 
 function cyclePick(order, dwell, slot) {
@@ -416,18 +451,8 @@ function resolveCard() {
       slots: playback.slots.map(String),
     };
   }
-  if (state.rotation?.enabled !== false && window.PinballRotation) {
-    const plan = window.PinballRotation.planRotation(payload.playlist || [], {
-      startedAt: state.rotation.startedAt,
-      intervalSec: state.rotation.intervalSec,
-      screenCount: Math.max(1, Number(payload.displays?.count) || 3),
-      layout: payload.layout || {},
-      now: Date.now() - clockSkew,
-    });
-    let planned = plan?.[SLOT] || plan?.[String(SLOT)] || null;
-    if (planned?.type === "video" && (planned.empty || !planned.url || failedVideoIds.has(planned.id))) {
-      planned = substituteCard(planned);
-    }
+  if (state.rotation?.enabled !== false && payload.rotationPlan) {
+    const planned = payload.rotationPlan[SLOT] || payload.rotationPlan[String(SLOT)] || null;
     if (planned) return { ...planned, span: false };
   }
   const layout = payload.layout?.[SLOT];
@@ -436,21 +461,6 @@ function resolveCard() {
     if (pinned) return pinned;
   }
   return cardFromSlot(state);
-}
-
-function substituteCard(blocked) {
-  const list = payload?.playlist || [];
-  const start = Math.max(0, list.findIndex((item) => item && item.type === blocked?.type && item.id === blocked?.id));
-  for (let step = 1; step <= list.length; step += 1) {
-    const candidate = list[(start + step) % list.length];
-    if (!candidate) continue;
-    if (candidate.type === "video") {
-      if (!candidate.url || candidate.empty || failedVideoIds.has(candidate.id)) continue;
-      return candidate;
-    }
-    return candidate;
-  }
-  return { type: "logo", cycle: true };
 }
 
 function decorate(card) {
@@ -553,6 +563,7 @@ function renderCard(raw) {
   lastKey = key;
   const run = () => {
     paintCard(card);
+    fitVisibleText();
     const fit = () => requestAnimationFrame(() => fitVisibleText());
     fit();
     document.fonts?.ready.then(fit).catch(() => {});
@@ -582,26 +593,22 @@ function alignVideo(startedAt) {
 }
 
 function seekIntoCard(card) {
+  if (card?.stream) return;
   const duration = wallVideo.duration;
   if (!Number.isFinite(duration) || duration < 20) return;
   let start = Number(card.startSec);
-  if (!Number.isFinite(start) || start < 0) {
-    start = window.PinballRotation
-      ? window.PinballRotation.videoStartSec(card.id, 0, duration)
-      : 0;
-  }
+  if (!Number.isFinite(start) || start < 0) start = 0;
+  if (start < 0.05) return;
   const cap = Math.max(0, duration - Math.min(20, duration * 0.05));
   try {
     wallVideo.currentTime = Math.min(Math.max(0, start), cap);
   } catch {
-    // A failed seek stays at the current frame. The stall watcher moves on quietly.
+    // A failed seek stays at the current frame. The server assigns another clip.
   }
 }
 
 let stallTimer = null;
-let stallSkip = false;
-const stalledIds = new Set();
-const failedVideoIds = new Set();
+let reportedVideoId = "";
 
 function clearStall() {
   if (stallTimer) clearInterval(stallTimer);
@@ -611,7 +618,9 @@ function clearStall() {
 }
 
 function reportVideo(card, reason) {
-  const id = card.starterId || card.id || "";
+  const id = String(card?.id || "");
+  if (!id || id === reportedVideoId) return;
+  reportedVideoId = id;
   fetch("/api/media/failure", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -619,27 +628,8 @@ function reportVideo(card, reason) {
   }).catch(() => {});
 }
 
-function skipStalled(card) {
-  if (stallSkip) return;
-  stallSkip = true;
-  if (card?.id) {
-    stalledIds.add(card.id);
-    failedVideoIds.add(card.id);
-  }
-  clearStall();
-  const fallback = document.getElementById("video-fallback");
-  if (fallback) {
-    fallback.hidden = true;
-    fallback.textContent = "";
-  }
-  lastKey = "";
-  renderCard(resolveCard());
-  stallSkip = false;
-}
-
 function armStall(card) {
   clearStall();
-  stallSkip = false;
   let last = wallVideo.currentTime || 0;
   let lastMove = Date.now();
   const started = Date.now();
@@ -651,17 +641,15 @@ function armStall(card) {
   };
   wallVideo.onerror = () => {
     reportVideo(card, "failed");
-    if (card.mode === "card") skipStalled(card);
   };
   stallTimer = setInterval(() => {
-    if (wallVideo.ended) return;
+    if (wallVideo.ended && card.loop) return;
     const quiet = Date.now() - lastMove;
     const waiting = Date.now() - started;
     if (quiet < 4500 || waiting < 4500) return;
     if (wallVideo.readyState >= 3 && Math.abs(wallVideo.currentTime - last) > 0.25) return;
     reportVideo(card, "stalled");
-    if (card.mode === "card") skipStalled(card);
-    else clearStall();
+    clearStall();
   }, 1000);
 }
 
@@ -675,9 +663,7 @@ function showVideo(card) {
     stopWallVideo();
     wallVideo.hidden = true;
     if (fallback) fallback.hidden = true;
-    if (card?.mode === "card" && card.id && card.id !== "preview" && card.id !== "empty") {
-      skipStalled(card);
-    }
+    if (card?.id && card.id !== "preview" && card.id !== "empty") reportVideo(card, "failed");
     return;
   }
   wallVideo.hidden = false;
@@ -697,7 +683,9 @@ function showVideo(card) {
     wallVideo.style.transform = "";
   }
   wallVideo.loop = Boolean(card.loop);
-  wallVideo.muted = card.mode === "card" || String(SLOT) !== primary;
+  wallVideo.muted = true;
+  wallVideo.defaultMuted = true;
+  wallVideo.playsInline = true;
   if (wallVideo.getAttribute("src") !== card.url) wallVideo.src = card.url;
   if (card.mode === "card") {
     wallVideo.onloadedmetadata = () => seekIntoCard(card);
@@ -716,7 +704,13 @@ function showVideo(card) {
       body: JSON.stringify({ videoId: card.id }),
     }).catch(() => {});
   };
-  wallVideo.play().catch(() => {});
+  const startPlayback = () => {
+    wallVideo.play().catch(() => {
+      wallVideo.muted = true;
+      wallVideo.play().catch(() => reportVideo(card, "failed"));
+    });
+  };
+  startPlayback();
 }
 
 function shareLines() {
@@ -958,7 +952,8 @@ function placePhotos(target, card) {
       hour: "numeric",
       minute: "2-digit",
     }) : "";
-    setFit(cap, FIXTURE ? LONG_TEXT : [taken, photo.caption || photo.guestName].filter(Boolean).join(" · "));
+    const caption = [photo.guestName, photo.caption].filter(Boolean).join(" · ");
+    setFit(cap, FIXTURE ? LONG_TEXT : [taken, caption].filter(Boolean).join(" · "));
     el.append(img, cap);
     target.append(el);
   });
@@ -1055,6 +1050,7 @@ function tick() {
   if (!payload) return;
   applyTheme(payload.state?.theme);
   renderCard(resolveCard());
+  if (screen.dataset.mode === "board") paintBoardArt();
   if (screen.dataset.mode === "clock") paintClock();
   if (screen.dataset.mode === "clock" || FIXTURE) requestAnimationFrame(() => fitVisibleText());
 }
