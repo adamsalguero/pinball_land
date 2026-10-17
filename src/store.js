@@ -24,8 +24,65 @@ const LEGACY_CONTENT = {
   pool: "amenity-oasis",
 };
 
+const LOCKED_RENAME = new Set(["EPERM", "EBUSY", "EACCES"]);
+const RENAME_BACKOFF_MS = [50, 100, 200, 400];
+
 function id() {
   return crypto.randomUUID();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLockedRename(err) {
+  return Boolean(err && LOCKED_RENAME.has(err.code));
+}
+
+// Windows rename over an existing file returns EPERM/EBUSY when Defender or the
+// indexer still has state.json open. Retry, then copy over the destination.
+async function replaceFile(tmp, dest, fsImpl = fs, { delays = RENAME_BACKOFF_MS, sleepFn = sleep } = {}) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      await fsImpl.rename(tmp, dest);
+      return;
+    } catch (err) {
+      if (!isLockedRename(err)) throw err;
+      lastErr = err;
+      if (attempt < delays.length) await sleepFn(delays[attempt]);
+    }
+  }
+  let fallbackErr = lastErr;
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      await fsImpl.copyFile(tmp, dest);
+      try {
+        await fsImpl.unlink(tmp);
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+      return;
+    } catch (err) {
+      fallbackErr = err;
+      if (!isLockedRename(err) || attempt >= delays.length) {
+        if (lastErr && lastErr !== err) err.renameError = lastErr;
+        throw err;
+      }
+      await sleepFn(delays[attempt]);
+    }
+  }
+  throw fallbackErr;
+}
+
+async function removeStaleTemp(filePath, fsImpl = fs) {
+  try {
+    await fsImpl.unlink(`${filePath}.tmp`);
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      console.warn(`Could not remove stale temp file (${filePath}.tmp): ${err.message}`);
+    }
+  }
 }
 
 function clone(value) {
@@ -155,6 +212,7 @@ class Store {
   }
 
   static async load(filePath) {
+    await removeStaleTemp(filePath);
     let parsed = null;
     try {
       const raw = await fs.readFile(filePath, "utf8");
@@ -182,7 +240,7 @@ class Store {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(this.state, null, 2), "utf8");
-    await fs.rename(tmp, this.filePath);
+    await replaceFile(tmp, this.filePath);
   }
 
   async commit() {
@@ -408,6 +466,10 @@ class Store {
 
 module.exports = {
   Store,
+  replaceFile,
+  removeStaleTemp,
+  LOCKED_RENAME,
+  RENAME_BACKOFF_MS,
   SLOT_IDS,
   CONTENTS,
   THEMES,

@@ -57,7 +57,9 @@ if ($AutoLogonUser) { $configure.AutoLogonUser = $AutoLogonUser }
 
 if (-not $DryRun) {
   Write-Host "Starting the server..."
-  Start-Process -FilePath "node.exe" -ArgumentList "src/server.js" -WorkingDirectory $RepoRoot -WindowStyle Minimized
+  $nodeExe = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+  if (-not $nodeExe) { $nodeExe = "node.exe" }
+  Start-Process -FilePath $nodeExe -ArgumentList "src/server.js" -WorkingDirectory $RepoRoot -WindowStyle Minimized
   Start-Sleep -Seconds 2
   node -e "const os=require('os'); const nets=os.networkInterfaces(); let ip='localhost'; for (const name of Object.keys(nets)) { for (const net of nets[name]||[]) { if ((net.family==='IPv4'||net.family===4) && !net.internal) ip=net.address; } } console.log(''); console.log('Guest app:  http://'+ip+':3000/'); console.log('Admin app:  http://'+ip+':3000/admin'); console.log('Admin PIN:  2224'); console.log(''); console.log('On the iPhone or iPad: Safari, Share, Add to Home Screen. Do that once for each URL.');"
   Write-Host "BIOS Auto Power On and the BenQ Switch on state are still by hand (see KIOSK.md)."
