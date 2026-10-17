@@ -52,8 +52,12 @@ function normalizeAirplay(raw) {
 
 function normalizeMediaSettings(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
+  const disabledIds = Array.isArray(incoming.disabledIds)
+    ? [...new Set(incoming.disabledIds.map((item) => String(item)).filter((id) => /^[a-z0-9:-]{3,100}$/.test(id)))].slice(0, 200)
+    : [];
   return {
     allAges: incoming.allAges !== false,
+    disabledIds,
   };
 }
 
@@ -77,8 +81,8 @@ function normalizePhotos(raw) {
   return {
     autoApprove: Boolean(incoming.autoApprove),
     publicBaseUrl: httpBaseUrl(incoming.publicBaseUrl),
-    style: incoming.style === "collage" ? "collage" : "pinboard",
-    span: incoming.span !== false,
+    style: "pinboard",
+    span: false,
     eventName: eventName || "Tonight",
   };
 }

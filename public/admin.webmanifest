@@ -3,13 +3,14 @@
   "short_name": "PL Admin",
   "description": "Drive the Pinball Land wall.",
   "start_url": "/admin",
-  "scope": "/admin",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#1a1916",
-  "theme_color": "#1a1916",
+  "background_color": "#62006E",
+  "theme_color": "#62006E",
   "icons": [
     { "src": "/icons/admin-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icons/admin-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/admin-180.png", "sizes": "180x180", "type": "image/png" }
+    { "src": "/icons/admin-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/admin-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
   ]
 }

@@ -1,6 +1,30 @@
 const fs = require("fs");
 const path = require("path");
 
+const STREAM_HOSTS = /^https:\/\/(archive\.org|upload\.wikimedia\.org)\//;
+
+function catalogProblems(items) {
+  const problems = [];
+  const ids = new Set();
+  const urls = new Set();
+  for (const item of items || []) {
+    const id = String(item?.id || "");
+    if (!/^[a-z0-9-]{3,80}$/.test(id)) problems.push(`bad id: ${id || "(missing)"}`);
+    else if (ids.has(id)) problems.push(`duplicate id: ${id}`);
+    else ids.add(id);
+    const holiday = item?.holiday;
+    if (holiday !== "halloween" && holiday !== "christmas") problems.push(`${id || "item"} has no holiday`);
+    const streamUrl = String(item?.streamUrl || "");
+    if (!STREAM_HOSTS.test(streamUrl)) problems.push(`${id} stream is not an allowed https host`);
+    else if (urls.has(streamUrl)) problems.push(`duplicate stream: ${id}`);
+    else urls.add(streamUrl);
+    if (!String(item?.title || "").trim()) problems.push(`${id} needs a title`);
+    if (!(Number(item?.durationSec) > 0)) problems.push(`${id} needs durationSec`);
+    if (holiday === "christmas" && item?.color !== true) problems.push(`${id} Christmas video must be color`);
+  }
+  return problems;
+}
+
 function loadCatalog(filePath) {
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -12,12 +36,14 @@ function loadCatalog(filePath) {
         const holiday = item.holiday === "christmas" || item.holiday === "halloween" ? item.holiday : null;
         const streamUrl = String(item.streamUrl || "");
         if (!/^[a-z0-9-]{3,80}$/.test(id) || !holiday) return null;
-        if (!/^https:\/\/(archive\.org|upload\.wikimedia\.org)\//.test(streamUrl)) return null;
+        if (!STREAM_HOSTS.test(streamUrl)) return null;
+        if (holiday === "christmas" && item.color !== true) return null;
         return {
           id,
           title: String(item.title || id).slice(0, 80),
           holiday,
           allAges: item.allAges !== false,
+          color: item.color === true,
           license: String(item.license || ""),
           sourceUrl: String(item.sourceUrl || ""),
           streamUrl,
@@ -44,10 +70,13 @@ function starterFile(mediaRoot, item) {
   return null;
 }
 
-function starterCards(items, { theme, allAges = true, mediaRoot, urlFor } = {}) {
+function starterCards(items, { theme, allAges = true, mediaRoot, urlFor, disabledIds = [] } = {}) {
+  const disabled = new Set(disabledIds || []);
   return (items || [])
     .filter((item) => {
+      if (disabled.has(item.id)) return false;
       if (allAges && item.allAges === false) return false;
+      if (item.holiday === "christmas" && item.color !== true) return false;
       return item.holiday === theme;
     })
     .map((item) => {
@@ -61,8 +90,11 @@ function starterCards(items, { theme, allAges = true, mediaRoot, urlFor } = {}) 
         loop: false,
         mode: "card",
         stream: !local,
+        durationSec: item.durationSec,
+        holiday: item.holiday,
+        color: item.color === true,
       };
     });
 }
 
-module.exports = { loadCatalog, starterFile, starterCards };
+module.exports = { loadCatalog, starterFile, starterCards, catalogProblems, STREAM_HOSTS };

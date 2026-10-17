@@ -7,7 +7,7 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="PL Admin" />
-    <meta name="theme-color" content="#1a1916" />
+    <meta name="theme-color" content="#62006E" />
     <title>Pinball Land Admin</title>
     <link rel="manifest" href="/admin.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/admin-180.png" />
@@ -37,14 +37,18 @@
           <p class="eyebrow">Pinball Land</p>
           <h1>Kiosk control</h1>
         </div>
-        <button id="logout" class="btn ghost compact" type="button">Lock</button>
+        <div class="theme-toggle">
+          <button id="guest-toggle" class="btn" type="button">Guest app</button>
+          <button id="logout" class="btn ghost compact" type="button">Lock</button>
+        </div>
       </header>
 
       <div class="tab-panels">
         <div data-panel="screens">
           <section id="displays-section">
             <h2>Displays</h2>
-            <p class="muted">Use 1, 2, or 3 screens. The wall opens a window only for each enabled display, left to right. Changes apply live. Restart kiosk windows if a screen stays stuck.</p>
+            <p class="muted">Three screens share one rotation: logos, the 2-story arcade, Outdoor Oasis, Flexible Event Options, the pinboard, and videos. Auto puts every TV back on that rotation. A button on one screen holds that TV.</p>
+            <button id="rotate-all" class="btn primary" type="button">Auto (rotate all)</button>
             <div id="displays-root"></div>
           </section>
           <section>
@@ -55,39 +59,6 @@
               <button id="theme-halloween" class="btn" type="button">Halloween party</button>
               <button id="theme-christmas" class="btn" type="button">Christmas</button>
             </div>
-          </section>
-          <section>
-            <h2>Wall rotation</h2>
-            <p class="muted">On by default. Every TV shares one playlist — logos, amenities, the clock, the live pinboard, videos, and enabled leaderboards. Amenities cycles the 2-story arcade, Outdoor Oasis, and Flexible Event Options. Screens are staggered so they do not change at the same moment.</p>
-            <div class="theme-toggle">
-              <button id="rotation-on" class="btn" type="button">Rotation on</button>
-              <button id="rotation-off" class="btn" type="button">Rotation off</button>
-            </div>
-            <label class="interval-label">
-              Seconds per card
-              <input id="interval" type="number" min="10" max="120" step="1" />
-            </label>
-            <p class="choice-heading">Include in the playlist</p>
-            <div id="rotation-items" class="toggle-stack"></div>
-          </section>
-          <section id="manual-screens">
-            <h2>Manual screens</h2>
-            <p class="muted">Used only while rotation is off. Assign each TV yourself.</p>
-            <div id="slots" class="stack"></div>
-          </section>
-        </div>
-
-        <div data-panel="present" hidden>
-          <section id="present-section">
-            <h2>Present</h2>
-            <p class="muted">Pick one screen. The others keep rotating. End it from here, or it drops off after the idle time.</p>
-            <div id="present-root"></div>
-            <p class="callout">Google Cast: a true Cast receiver on this Windows PC isn't practical. Chrome laptops and Android phones should use Browser share. Optional hardware: plug a Chromecast or Google TV dongle into a spare HDMI input on the TV, cast to that dongle, then switch the TV back to the PC input when you are done.</p>
-          </section>
-          <section id="airplay-section">
-            <h2>AirPlay</h2>
-            <p class="muted">One tap picks the TV. The receiver stays ready. When an iPhone connects, that screen leaves rotation. It comes back when the mirror ends.</p>
-            <div id="airplay-root"></div>
           </section>
         </div>
 
@@ -100,36 +71,23 @@
               <input id="machine-search" type="search" placeholder="The Addams Family" autocomplete="off" />
             </label>
             <div id="machine-results" class="stack"></div>
-            <form id="manual-machine" class="add-row">
-              <input id="manual-machine-name" placeholder="Add a machine by name" required />
-              <button class="btn primary" type="submit">Add to collection</button>
-            </form>
           </section>
           <section>
             <h2>Leaderboards</h2>
-            <p class="muted">Event boards and each enabled machine. Toggle “On the wall” to include it in rotation.</p>
+            <p class="muted">Each real pinball machine has a board. Scores sort highest first. Archive keeps a board. Delete removes it.</p>
             <div class="row-actions">
               <select id="board-select" aria-label="Choose board"></select>
-              <button id="new-board" class="btn" type="button">New event</button>
             </div>
             <div id="board-editor" class="card"></div>
           </section>
-        </div>
-
-        <div data-panel="media" hidden>
-          <section id="media-section">
-            <h2>Videos</h2>
-            <p class="muted">Upload mp4, m4v, webm, mov, or mkv. Play one screen, the same clip in sync on every screen, or one picture spanned across the wall. Holiday folders join the rotation while that theme is on.</p>
-            <div id="media-root"></div>
+          <section>
+            <h2>Score submissions</h2>
+            <p class="muted">Guests send a name and score. Approve it before it lands on the board.</p>
+            <div id="score-queue" class="stack"></div>
           </section>
-          <section id="youtube-section">
-            <h2>YouTube</h2>
-            <p class="muted">Only links you paste play. The wall uses the privacy embed, hides controls, and skips videos that cannot be embedded.</p>
-            <form id="youtube-form" class="add-row">
-              <input id="youtube-input" placeholder="YouTube link or playlist id" />
-              <button class="btn primary" type="submit">Add</button>
-            </form>
-            <div id="youtube-root" class="stack"></div>
+          <section>
+            <h2>Archived boards</h2>
+            <div id="archive-root" class="stack"></div>
           </section>
         </div>
 
@@ -142,6 +100,31 @@
         </div>
 
         <div data-panel="settings" hidden>
+          <section id="airplay-section">
+            <h2>AirPlay</h2>
+            <p class="muted">One tap picks the TV. When an iPhone connects, that screen leaves rotation and comes back when the mirror ends.</p>
+            <div id="airplay-root"></div>
+          </section>
+          <section id="media-section">
+            <h2>Videos</h2>
+            <p class="muted">Upload mp4, m4v, webm, mov, or mkv. Holiday clips join the rotation while that theme is on.</p>
+            <div id="media-root"></div>
+          </section>
+          <section id="video-test-section">
+            <h2>Test videos</h2>
+            <p class="muted">Play each holiday clip. Test all marks ones that fail or stall, and you can turn a bad clip off.</p>
+            <button id="test-all-videos" class="btn" type="button">Test all</button>
+            <div id="video-test-root" class="stack"></div>
+          </section>
+          <section id="youtube-section">
+            <h2>YouTube</h2>
+            <p class="muted">Only links you paste play. The wall uses the privacy embed and skips videos that cannot be embedded.</p>
+            <form id="youtube-form" class="add-row">
+              <input id="youtube-input" placeholder="YouTube link or playlist id" />
+              <button class="btn primary" type="submit">Add</button>
+            </form>
+            <div id="youtube-root" class="stack"></div>
+          </section>
           <section id="plugs-section">
             <h2>Smart plugs</h2>
             <p class="muted">Kasa plugs on the TV power cords only. Set each BenQ Switch on state to On. Never put the PC on a plug.</p>
@@ -187,12 +170,14 @@
 
       <nav class="tabbar" aria-label="Admin">
         <button type="button" data-tab="screens" class="active">Screens</button>
-        <button type="button" data-tab="present">Present</button>
         <button type="button" data-tab="leaderboards">Boards</button>
-        <button type="button" data-tab="media">Media</button>
         <button type="button" data-tab="photos">Photos</button>
         <button type="button" data-tab="settings">Settings</button>
       </nav>
+    </div>
+    <div id="guest-view" class="guest-view" hidden>
+      <button id="guest-back" class="btn" type="button">Back to admin</button>
+      <iframe id="guest-frame" title="Pinball Land guest app"></iframe>
     </div>
 
     <p id="toast" class="toast" hidden></p>

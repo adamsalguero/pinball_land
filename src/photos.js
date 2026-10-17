@@ -17,6 +17,7 @@ class GuestAlbum {
     if (!root) throw new Error("GuestAlbum needs a root folder");
     this.root = root;
     this.filesDir = path.join(root, "files");
+    this.archiveDir = path.join(root, "archive");
     this.catalogPath = path.join(root, "album.json");
     this.sharp = sharpImpl;
     this.events = [];
@@ -154,11 +155,58 @@ class GuestAlbum {
       .map((photo) => this.toPublic(photo));
   }
 
+  async zipApproved(res) {
+    const photos = this.photos.filter((photo) => photo.status === "approved");
+    const archiver = require("archiver");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", "attachment; filename=\"pinboard.zip\"");
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    archive.on("error", (err) => {
+      throw err;
+    });
+    archive.pipe(res);
+    for (const photo of photos) {
+      const filePath = this.filePath(photo);
+      if (!filePath || !fs.existsSync(filePath)) continue;
+      archive.file(filePath, { name: `${photo.id}.jpg` });
+    }
+    await archive.finalize();
+  }
+
   filePath(photo) {
-    const target = path.resolve(this.filesDir, photo.file);
-    const root = path.resolve(this.filesDir);
+    const folder = photo?.status === "archived" ? this.archiveDir : this.filesDir;
+    const target = path.resolve(folder, photo.file);
+    const root = path.resolve(folder);
     if (target !== root && !target.startsWith(`${root}${path.sep}`)) return null;
     return target;
+  }
+
+  async archivePhoto(id) {
+    const photo = this.photos.find((item) => item.id === id);
+    if (!photo) throw Object.assign(new Error("Unknown photo"), { status: 404 });
+    if (photo.status === "archived") return this.toPublic(photo, { includePending: true });
+    const from = path.resolve(this.filesDir, photo.file);
+    await fsp.mkdir(this.archiveDir, { recursive: true });
+    const dest = path.resolve(this.archiveDir, photo.file);
+    if (fs.existsSync(from)) await fsp.rename(from, dest);
+    photo.status = "archived";
+    photo.archivedAt = Date.now();
+    await this.save();
+    return this.toPublic(photo, { includePending: true });
+  }
+
+  async restorePhoto(id) {
+    const photo = this.photos.find((item) => item.id === id);
+    if (!photo) throw Object.assign(new Error("Unknown photo"), { status: 404 });
+    if (photo.status !== "archived") return this.toPublic(photo, { includePending: true });
+    const from = path.resolve(this.archiveDir, photo.file);
+    await fsp.mkdir(this.filesDir, { recursive: true });
+    const dest = path.resolve(this.filesDir, photo.file);
+    if (fs.existsSync(from)) await fsp.rename(from, dest);
+    photo.status = "approved";
+    photo.archivedAt = null;
+    await this.save();
+    return this.toPublic(photo, { includePending: true });
   }
 
   async setStatus(id, status) {

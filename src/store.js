@@ -88,7 +88,6 @@ function clone(value) {
 }
 
 function defaultState() {
-  const halloweenId = id();
   return {
     theme: "pinnacle",
     blackout: false,
@@ -98,23 +97,13 @@ function defaultState() {
       items: Object.fromEntries(ROTATION_ITEM_IDS.map((key) => [key, true])),
     }),
     slots: {
-      1: { content: "logos", leaderboardId: halloweenId },
-      2: { content: "amenities", leaderboardId: halloweenId },
-      3: { content: "leaderboard", leaderboardId: halloweenId },
+      1: { content: "logos", leaderboardId: null },
+      2: { content: "amenities", leaderboardId: null },
+      3: { content: "leaderboard", leaderboardId: null },
     },
-    leaderboards: [
-      {
-        id: halloweenId,
-        name: "Halloween party",
-        kind: "event",
-        inRotation: true,
-        rows: [
-          { id: id(), name: "Sam", score: 2450000 },
-          { id: id(), name: "Riley", score: 1810000 },
-          { id: id(), name: "Jordan", score: 960000 },
-        ],
-      },
-    ],
+    leaderboards: [],
+    archivedLeaderboards: [],
+    scoreSubmissions: [],
   };
 }
 
@@ -156,8 +145,34 @@ function normalizeLeaderboard(board) {
     manufacturer: String(board.manufacturer || "").trim(),
     year: String(board.year || "").trim(),
     artFile: board.artFile ? String(board.artFile) : null,
+    playfieldFile: board.playfieldFile ? String(board.playfieldFile) : null,
+    logoFile: board.logoFile ? String(board.logoFile) : null,
     videoUrl: board.videoUrl ? String(board.videoUrl) : null,
     rows: Array.isArray(board.rows) ? board.rows.map(normalizeRow) : [],
+    archivedAt: Number.isFinite(Number(board.archivedAt)) ? Number(board.archivedAt) : null,
+  };
+}
+
+function sortRows(rows) {
+  return [...rows].sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
+}
+
+function isMachineBoard(board) {
+  return board?.kind === "machine" && Boolean(board.opdbId);
+}
+
+function normalizeSubmission(row) {
+  if (!row || typeof row !== "object") return null;
+  const score = Number.parseInt(row.score, 10);
+  const status = row.status === "approved" || row.status === "rejected" ? row.status : "pending";
+  return {
+    id: typeof row.id === "string" && row.id ? row.id : id(),
+    boardId: row.boardId ? String(row.boardId) : "",
+    name: String(row.name || "").trim().slice(0, 40),
+    score: Number.isFinite(score) ? score : 0,
+    proofFile: row.proofFile ? String(row.proofFile) : null,
+    status,
+    createdAt: Number(row.createdAt) || Date.now(),
   };
 }
 
@@ -188,22 +203,48 @@ function slotWasBlack(rawSlots) {
 function normalizeState(raw) {
   const seeded = defaultState();
   const incoming = raw && typeof raw === "object" ? raw : {};
-  const leaderboards = Array.isArray(incoming.leaderboards)
+  const incomingBoards = Array.isArray(incoming.leaderboards)
     ? incoming.leaderboards.map(normalizeLeaderboard)
     : seeded.leaderboards;
+  const archivedLeaderboards = Array.isArray(incoming.archivedLeaderboards)
+    ? incoming.archivedLeaderboards.map(normalizeLeaderboard)
+    : [];
+  const seen = new Set(archivedLeaderboards.map((board) => board.id));
+  const leaderboards = [];
+  for (const board of incomingBoards) {
+    board.rows = sortRows(board.rows);
+    if (isMachineBoard(board)) {
+      leaderboards.push(board);
+    } else if (!seen.has(board.id)) {
+      archivedLeaderboards.push({
+        ...board,
+        inRotation: false,
+        archivedAt: board.archivedAt || Date.now(),
+      });
+      seen.add(board.id);
+    }
+  }
+  const activeIds = new Set(leaderboards.map((board) => board.id));
   const fallbackId = leaderboards[0]?.id || null;
   const slots = {};
   for (const slotId of SLOT_IDS) {
-    slots[slotId] = normalizeSlot(incoming.slots?.[slotId] || seeded.slots[slotId], fallbackId);
+    const slot = normalizeSlot(incoming.slots?.[slotId] || seeded.slots[slotId], fallbackId);
+    if (slot.leaderboardId && !activeIds.has(slot.leaderboardId)) slot.leaderboardId = fallbackId;
+    slots[slotId] = slot;
   }
   const rotation = normalizeRotation(incoming.rotation);
   if (incoming.blackout || slotWasBlack(incoming.slots)) rotation.enabled = true;
+  const scoreSubmissions = Array.isArray(incoming.scoreSubmissions)
+    ? incoming.scoreSubmissions.map(normalizeSubmission).filter((row) => row && row.boardId && row.name)
+    : [];
   return {
     theme: normalizeTheme(incoming.theme ?? seeded.theme),
     blackout: false,
     rotation,
     slots,
     leaderboards,
+    archivedLeaderboards,
+    scoreSubmissions,
   };
 }
 
@@ -212,6 +253,7 @@ class Store {
     this.filePath = filePath;
     this.state = normalizeState(state);
     this.listeners = new Set();
+    this.scoreHits = new Map();
   }
 
   static async load(filePath) {
@@ -331,15 +373,21 @@ class Store {
   }
 
   async createLeaderboard(name, extra = {}) {
+    const opdbId = extra.opdbId ? String(extra.opdbId) : "";
+    if (extra.kind !== "machine" || !opdbId) {
+      throw Object.assign(new Error("Leaderboards are real pinball machines from OPDB"), { status: 400 });
+    }
     const board = normalizeLeaderboard({
       id: id(),
-      name: name || (extra.kind === "machine" ? "New machine" : "New event"),
-      kind: extra.kind === "machine" ? "machine" : "event",
+      name: name || "New machine",
+      kind: "machine",
       inRotation: extra.inRotation !== false,
-      opdbId: extra.opdbId || null,
+      opdbId,
       manufacturer: extra.manufacturer || "",
       year: extra.year || "",
       artFile: extra.artFile || null,
+      playfieldFile: extra.playfieldFile || null,
+      logoFile: extra.logoFile || null,
       videoUrl: extra.videoUrl || null,
       rows: extra.rows || [],
     });
@@ -362,6 +410,12 @@ class Store {
     }
     if (patch.artFile !== undefined) {
       board.artFile = patch.artFile ? String(patch.artFile) : null;
+    }
+    if (patch.playfieldFile !== undefined) {
+      board.playfieldFile = patch.playfieldFile ? String(patch.playfieldFile) : null;
+    }
+    if (patch.logoFile !== undefined) {
+      board.logoFile = patch.logoFile ? String(patch.logoFile) : null;
     }
     if (patch.videoUrl !== undefined) {
       board.videoUrl = patch.videoUrl ? String(patch.videoUrl) : null;
@@ -413,6 +467,7 @@ class Store {
       throw Object.assign(new Error("Unknown leaderboard"), { status: 404 });
     }
     board.rows.push(normalizeRow({ name, score }));
+    board.rows = sortRows(board.rows);
     return this.commit();
   }
 
@@ -432,6 +487,7 @@ class Store {
       const parsed = Number.parseInt(score, 10);
       row.score = Number.isFinite(parsed) ? parsed : 0;
     }
+    board.rows = sortRows(board.rows);
     return this.commit();
   }
 
@@ -467,6 +523,111 @@ class Store {
     }
     const [row] = board.rows.splice(index, 1);
     board.rows.splice(next, 0, row);
+    board.rows = sortRows(board.rows);
+    return this.commit();
+  }
+
+  clearSlotBoard(boardId) {
+    const fallback = this.state.leaderboards.find((board) => board.id !== boardId)?.id || null;
+    for (const slotId of SLOT_IDS) {
+      if (this.state.slots[slotId].leaderboardId === boardId) {
+        this.state.slots[slotId].leaderboardId = fallback;
+      }
+    }
+  }
+
+  async archiveLeaderboard(boardId) {
+    const index = this.state.leaderboards.findIndex((board) => board.id === boardId);
+    if (index === -1) throw Object.assign(new Error("Unknown leaderboard"), { status: 404 });
+    const [board] = this.state.leaderboards.splice(index, 1);
+    board.inRotation = false;
+    board.archivedAt = Date.now();
+    this.state.archivedLeaderboards.push(board);
+    this.clearSlotBoard(boardId);
+    this.bumpRotationClock();
+    return this.commit();
+  }
+
+  async restoreLeaderboard(boardId) {
+    const index = this.state.archivedLeaderboards.findIndex((board) => board.id === boardId);
+    if (index === -1) throw Object.assign(new Error("Unknown archived leaderboard"), { status: 404 });
+    const [board] = this.state.archivedLeaderboards.splice(index, 1);
+    if (!isMachineBoard(board)) {
+      this.state.archivedLeaderboards.splice(index, 0, board);
+      throw Object.assign(new Error("Only pinball machine boards can come back"), { status: 400 });
+    }
+    board.archivedAt = null;
+    board.inRotation = true;
+    this.state.leaderboards.push(board);
+    this.bumpRotationClock();
+    return this.commit();
+  }
+
+  async deleteArchivedLeaderboard(boardId) {
+    const index = this.state.archivedLeaderboards.findIndex((board) => board.id === boardId);
+    if (index === -1) throw Object.assign(new Error("Unknown archived leaderboard"), { status: 404 });
+    this.state.archivedLeaderboards.splice(index, 1);
+    return this.commit();
+  }
+
+  allowScore(ip, now = Date.now()) {
+    const key = String(ip || "unknown");
+    const windowMs = 10 * 60 * 1000;
+    const recent = (this.scoreHits.get(key) || []).filter((stamp) => now - stamp < windowMs);
+    if (recent.length >= 6) {
+      this.scoreHits.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    this.scoreHits.set(key, recent);
+    return true;
+  }
+
+  async submitScore({ boardId, name, score, proofFile, ip, now } = {}) {
+    if (!this.allowScore(ip, now)) {
+      throw Object.assign(new Error("Too many scores from this phone. Wait a few minutes."), { status: 429 });
+    }
+    const board = this.findBoard(boardId);
+    if (!board) throw Object.assign(new Error("Pick a machine"), { status: 404 });
+    const cleanName = String(name || "").trim().slice(0, 40);
+    if (!cleanName) throw Object.assign(new Error("Enter a name"), { status: 400 });
+    const parsed = Number.parseInt(String(score).replace(/,/g, ""), 10);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 999999999) {
+      throw Object.assign(new Error("Enter a score"), { status: 400 });
+    }
+    const submission = normalizeSubmission({
+      id: id(),
+      boardId,
+      name: cleanName,
+      score: parsed,
+      proofFile: proofFile || null,
+      status: "pending",
+      createdAt: now || Date.now(),
+    });
+    this.state.scoreSubmissions.push(submission);
+    if (this.state.scoreSubmissions.length > 300) {
+      this.state.scoreSubmissions = this.state.scoreSubmissions.slice(-300);
+    }
+    await this.commit();
+    return submission;
+  }
+
+  async reviewScore(submissionId, status) {
+    const item = this.state.scoreSubmissions.find((row) => row.id === submissionId);
+    if (!item) throw Object.assign(new Error("Unknown submission"), { status: 404 });
+    if (item.status !== "pending") {
+      throw Object.assign(new Error("That score was already reviewed"), { status: 400 });
+    }
+    if (status !== "approved" && status !== "rejected") {
+      throw Object.assign(new Error("Status must be approved or rejected"), { status: 400 });
+    }
+    item.status = status;
+    if (status === "approved") {
+      const board = this.findBoard(item.boardId);
+      if (!board) throw Object.assign(new Error("That machine is no longer on a board"), { status: 404 });
+      board.rows.push(normalizeRow({ name: item.name, score: item.score }));
+      board.rows = sortRows(board.rows);
+    }
     return this.commit();
   }
 }
