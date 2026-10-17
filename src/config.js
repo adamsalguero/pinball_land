@@ -5,11 +5,12 @@ const { normalizeDisplays } = require("./displays");
 const { normalizePlugs } = require("./plugs");
 const { normalizeYoutubeLists } = require("./youtube");
 const { pinIsValid, DEFAULT_PIN } = require("./devices");
+const { BUILTIN_OPDB_API_KEY } = require("./opdb");
 
 const DEFAULTS = {
   port: 3000,
   pin: DEFAULT_PIN,
-  opdbApiKey: "",
+  opdbApiKey: BUILTIN_OPDB_API_KEY,
   httpsPort: 3443,
 };
 

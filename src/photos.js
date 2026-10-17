@@ -181,6 +181,17 @@ class GuestAlbum {
     return target;
   }
 
+  async deletePhoto(id) {
+    const index = this.photos.findIndex((item) => item.id === id);
+    if (index === -1) throw Object.assign(new Error("Unknown photo"), { status: 404 });
+    const photo = this.photos[index];
+    const targets = [path.resolve(this.filesDir, photo.file), path.resolve(this.archiveDir, photo.file)];
+    this.photos.splice(index, 1);
+    await this.save();
+    await Promise.all(targets.map((target) => fsp.unlink(target).catch(() => {})));
+    return { deleted: id };
+  }
+
   async archivePhoto(id) {
     const photo = this.photos.find((item) => item.id === id);
     if (!photo) throw Object.assign(new Error("Unknown photo"), { status: 404 });

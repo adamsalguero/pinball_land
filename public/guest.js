@@ -93,6 +93,31 @@ post.addEventListener("click", async () => {
   }
 });
 
+async function shareOrDownload(url, filename) {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  if (ios && typeof navigator.share === "function") {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const file = new File([blob], filename, { type: blob.type || "image/jpeg" });
+      const payload = { files: [file], title: "Pinball Land" };
+      if (typeof navigator.canShare !== "function" || navigator.canShare(payload)) {
+        await navigator.share(payload);
+        return;
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+    }
+  }
+  const link = document.createElement("a");
+  link.href = `${url}${url.includes("?") ? "&" : "?"}download=1`;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 function when(stamp) {
   const n = Number(stamp);
   if (!n) return "";
@@ -113,9 +138,13 @@ async function loadFeed() {
     img.alt = photo.caption || "Guest photo";
     const copy = document.createElement("p");
     copy.textContent = [when(photo.createdAt), photo.guestName, photo.caption].filter(Boolean).join(" · ") || "On the wall";
-    const download = document.createElement("a");
-    download.href = `${photo.url}?download=1`;
-    download.textContent = "Download";
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "btn download";
+    download.textContent = "Save photo";
+    download.addEventListener("click", () => {
+      shareOrDownload(photo.url, `${photo.id}.jpg`).catch(() => {});
+    });
     card.append(img, copy, download);
     feed.append(card);
   }

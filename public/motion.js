@@ -27,19 +27,28 @@ function wrap(value) {
   return ((value % 1) + 1) % 1;
 }
 
+const WORLD_W = 5760;
+const WORLD_H = 1080;
+const SLICE_W = 1920;
+
+function wrapWorld(value, span) {
+  const size = span || 1;
+  return ((value % size) + size) % size;
+}
+
 function makeParticle(rng, kind) {
-  const drift = kind === "snow" ? 0.015 + rng() * 0.03 : kind === "spider" ? 0.08 + rng() * 0.06 : 0.01 + rng() * 0.025;
-  const x = rng();
+  const snow = kind === "snow";
+  const bat = kind === "bat";
+  const spider = kind === "spider";
   return {
     kind,
-    x,
-    y: kind === "spider" ? rng() * 0.22 : rng(),
-    anchorX: x,
-    vx: (rng() - 0.5) * (kind === "bat" ? 0.07 : 0.02),
-    vy: kind === "bat" ? (rng() - 0.5) * 0.01 : drift,
-    size: kind === "mote" ? 1.5 + rng() * 1.5 : kind === "snow" ? 1.4 + rng() * 2.6 : 16 + rng() * 14,
+    originX: rng() * WORLD_W,
+    originY: spider ? 40 + rng() * 80 : rng() * WORLD_H,
+    vx: bat ? 70 + rng() * 90 : snow ? 8 + rng() * 18 : 18 + rng() * 36,
+    vy: snow ? 28 + rng() * 40 : spider ? 0.35 + rng() * 0.25 : 12 + rng() * 28,
+    size: kind === "mote" ? 2 + rng() * 2 : snow ? 2 + rng() * 4 : 28 + rng() * 22,
     phase: rng() * Math.PI * 2,
-    spin: (rng() - 0.5) * 0.6,
+    spin: (rng() - 0.5) * 0.8,
     hue: rng(),
   };
 }
@@ -55,37 +64,50 @@ function createField(theme, seed = 1) {
   } else {
     for (let i = 0; i < 8; i += 1) particles.push(makeParticle(rng, "mote"));
   }
-  return { theme, particles };
+  return { theme, seed: Number(seed) || 1, particles };
+}
+
+function worldPoint(particle, elapsed) {
+  const t = Math.max(0, Number(elapsed) || 0);
+  if (!particle) return { x: 0, y: 0, flap: 0 };
+  if (particle.kind === "spider") {
+    const drop = (Math.sin(t * particle.vy + particle.phase) + 1) / 2;
+    return {
+      x: wrapWorld(particle.originX + Math.sin(t * 0.7 + particle.phase) * 36, WORLD_W),
+      y: 24 + drop * 320,
+      flap: t * particle.vy + particle.phase,
+    };
+  }
+  if (particle.kind === "bat") {
+    return {
+      x: wrapWorld(particle.originX + particle.vx * t, WORLD_W),
+      y: wrapWorld(particle.originY + Math.sin(t * 1.3 + particle.phase) * 48, WORLD_H),
+      flap: Math.sin(t * 9 + particle.phase),
+    };
+  }
+  return {
+    x: wrapWorld(particle.originX + particle.vx * t * (particle.kind === "mote" ? 0.35 : 1), WORLD_W),
+    y: wrapWorld(particle.originY + particle.vy * t * (particle.kind === "mote" ? 0.25 : 1), WORLD_H),
+    flap: Math.sin(t + particle.phase),
+  };
+}
+
+function screenPoint(world, slot, viewWidth, viewHeight) {
+  const slice = Math.max(0, Number(slot) || 0) * SLICE_W;
+  const width = Math.max(1, Number(viewWidth) || SLICE_W);
+  const height = Math.max(1, Number(viewHeight) || WORLD_H);
+  const scaleX = width / SLICE_W;
+  const scaleY = height / WORLD_H;
+  let local = world.x - slice;
+  if (local > WORLD_W / 2) local -= WORLD_W;
+  if (local < -WORLD_W / 2) local += WORLD_W;
+  return { x: local * scaleX, y: world.y * scaleY, scaleX, scaleY };
 }
 
 function stepField(field, dt) {
   const sec = Math.max(0, Math.min(0.05, Number(dt) || 0));
   if (!field || sec === 0) return;
-  for (const particle of field.particles) {
-    particle.phase += sec * (particle.kind === "bat" ? 1.4 : 0.7);
-    if (particle.kind === "bat") {
-      particle.x += particle.vx * sec;
-      particle.y += Math.sin(particle.phase) * 0.015 * sec * 8;
-    } else if (particle.kind === "spider") {
-      particle.phase += sec * particle.vy;
-      const drop = (Math.sin(particle.phase) + 1) / 2;
-      particle.y = 0.03 + drop * 0.28;
-      particle.x = wrap((particle.anchorX ?? particle.x) + Math.sin(particle.phase * 0.65) * 0.025);
-    } else if (particle.kind === "mote") {
-      particle.x += particle.vx * sec * 0.35;
-      particle.y += particle.vy * sec * 0.25;
-    } else {
-      particle.x += particle.vx * sec;
-      particle.y += particle.vy * sec;
-      if (particle.kind === "candy" || particle.kind === "ornament") particle.spin += sec * 0.15;
-    }
-    if (particle.kind === "spider") {
-      particle.y = Math.min(0.33, Math.max(0.02, particle.y));
-    } else {
-      particle.x = wrap(particle.x);
-      particle.y = wrap(particle.y);
-    }
-  }
+  field.elapsed = (Number(field.elapsed) || 0) + sec;
 }
 
 function drawPumpkin(ctx, size) {
@@ -137,30 +159,58 @@ function drawPumpkin(ctx, size) {
   ctx.fill();
 }
 
-function drawSpider(ctx, size, yNorm) {
-  ctx.strokeStyle = "rgba(255,241,214,0.55)";
-  ctx.lineWidth = 1;
+function drawSpider(ctx, size, phase) {
+  const pose = Number(phase) || 0;
+  ctx.strokeStyle = "rgba(255, 236, 214, 0.72)";
+  ctx.lineWidth = Math.max(1.25, size * 0.035);
   ctx.beginPath();
-  ctx.moveTo(0, -yNorm);
-  ctx.lineTo(0, -size * 0.45);
+  ctx.moveTo(0, -size * 2.4);
+  ctx.lineTo(0, -size * 0.72);
   ctx.stroke();
-  ctx.strokeStyle = "#1a120c";
-  ctx.lineWidth = Math.max(1, size * 0.07);
-  for (let i = 0; i < 4; i += 1) {
-    const side = i < 2 ? -1 : 1;
-    const lift = (i % 2 === 0 ? -0.35 : 0.2) * size;
+  ctx.strokeStyle = "#3a2a22";
+  ctx.lineWidth = Math.max(1.4, size * 0.055);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let i = 0; i < 8; i += 1) {
+    const side = i < 4 ? -1 : 1;
+    const index = i % 4;
+    const hipY = (index - 1.5) * size * 0.16;
+    const swing = Math.sin(pose * 3 + index * 1.2) * size * 0.16;
+    const lift = (index % 2 === 0 ? -1 : 1) * size * 0.22 + swing * 0.35;
+    const hipX = side * size * 0.16;
+    const kneeX = side * size * (0.42 + index * 0.03);
+    const kneeY = hipY + lift;
+    const footX = side * size * (0.78 + Math.cos(pose * 3 + index) * 0.08);
+    const footY = hipY + size * 0.28 + Math.max(0, -lift) * 0.15;
     ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.quadraticCurveTo(side * size * 0.35, lift, side * size * 0.62, lift * 0.2);
+    ctx.moveTo(hipX, hipY);
+    ctx.quadraticCurveTo(kneeX, kneeY, footX, footY);
     ctx.stroke();
   }
-  ctx.fillStyle = "#14110e";
+  ctx.fillStyle = "#4a3428";
   ctx.beginPath();
-  ctx.ellipse(0, 0, size * 0.16, size * 0.22, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, size * 0.08, size * 0.34, size * 0.42, 0, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillStyle = "#2c1d16";
   ctx.beginPath();
-  ctx.arc(0, -size * 0.28, size * 0.1, 0, Math.PI * 2);
+  ctx.ellipse(-size * 0.08, size * 0.16, size * 0.16, size * 0.22, -0.4, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillStyle = "#5c4034";
+  ctx.beginPath();
+  ctx.arc(0, -size * 0.42, size * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#fff6ea";
+  for (const eye of [-0.07, 0.07]) {
+    ctx.beginPath();
+    ctx.arc(eye * size, -size * 0.46, size * 0.045, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#1a100c";
+  for (const eye of [-0.07, 0.07]) {
+    ctx.beginPath();
+    ctx.arc(eye * size, -size * 0.45, size * 0.02, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawCandy(ctx, size) {
@@ -184,17 +234,51 @@ function drawCandy(ctx, size) {
 }
 
 function drawBat(ctx, size, flap) {
-  ctx.fillStyle = "#1c140f";
+  const wing = Math.max(-1, Math.min(1, Number(flap) || 0));
+  const lift = 0.15 + (wing + 1) * 0.42;
+  const membrane = (side) => {
+    ctx.beginPath();
+    ctx.moveTo(side * size * 0.12, -size * 0.02);
+    ctx.quadraticCurveTo(side * size * 0.35, -size * lift, side * size * 0.95, -size * (0.08 + lift * 0.25));
+    ctx.quadraticCurveTo(side * size * 0.72, size * 0.02, side * size * 0.78, size * 0.16);
+    ctx.quadraticCurveTo(side * size * 0.48, size * 0.05, side * size * 0.55, size * 0.22);
+    ctx.quadraticCurveTo(side * size * 0.28, size * 0.08, side * size * 0.16, size * 0.12);
+    ctx.closePath();
+    ctx.fillStyle = "#2a211c";
+    ctx.fill();
+    ctx.strokeStyle = "#140e0c";
+    ctx.lineWidth = Math.max(1, size * 0.04);
+    ctx.stroke();
+  };
+  membrane(-1);
+  membrane(1);
+  ctx.fillStyle = "#3a2c24";
   ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.quadraticCurveTo(-size * 0.15, -size * 0.35 * flap, -size * 0.7, -size * 0.05);
-  ctx.quadraticCurveTo(-size * 0.35, size * 0.05, 0, size * 0.08);
-  ctx.quadraticCurveTo(size * 0.35, size * 0.05, size * 0.7, -size * 0.05);
-  ctx.quadraticCurveTo(size * 0.15, -size * 0.35 * flap, 0, 0);
+  ctx.ellipse(0, size * 0.02, size * 0.16, size * 0.22, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#4a382c";
+  ctx.beginPath();
+  ctx.arc(0, -size * 0.2, size * 0.11, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#1a120e";
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.08, -size * 0.28);
+  ctx.lineTo(-size * 0.02, -size * 0.16);
+  ctx.lineTo(-size * 0.14, -size * 0.16);
+  ctx.closePath();
   ctx.fill();
   ctx.beginPath();
-  ctx.ellipse(0, size * 0.02, size * 0.08, size * 0.12, 0, 0, Math.PI * 2);
+  ctx.moveTo(size * 0.08, -size * 0.28);
+  ctx.lineTo(size * 0.14, -size * 0.16);
+  ctx.lineTo(size * 0.02, -size * 0.16);
+  ctx.closePath();
   ctx.fill();
+  ctx.fillStyle = "#ffe7a8";
+  for (const eye of [-0.045, 0.045]) {
+    ctx.beginPath();
+    ctx.arc(eye * size, -size * 0.2, size * 0.028, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawOrnament(ctx, size, hue) {
@@ -211,23 +295,27 @@ function drawOrnament(ctx, size, hue) {
   ctx.fillRect(-size * 0.08, -size * 0.36, size * 0.16, size * 0.12);
 }
 
-function drawField(ctx, field, width, height) {
+function drawField(ctx, field, width, height, options = {}) {
   ctx.clearRect(0, 0, width, height);
   if (!field) return;
+  const elapsed = Number.isFinite(Number(options.elapsed)) ? Number(options.elapsed) : Number(field.elapsed) || 0;
+  const slot = Number.isFinite(Number(options.slot)) ? Number(options.slot) : 0;
+  const margin = 80;
   for (const particle of field.particles) {
-    const x = particle.x * width;
-    const y = particle.y * height;
+    const world = worldPoint(particle, elapsed);
+    const point = screenPoint(world, slot, width, height);
+    if (point.x < -margin || point.x > width + margin || point.y < -margin || point.y > height + margin) continue;
     ctx.save();
-    ctx.translate(x, y);
+    ctx.translate(point.x, point.y);
     if (particle.kind === "pumpkin") drawPumpkin(ctx, particle.size);
-    else if (particle.kind === "spider") drawSpider(ctx, particle.size, y);
+    else if (particle.kind === "spider") drawSpider(ctx, particle.size, world.flap);
     else if (particle.kind === "candy") {
-      ctx.rotate(Math.sin(particle.phase) * 0.25);
+      ctx.rotate(Math.sin(elapsed + particle.phase) * 0.25);
       drawCandy(ctx, particle.size);
     } else if (particle.kind === "bat") {
-      drawBat(ctx, particle.size, 0.65 + Math.sin(particle.phase) * 0.35);
+      drawBat(ctx, particle.size, world.flap);
     } else if (particle.kind === "ornament") {
-      ctx.rotate(Math.sin(particle.phase) * 0.15);
+      ctx.rotate(Math.sin(elapsed * 0.4 + particle.phase) * 0.15);
       drawOrnament(ctx, particle.size, particle.hue);
     } else if (particle.kind === "snow") {
       ctx.fillStyle = "rgba(244,239,228,0.82)";
@@ -263,11 +351,18 @@ function pinPositions(photoCount, screenCount) {
 
 const motionApi = {
   CYCLE_MS,
+  WORLD_W,
+  WORLD_H,
+  SLICE_W,
   wallPhase,
   syncedNow,
   createField,
   stepField,
+  worldPoint,
+  screenPoint,
   drawField,
+  drawSpider,
+  drawBat,
   pinPositions,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = motionApi;

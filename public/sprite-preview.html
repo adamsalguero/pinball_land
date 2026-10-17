@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sprite preview</title>
+    <style>
+      body { margin: 0; background: #140c09; }
+      canvas { display: block; }
+    </style>
+  </head>
+  <body>
+    <canvas id="sheet" width="1280" height="720"></canvas>
+    <script src="/motion.js"></script>
+    <script>
+      const canvas = document.getElementById("sheet");
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#1a100c";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const motion = window.PinballMotion;
+      const frames = [0, 1.2, 2.4, 3.6];
+      frames.forEach((phase, index) => {
+        ctx.save();
+        ctx.translate(180 + index * 280, 250);
+        motion.drawSpider(ctx, 90, phase);
+        ctx.restore();
+        ctx.save();
+        ctx.translate(180 + index * 280, 520);
+        motion.drawBat(ctx, 110, Math.sin(phase));
+        ctx.restore();
+      });
+    </script>
+  </body>
+</html>
