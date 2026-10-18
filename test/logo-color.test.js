@@ -39,4 +39,11 @@ test("served logos drop the plate and stay readable on a dark ground", () => {
   assert.match(entertainment, /#81338B/);
   assert.doesNotMatch(entertainment, /#62006E/);
   assert.doesNotMatch(entertainment, /#e8e4dc/i);
+  const source = fs.readFileSync(path.join(__dirname, "..", "public", "logos", "pinball-land.svg"), "utf8");
+  const california = source.match(/id="california"[^>]*>\s*<path d="([^"]+)"/);
+  assert.ok(california, "CALIFORNIA is its own smooth path");
+  const curves = (california[1].match(/C/g) || []).length;
+  assert.ok(curves >= 40, `expected smooth curves, found ${curves}`);
+  assert.equal(source.includes("<text"), false);
+  assert.equal(source.includes("font-family"), false);
 });

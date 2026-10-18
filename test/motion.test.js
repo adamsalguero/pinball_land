@@ -11,7 +11,7 @@ test("transitions are subtle or off, and particles move on their own canvas fiel
 
   const { worldPoint, screenPoint, spiderSilk, WORLD_W, SLICE_W } = require("../public/motion");
   const halloween = createField("halloween", 2);
-  assert.equal(halloween.particles.length, 24);
+  assert.equal(halloween.particles.length, 16);
   assert.ok(halloween.particles.some((particle) => particle.kind === "pumpkin"));
   assert.ok(halloween.particles.some((particle) => particle.kind === "spider"));
   assert.ok(halloween.particles.some((particle) => particle.kind === "candy"));

@@ -7,7 +7,7 @@ const express = require("express");
 const { WebSocketServer } = require("ws");
 const { resolveLogos, resolvePhotos, LOGO_KEYS, PHOTO_KEYS } = require("./logos");
 const { AMENITIES } = require("./amenities");
-const { buildPlaylist, planRotation } = require("./playlist");
+const { buildPlaylist, planRotation, currentTick, replacementFor } = require("./playlist");
 const { createOpdb, manufacturerName, manufactureYear, safeId, BUILTIN_OPDB_API_KEY } = require("./opdb");
 const { sendByteRange } = require("./media-range");
 const { createConfigStore, ensureGuestSecret } = require("./config");
@@ -95,7 +95,7 @@ function boardArtUrls(board) {
   push(machineAssetUrl(board, "logo"));
   for (const file of board?.imageFiles || []) push(machineFileUrl(board, file));
   for (const row of board?.rows || []) {
-    if (row?.proofFile && /^[0-9a-f-]{36}\.jpg$/i.test(row.proofFile)) {
+    if (row?.proofFile && row.showOnWall !== false && /^[0-9a-f-]{36}\.jpg$/i.test(row.proofFile)) {
       push(`/media/score-proofs/${row.proofFile}`);
     }
   }
@@ -172,16 +172,13 @@ function createApp({
   });
   let restartToken = 0;
   const clockNow = typeof clock === "function" ? clock : () => Date.now();
-  const VIDEO_BLOCK_MS = 10 * 60 * 1000;
-  const blockedVideos = new Map();
-  let videoCursor = 0;
-
-  function videoIsBlocked(id, nowMs) {
-    const until = blockedVideos.get(id) || 0;
-    if (until > nowMs) return true;
-    if (until) blockedVideos.delete(id);
-    return false;
-  }
+  const videoMemory = {
+    1: { gen: 0, id: "" },
+    2: { gen: 0, id: "" },
+    3: { gen: 0, id: "" },
+  };
+  const slotFallback = {};
+  const seenVideoLog = new Set();
   const motionSync = {
     seed: 0x50494e,
     epoch: Date.now(),
@@ -338,12 +335,12 @@ function createApp({
         isReady: (id) => clips.isReady(id),
       }),
       youtube: config.youtube?.[state.theme] || [],
-    }).map((card) => (
-      card.type === "video" && videoIsBlocked(card.id, clockNow())
-        ? { ...card, blocked: true }
-        : card
-    ));
+    });
     const timing = effectiveRotation(state);
+    const tick = currentTick(state.rotation.startedAt, timing.intervalSec, clockNow(), timing.minInterval);
+    for (const slot of Object.keys(slotFallback)) {
+      if (slotFallback[slot].tick !== tick) delete slotFallback[slot];
+    }
     const rotationPlan = planRotation(playlist, {
       startedAt: state.rotation.startedAt,
       intervalSec: timing.intervalSec,
@@ -351,8 +348,17 @@ function createApp({
       screenCount: displays.count,
       layout,
       now: clockNow(),
-      videoCursor,
+      videoMemory,
     });
+    for (const [slot, fallback] of Object.entries(slotFallback)) {
+      if (fallback.tick === tick && fallback.card) rotationPlan[slot] = fallback.card;
+    }
+    for (const slot of ["1", "2", "3"]) {
+      const card = rotationPlan[slot];
+      if (layout[slot]?.content === "video" && card?.type === "video" && card.id && !card.empty) {
+        videoMemory[slot] = { gen: videoMemory[slot]?.gen || 0, id: card.id };
+      }
+    }
     return {
       state: {
         ...state,
@@ -397,7 +403,6 @@ function createApp({
       slogans: config.slogans,
       motionSync,
       rotationTiming: timing,
-      videoCursor,
       serverNow: clockNow(),
       version: pkg.version,
       youtube: config.youtube,
@@ -1149,10 +1154,19 @@ function createApp({
 
   app.put("/api/leaderboards/:id/rows/:rowId", requirePin, async (req, res, next) => {
     try {
-      await store.updateRow(req.params.id, req.params.rowId, {
+      const before = store.getState().leaderboards
+      .find((board) => board.id === req.params.id)?.rows
+      ?.find((row) => row.id === req.params.rowId);
+    await store.updateRow(req.params.id, req.params.rowId, {
         name: req.body?.name,
         score: req.body?.score,
+        showOnWall: req.body?.showOnWall,
+        removeProof: req.body?.removeProof === true,
       });
+    if (req.body?.removeProof === true && before?.proofFile) {
+      const proofPath = path.join(dataDir || path.dirname(store.filePath), "score-proofs", before.proofFile);
+      fs.rmSync(proofPath, { force: true });
+    }
       sendJson(res, 200, payload());
     } catch (err) {
       next(err);
@@ -1438,23 +1452,42 @@ function createApp({
     const readyState = Number.isFinite(Number(req.body?.readyState)) ? Number(req.body.readyState) : "";
     const currentTime = Number.isFinite(Number(req.body?.currentTime)) ? Number(req.body.currentTime).toFixed(2) : "";
     const src = String(req.body?.src || "").replace(/\s+/g, "").slice(0, 180);
+    const slot = ["1", "2", "3"].includes(String(req.body?.slot || "")) ? String(req.body.slot) : "";
     const root = dataDir || path.dirname(store.filePath);
     const dir = path.join(root, "logs");
     fs.mkdirSync(dir, { recursive: true });
     const nowMs = clockNow();
-    const blocking = event === "failed" || event === "error" || event === "stall-timeout";
-    const blockedUntil = blocking && id ? new Date(nowMs + VIDEO_BLOCK_MS).toISOString() : "";
-    fs.appendFileSync(
-      path.join(dir, "video.log"),
-      `${new Date(nowMs).toISOString()} event=${event} id=${id} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}${blockedUntil ? ` blockedUntil=${blockedUntil}` : ""}\n`,
-    );
-    if (event === "ended" && id) videoCursor += 1;
-    if (blocking && id) {
-      blockedVideos.set(id, nowMs + VIDEO_BLOCK_MS);
-      videoCursor += 1;
+    const noisy = event === "waiting" || event === "suspend" || event === "stalled" || event === "abort" || event === "emptied";
+    const dedupeKey = `${slot}:${id}:${event}`;
+    if (!noisy || !seenVideoLog.has(dedupeKey)) {
+      if (noisy) seenVideoLog.add(dedupeKey);
+      fs.appendFileSync(
+        path.join(dir, "video.log"),
+        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}\n`,
+      );
     }
-    if ((event === "ended" || blocking) && id) broadcast();
-    sendJson(res, 200, { ok: true, blockedUntil: blockedUntil || null });
+    const state = store.getState();
+    const layout = wallLayout(currentConfig().displays);
+    let changed = false;
+    if (event === "ended" && slot && layout[slot]?.content === "video") {
+      const mem = videoMemory[slot] || { gen: 0, id: "" };
+      videoMemory[slot] = { gen: mem.gen + 1, id: "" };
+      changed = true;
+    }
+    if (event === "give-up" && slot) {
+      const timing = effectiveRotation(state);
+      const tick = currentTick(state.rotation.startedAt, timing.intervalSec, nowMs, timing.minInterval);
+      const plan = payload().rotationPlan;
+      const failed = new Set(Array.isArray(req.body?.failedIds) ? req.body.failedIds.map(String) : [id]);
+      slotFallback[slot] = {
+        tick,
+        card: replacementFor(plan, slot, payload().playlist, { failedIds: failed, salt: `${slot}:give-up` }),
+      };
+      if (layout[slot]?.content === "video") videoMemory[slot] = { gen: (videoMemory[slot]?.gen || 0) + 1, id: "" };
+      changed = true;
+    }
+    if (changed) broadcast();
+    sendJson(res, 200, { ok: true, blockedUntil: null });
   });
 
   app.get("/api/media/cache", lanRequired, (req, res) => {
@@ -1848,7 +1881,7 @@ function createApp({
 
   app.post("/api/scores/:id/approve", requirePin, async (req, res, next) => {
     try {
-      await store.reviewScore(req.params.id, "approved");
+      await store.reviewScore(req.params.id, "approved", { showPhoto: req.body?.showPhoto !== false });
       sendJson(res, 200, payload());
     } catch (err) {
       next(err);

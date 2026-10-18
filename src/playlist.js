@@ -115,6 +115,7 @@ const {
   hash32,
   videoStartSec,
   rotationKey,
+  logoPhaseKey,
 } = rotationApi;
 
 function cycleIndex(startedAt, dwellSec, length, slotIndex = 0, now = Date.now()) {
@@ -136,14 +137,27 @@ function logoAt(startedAt, slotIndex = 0, now = Date.now()) {
   return LOGO_ORDER[cycleIndex(startedAt, AMENITY_DWELL_SEC, LOGO_ORDER.length, slotIndex, now)];
 }
 
-function concretizeCard(card, slotIndex, startedAt, now) {
+function logoLabel(key) {
+  return key === "pinball-land"
+    ? "Pinnacle Entertainment Center"
+    : "Pinnacle Group Financial Services";
+}
+
+function phaseLogo(card, slotIndex, startedAt, intervalSec, now, minInterval) {
+  if (!card || card.type !== "logo") return card;
+  const base = card.key === "pinball-land" || card.key === "pinnacle"
+    ? card.key
+    : LOGO_ORDER[(Number(slotIndex) || 0) % LOGO_ORDER.length];
+  const key = logoPhaseKey(base, startedAt, intervalSec, now, minInterval);
+  return { ...card, key, label: logoLabel(key), cycle: false };
+}
+
+function concretizeCard(card, slotIndex, startedAt, now, intervalSec, minInterval) {
   if (!card) return card;
   if (card.type === "amenity" && (card.cycle || card.id === "amenities")) {
     return { ...card, id: amenityAt(startedAt, slotIndex, now), cycle: false };
   }
-  if (card.type === "logo" && card.cycle) {
-    return { ...card, key: logoAt(startedAt, slotIndex, now), cycle: false };
-  }
+  if (card.type === "logo") return phaseLogo(card, slotIndex, startedAt, intervalSec, now, minInterval);
   return card;
 }
 
@@ -152,7 +166,14 @@ function planRotation(playlist, options = {}) {
   return rotationApi.planRotation(playlist, {
     ...options,
     prepare(card, slot) {
-      return concretizeCard(card, Number(slot) - 1, options.startedAt, now);
+      return concretizeCard(
+        card,
+        Number(slot) - 1,
+        options.startedAt,
+        now,
+        options.intervalSec,
+        options.minInterval,
+      );
     },
   });
 }
@@ -186,4 +207,5 @@ module.exports = {
   videoStartSec,
   rotationKey,
   planRotation,
+  replacementFor: rotationApi.replacementFor,
 };

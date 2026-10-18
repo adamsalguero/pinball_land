@@ -343,6 +343,36 @@ function renderBoardEditor() {
 
     const icons = document.createElement("div");
     icons.className = "icon-row";
+    if (row.proofFile) {
+      const proof = document.createElement("img");
+      proof.src = `/media/score-proofs/${row.proofFile}`;
+      proof.alt = "Score photo";
+      proof.style.width = "72px";
+      wrap.append(proof);
+      const show = document.createElement("button");
+      show.type = "button";
+      show.className = `btn compact toggle${row.showOnWall !== false ? " active" : ""}`;
+      show.textContent = "Show photo on wall";
+      show.setAttribute("aria-pressed", row.showOnWall !== false ? "true" : "false");
+      show.addEventListener("click", async () => {
+        applyPayload(await api(`/api/leaderboards/${board.id}/rows/${row.id}`, {
+          method: "PUT",
+          body: { showOnWall: row.showOnWall === false },
+        }));
+      });
+      const dropPhoto = document.createElement("button");
+      dropPhoto.type = "button";
+      dropPhoto.className = "btn compact";
+      dropPhoto.textContent = "Remove photo";
+      dropPhoto.addEventListener("click", async () => {
+        applyPayload(await api(`/api/leaderboards/${board.id}/rows/${row.id}`, {
+          method: "PUT",
+          body: { removeProof: true },
+        }));
+        toast("Photo removed");
+      });
+      icons.append(show, dropPhoto);
+    }
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "btn compact danger";
@@ -1275,8 +1305,16 @@ function renderScoreQueue() {
     approve.className = "btn primary";
     approve.textContent = "Approve";
     approve.addEventListener("click", async () => {
-      applyPayload(await api(`/api/scores/${row.id}/approve`, { method: "POST" }));
+      applyPayload(await api(`/api/scores/${row.id}/approve`, { method: "POST", body: { showPhoto: true } }));
       toast("Score approved");
+    });
+    const privateApprove = document.createElement("button");
+    privateApprove.type = "button";
+    privateApprove.className = "btn";
+    privateApprove.textContent = "Approve, keep photo private (verification only)";
+    privateApprove.addEventListener("click", async () => {
+      applyPayload(await api(`/api/scores/${row.id}/approve`, { method: "POST", body: { showPhoto: false } }));
+      toast("Score approved. Photo stays private.");
     });
     const reject = document.createElement("button");
     reject.type = "button";
@@ -1285,7 +1323,7 @@ function renderScoreQueue() {
     reject.addEventListener("click", async () => {
       applyPayload(await api(`/api/scores/${row.id}/reject`, { method: "POST" }));
     });
-    card.append(approve, reject);
+    card.append(approve, privateApprove, reject);
     root.append(card);
   }
 }

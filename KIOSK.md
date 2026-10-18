@@ -117,6 +117,16 @@ npm start
 
 Open `http://localhost:3000/display/1` (and `/display/2` on a second monitor if you have one). Control from `/` or a phone on the same WiFi. Optional: `npm run kiosk` if you want to try auto-fullscreen on the monitors you have. With fewer monitors than **Displays** says are active, the kiosk skips the missing ones and prints that in the terminal.
 
+Overlapping Chrome windows on Windows pause muted video in the covered window. Launch each display with the occlusion flags (or run `scripts/open-wall-chrome.ps1`):
+
+```bat
+chrome.exe --app=http://127.0.0.1:3000/display/1 --window-position=0,0 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
+chrome.exe --app=http://127.0.0.1:3000/display/2 --window-position=80,60 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
+chrome.exe --app=http://127.0.0.1:3000/display/3 --window-position=160,120 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
+```
+
+The Electron kiosk sets the same switches and `backgroundThrottling: false`.
+
 ---
 
 ## 5. Displays (1, 2, or 3)
