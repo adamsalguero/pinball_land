@@ -1,3 +1,4 @@
+const path = require("path");
 const { spawn } = require("child_process");
 
 function parseTailscaleStatus(text) {
@@ -77,16 +78,29 @@ async function detectTailscale(runner = runCommand) {
   return { url, source: url ? "tailscale" : "" };
 }
 
-function startQuickTunnel({ port, onUrl, spawnImpl = spawn } = {}) {
+function startQuickTunnel({ bin, port, onUrl, onError, spawnImpl = spawn } = {}) {
+  if (!bin || !path.isAbsolute(bin)) {
+    const err = Object.assign(
+      new Error("Cloudflare must be started from its downloaded file, not from PATH"),
+      { code: "spawn" }
+    );
+    if (onError) onError(err);
+    return null;
+  }
   let child;
   try {
-    child = spawnImpl("cloudflared", [
+    child = spawnImpl(bin, [
       "tunnel",
       "--no-autoupdate",
       "--url",
       `http://127.0.0.1:${port}`,
-    ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  } catch {
+    ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"], shell: false });
+  } catch (err) {
+    if (onError) onError(err);
+    return null;
+  }
+  if (!child) {
+    if (onError) onError(Object.assign(new Error("spawn failed"), { code: "spawn", path: bin }));
     return null;
   }
   const take = (chunk) => {
@@ -95,7 +109,9 @@ function startQuickTunnel({ port, onUrl, spawnImpl = spawn } = {}) {
   };
   child.stdout?.on("data", take);
   child.stderr?.on("data", take);
-  child.on("error", () => {});
+  child.on("error", (err) => {
+    if (onError) onError(err);
+  });
   return child;
 }
 

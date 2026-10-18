@@ -457,6 +457,35 @@ test("one holiday clip is never copied, and a season with none stays on non-vide
   }
 });
 
+test("two cards with the same file never share a screen", () => {
+  const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
+    starters: [
+      { type: "video", id: "starter:one", url: "/media/cache/same.mp4", durationSec: 400, local: true },
+      { type: "video", id: "starter:two", url: "/media/cache/same.mp4", durationSec: 400, local: true },
+    ],
+  });
+  const layout = {
+    1: { content: "video", enabled: true },
+    2: { content: "video", enabled: true },
+    3: { content: "video", enabled: true },
+  };
+  const plan = planRotation(playlist, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout,
+    now: 0,
+  });
+  const videos = ["1", "2", "3"].map((slot) => plan[slot]).filter((card) => card?.type === "video" && card.url);
+  assert.equal(videos.length, 1);
+  assert.equal(videos[0].url, "/media/cache/same.mp4");
+  for (const slot of ["1", "2", "3"]) {
+    const card = plan[slot];
+    if (card?.type === "video" && card.url) continue;
+    assert.notEqual(card?.type, "video");
+  }
+});
+
 test("logo screens swap together at halfway and never share a logo", () => {
   const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
     starters: [{ type: "video", id: "skeleton-dance-1929", url: "/media/cache/skeleton-dance-1929", durationSec: 331 }],

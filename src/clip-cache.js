@@ -1,8 +1,12 @@
 const fs = require("fs");
 const fsp = require("fs/promises");
+const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { purgeRemovedStarters, removedStarterId } = require("./catalog");
+
+const TRANSCODE_MARK = "pinball-transcode-v1";
+const TRANSCODE_FILTER = "scale=min(1920\\,iw):min(1080\\,ih):force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30";
 
 function ffmpegBinary() {
   try {
@@ -14,9 +18,16 @@ function ffmpegBinary() {
   return "ffmpeg";
 }
 
-function runProcess(bin, args, timeoutMs = 15 * 60 * 1000) {
+function runProcess(bin, args, timeoutMs = 15 * 60 * 1000, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    if (options.lowPriority && child.pid) {
+      try {
+        os.setPriority(child.pid, os.constants.priority.PRIORITY_LOW);
+      } catch {
+        // Priority is a courtesy. The transcode still runs one file at a time.
+      }
+    }
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -74,13 +85,24 @@ async function moovBeforeMdat(file) {
 }
 
 function parseProbe(stderr) {
-  const video = /Stream #\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?: Video: ([A-Za-z0-9_]+)[^\n]*?(\d{2,5})x(\d{2,5})/.exec(stderr);
-  const audio = /Stream #\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?: Audio: ([A-Za-z0-9_]+)/.exec(stderr);
+  const text = String(stderr || "");
+  const video = /Stream #\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?: Video: ([A-Za-z0-9_]+)(?: \(([^)]+)\))?[^\n]*?,\s*(yuv[a-z0-9]+)[^\n]*?(\d{2,5})x(\d{2,5})/.exec(text);
+  const fps = /(\d+(?:\.\d+)?) fps/.exec(text);
+  const audio = /Stream #\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?: Audio: ([A-Za-z0-9_]+)(?: \(([^)]+)\))?/.exec(text);
+  const title = /\btitle\s*:\s*(.+)/i.exec(text);
+  const comment = /\bcomment\s*:\s*(.+)/i.exec(text);
+  const rate = Number(fps?.[1]) || 0;
   return {
     videoCodec: (video?.[1] || "").toLowerCase(),
-    width: Number(video?.[2]) || 0,
-    height: Number(video?.[3]) || 0,
+    profile: (video?.[2] || "").toLowerCase(),
+    pixFmt: (video?.[3] || "").toLowerCase(),
+    width: Number(video?.[4]) || 0,
+    height: Number(video?.[5]) || 0,
+    fps: rate,
     audioCodec: (audio?.[1] || "").toLowerCase(),
+    audioProfile: (audio?.[2] || "").toLowerCase(),
+    title: title ? title[1].trim() : "",
+    comment: comment ? comment[1].trim() : "",
   };
 }
 
@@ -88,41 +110,63 @@ async function probeFile(ffmpeg, file) {
   const result = await runProcess(ffmpeg, ["-hide_banner", "-i", file]);
   const info = parseProbe(result.stderr);
   info.faststart = await moovBeforeMdat(file);
-  info.playable = info.videoCodec === "h264"
+  const audioOk = !info.audioCodec || (info.audioCodec === "aac" && !info.audioProfile.includes("he"));
+  info.playable = info.comment === TRANSCODE_MARK
+    && info.videoCodec === "h264"
+    && (info.profile === "high" || info.profile === "main")
+    && info.pixFmt === "yuv420p"
+    && Math.round(info.fps) === 30
     && info.width > 0
     && info.height > 0
     && info.width <= 1920
     && info.height <= 1080
-    && (!info.audioCodec || info.audioCodec === "aac")
+    && audioOk
     && info.faststart;
   return info;
 }
 
-async function remuxOrTranscode(ffmpeg, source, dest, info) {
-  const codecsOk = info.videoCodec === "h264"
-    && info.width > 0
-    && info.height > 0
-    && info.width <= 1920
-    && info.height <= 1080
-    && (!info.audioCodec || info.audioCodec === "aac");
-  const args = ["-y", "-hide_banner", "-i", source];
-  if (codecsOk) {
-    args.push("-c", "copy", "-movflags", "+faststart", dest);
+function metadataValue(value) {
+  return String(value || "").replace(/[\r\n]+/g, " ").slice(0, 180);
+}
+
+async function transcodeFile(ffmpeg, source, dest, title, profile = "high", hasAudio = true) {
+  const args = [
+    "-y",
+    "-hide_banner",
+    "-loglevel", "error",
+    "-i", source,
+    "-map", "0:v:0",
+  ];
+  if (hasAudio) args.push("-map", "0:a:0?");
+  args.push(
+    "-vf", TRANSCODE_FILTER,
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "20",
+    "-profile:v", profile,
+    "-level", "4.0",
+    "-pix_fmt", "yuv420p",
+    "-r", "30",
+    "-fps_mode", "cfr",
+    "-g", "60",
+    "-keyint_min", "60",
+    "-sc_threshold", "0",
+  );
+  if (hasAudio) {
+    args.push("-c:a", "aac", "-profile:a", "aac_low", "-b:a", "128k", "-ar", "48000", "-ac", "2");
   } else {
-    args.push(
-      "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2",
-      "-c:v", "libx264",
-      "-pix_fmt", "yuv420p",
-      "-profile:v", "high",
-      "-c:a", "aac",
-      "-b:a", "160k",
-      "-movflags", "+faststart",
-      dest,
-    );
+    args.push("-an");
   }
-  const result = await runProcess(ffmpeg, args);
+  args.push(
+    "-movflags", "+faststart",
+    "-metadata", `title=${metadataValue(title)}`,
+    "-metadata", `comment=${TRANSCODE_MARK}`,
+    dest,
+  );
+  const result = await runProcess(ffmpeg, args, 15 * 60 * 1000, { lowPriority: true });
   if (result.code !== 0) {
-    throw new Error(result.stderr.split("\n").filter(Boolean).slice(-3).join(" ") || "ffmpeg failed");
+    const tail = result.stderr.split("\n").filter(Boolean).slice(-3).join(" ");
+    throw new Error(tail || `ffmpeg ${profile} failed`);
   }
 }
 
@@ -213,6 +257,32 @@ function createClipCache({
     return fs.existsSync(file) ? file : null;
   }
 
+  async function publishTranscode(source, dest, title) {
+    const tmp = `${dest}.transcode.mp4`;
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    const sourceInfo = await probeFile(ffmpeg, source).catch(() => ({}));
+    const hasAudio = Boolean(sourceInfo.audioCodec);
+    const label = sourceInfo.title || title;
+    try {
+      try {
+        await transcodeFile(ffmpeg, source, tmp, label, "high", hasAudio);
+      } catch (err) {
+        await transcodeFile(ffmpeg, source, tmp, label, "main", hasAudio);
+        writeLog(`cache transcode profile=main after ${err.message}`);
+      }
+      const checked = await probeFile(ffmpeg, tmp);
+      if (!checked.playable) {
+        throw new Error(`transcode is not playable (${checked.videoCodec} ${checked.profile} ${checked.pixFmt} ${checked.fps}fps mark=${checked.comment} moov=${checked.faststart})`);
+      }
+      await fsp.rm(dest, { force: true }).catch(() => {});
+      await fsp.rename(tmp, dest);
+      return checked;
+    } catch (err) {
+      await fsp.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
   async function ensureOne(item, { force = false } = {}) {
     if (removedStarterId(item.id)) return;
     const finalFile = readyPath(cacheDir, item.id);
@@ -224,23 +294,22 @@ function createClipCache({
         status.set(item.id, { ready: true, error: null });
         return;
       }
+      status.set(item.id, { ready: false, error: null });
+      writeLog(`cache migrate ${item.id}`);
+      const checked = await publishTranscode(finalFile, finalFile, info.title || item.title || item.id);
+      const size = (await fsp.stat(finalFile)).size;
+      status.set(item.id, { ready: true, error: null });
+      writeLog(`cache transcode ${item.id} ok bytes=${size} profile=${checked.profile} fps=${checked.fps}`);
+      return;
     }
     status.set(item.id, { ready: false, error: null });
     writeLog(`cache start ${item.id}`);
     await downloadResumable(item.streamUrl, part, fetchImpl);
-    const probed = await probeFile(ffmpeg, part);
-    if (probed.playable) {
-      await fsp.rename(part, finalFile);
-    } else {
-      const tmp = `${finalFile}.tmp.mp4`;
-      await remuxOrTranscode(ffmpeg, part, tmp, probed);
-      const checked = await probeFile(ffmpeg, tmp);
-      if (!checked.playable) throw new Error(`cached file is not playable h264 faststart (${checked.videoCodec} ${checked.width}x${checked.height} moov=${checked.faststart})`);
-      await fsp.rename(tmp, finalFile);
-      await fsp.unlink(part).catch(() => {});
-    }
+    const checked = await publishTranscode(part, finalFile, item.title || item.id);
+    await fsp.unlink(part).catch(() => {});
+    const size = (await fsp.stat(finalFile)).size;
     status.set(item.id, { ready: true, error: null });
-    writeLog(`cache ready ${item.id}`);
+    writeLog(`cache transcode ${item.id} ok bytes=${size} profile=${checked.profile} fps=${checked.fps}`);
   }
 
   async function runOnce({ force = false } = {}) {
@@ -312,4 +381,6 @@ module.exports = {
   downloadResumable,
   ffmpegBinary,
   readyPath,
+  TRANSCODE_MARK,
+  transcodeFile,
 };

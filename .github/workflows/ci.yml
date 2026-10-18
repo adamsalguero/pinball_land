@@ -69,5 +69,5 @@ jobs:
         timeout-minutes: 45
         shell: pwsh
         env:
-          PINBALL_BLOB_SOAK_MS: "1260000"
+          PINBALL_BLOB_SOAK_MS: "1200000"
         run: node scripts/blob-soak.js

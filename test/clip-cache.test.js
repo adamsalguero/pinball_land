@@ -49,7 +49,7 @@ async function makeClip(dest, { codec = "libx264", faststart = false } = {}) {
   await run(ffmpegBinary(), args);
 }
 
-test("a moov-at-end h264 clip is remuxed to faststart and a non-h264 clip is transcoded", async () => {
+test("cached clips are transcoded to faststart 30 fps h264 and an old file is migrated", async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pinball-cache-"));
   const late = path.join(dir, "late.mp4");
   const mpeg = path.join(dir, "mpeg.mp4");
@@ -80,12 +80,30 @@ test("a moov-at-end h264 clip is remuxed to faststart and a non-h264 clip is tra
     assert.equal(await moovBeforeMdat(file), true);
     const info = await probeFile(ffmpegBinary(), file);
     assert.equal(info.videoCodec, "h264");
+    assert.equal(info.pixFmt, "yuv420p");
+    assert.equal(Math.round(info.fps), 30);
+    assert.equal(info.comment, "pinball-transcode-v1");
     assert.equal(info.playable, true);
     assert.equal(cache.fileFor(id), file);
   }
   const log = await fsp.readFile(path.join(dir, "logs", "video.log"), "utf8");
-  assert.match(log, /cache ready late-moov/);
-  assert.match(log, /cache ready mpeg-clip/);
+  assert.match(log, /cache transcode late-moov ok/);
+  assert.match(log, /cache transcode mpeg-clip ok/);
+
+  const stale = cache.readyPath("late-moov");
+  await makeClip(stale, { codec: "libx264", faststart: true });
+  const migrated = createClipCache({
+    items: [{ id: "late-moov", title: "Late", holiday: "halloween", streamUrl: "http://clips.test/late.mp4" }],
+    cacheDir,
+    logFile: path.join(dir, "logs", "video.log"),
+    fetchImpl: async () => { throw new Error("should migrate the file already on disk"); },
+  });
+  const again = await migrated.runOnce();
+  assert.equal(again[0].ready, true);
+  const after = await probeFile(ffmpegBinary(), stale);
+  assert.equal(after.playable, true);
+  const migratedLog = await fsp.readFile(path.join(dir, "logs", "video.log"), "utf8");
+  assert.match(migratedLog, /cache migrate late-moov/);
 });
 
 test("a stall timeout pauses a cached clip and a pinned screen stays on video", async () => {

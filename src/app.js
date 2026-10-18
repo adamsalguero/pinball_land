@@ -33,7 +33,8 @@ const {
   readGuestCookie,
   scanPage,
 } = require("./guest-link");
-const { detectTailscale, startQuickTunnel } = require("./public-access");
+const { detectTailscale } = require("./public-access");
+const { createCloudflareTunnel } = require("./cloudflared");
 const { isTunneledRequest, isGuestRoute, guestPortFor } = require("./tunnel");
 const { maskProfanity } = require("./text-filter");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
@@ -120,6 +121,15 @@ function publicLeaderboards(leaderboards) {
   });
 }
 
+function starterThemes(theme) {
+  const forced = String(process.env.PINBALL_STARTER_THEMES || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item === "halloween" || item === "christmas");
+  if (forced.length) return [...new Set(forced)];
+  return [theme];
+}
+
 function effectiveRotation(state) {
   const override = Number.parseInt(process.env.PINBALL_ROTATION_SEC || "", 10);
   if (Number.isFinite(override) && override >= 1 && override <= 120) {
@@ -154,6 +164,7 @@ function createApp({
   clipCache = false,
   clipIdList = null,
   publicProbe = null,
+  ensureGuestListener = null,
 }) {
   const app = express();
   app.set("trust proxy", "loopback");
@@ -353,13 +364,13 @@ function createApp({
       videos: library.list(),
       allAges: config.media.allAges,
       pinboard: config.photos.pinboard !== false,
-      starters: starterCards(catalogItems, {
-        theme: state.theme,
+      starters: starterThemes(state.theme).flatMap((theme) => starterCards(catalogItems, {
+        theme,
         allAges: config.media.allAges,
         urlFor: (id) => `/media/cache/${id}`,
         disabledIds: config.media.disabledIds,
         isReady: (id) => clips.isReady(id),
-      }),
+      })),
       youtube: config.youtube?.[state.theme] || [],
     });
     const timing = effectiveRotation(state);
@@ -667,8 +678,28 @@ function createApp({
   const LOGIN_LIMIT = 5;
   const globalLoginFailures = [];
   let publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: 0 };
-  let tunnel = null;
-  let tunnelUrl = "";
+  let lastGuestDetail = "";
+  let routesReady = false;
+  let accessReady = Promise.resolve();
+  const tunnelRoot = dataDir || path.dirname(mediaRoot);
+  const tunnelLog = path.join(tunnelRoot, "logs", "tunnel.log");
+  const cloudflareTunnel = createCloudflareTunnel({
+    binDir: path.join(tunnelRoot, "bin"),
+    logFile: tunnelLog,
+    port: () => guestPortFor(Number(currentConfig().port) || 3000),
+    onChange(live) {
+      const access = currentConfig().publicAccess;
+      if (!access?.enabled || !access.cloudflare) return;
+      if (publicStatus.source === "tailscale" && publicStatus.url) return;
+      publicStatus = {
+        url: live.url || "",
+        source: live.url ? "cloudflare" : "",
+        detail: [lastGuestDetail, live.detail].filter(Boolean).join(" "),
+        checkedAt: clockNow(),
+      };
+      broadcast();
+    },
+  });
 
   function guestSecret() {
     return currentConfig().guestSecret || ensureGuestSecret(localStore.path);
@@ -687,21 +718,42 @@ function createApp({
     return isTunneledRequest(req);
   }
 
-  function stopTunnel() {
-    if (tunnel) {
-      tunnel.kill();
-      tunnel = null;
+  function withGuest(detail) {
+    return [lastGuestDetail, detail].filter(Boolean).join(" ");
+  }
+
+  async function openGuestPortForAccess() {
+    const guestPort = guestPortFor(Number(currentConfig().port) || 3000);
+    if (!routesReady || typeof ensureGuestListener !== "function") {
+      lastGuestDetail = "";
+      return;
     }
-    tunnelUrl = "";
+    try {
+      const guest = await ensureGuestListener(guestApp, guestPort);
+      lastGuestDetail = guest.listening
+        ? ""
+        : (guest.error || `Guest port ${guestPort} is not listening. Public guests cannot connect until this port is open.`);
+    } catch (err) {
+      lastGuestDetail = `Guest port ${guestPort} is not listening (${err.message}). Public guests cannot connect until this port is open.`;
+      try {
+        fs.mkdirSync(path.dirname(tunnelLog), { recursive: true });
+        fs.appendFileSync(tunnelLog, `${new Date().toISOString()} guest listen error ${guestPort} ${err.message}\n`);
+      } catch {
+        // The status line still carries the error.
+      }
+    }
   }
 
   async function refreshPublicAccess() {
     const access = currentConfig().publicAccess;
     if (!access?.enabled) {
-      stopTunnel();
+      cloudflareTunnel.stop();
+      lastGuestDetail = "";
       publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: clockNow() };
+      broadcast();
       return publicStatus;
     }
+    await openGuestPortForAccess();
     const probe = publicProbe || detectTailscale;
     let found = { url: "", source: "" };
     try {
@@ -710,38 +762,50 @@ function createApp({
       found = { url: "", source: "" };
     }
     if (found?.url) {
-      stopTunnel();
-      publicStatus = { url: found.url, source: found.source || "tailscale", detail: "Tailscale Funnel", checkedAt: clockNow() };
+      cloudflareTunnel.stop();
+      publicStatus = {
+        url: found.url,
+        source: found.source || "tailscale",
+        detail: withGuest("Tailscale Funnel is up. The wall QR uses that link."),
+        checkedAt: clockNow(),
+      };
+      broadcast();
       return publicStatus;
     }
     if (access.cloudflare && !process.env.NODE_TEST_CONTEXT) {
-      if (!tunnel) {
-        tunnel = startQuickTunnel({
-          port: guestPortFor(currentConfig().port),
-          onUrl(url) {
-            tunnelUrl = url;
-            publicStatus = { url, source: "cloudflare", detail: "Cloudflare quick tunnel", checkedAt: clockNow() };
-          },
-        });
-      }
-      if (tunnelUrl) {
-        publicStatus = { url: tunnelUrl, source: "cloudflare", detail: "Cloudflare quick tunnel", checkedAt: clockNow() };
-        return publicStatus;
-      }
-    } else {
-      stopTunnel();
+      cloudflareTunnel.start();
+      const live = cloudflareTunnel.status();
+      publicStatus = {
+        url: live.url || "",
+        source: live.url ? "cloudflare" : "",
+        detail: withGuest(live.detail),
+        checkedAt: clockNow(),
+      };
+      broadcast();
+      return publicStatus;
     }
+    cloudflareTunnel.stop();
     publicStatus = {
       url: "",
       source: "",
-      detail: "Funnel is not up yet. Guests stay on the venue WiFi until it is.",
+      detail: withGuest(access.cloudflare
+        ? "Cloudflare is off while tests are running."
+        : "Tailscale is not up. Turn on Cloudflare in Settings and this PC will download it and open a guest link."),
       checkedAt: clockNow(),
     };
+    broadcast();
     return publicStatus;
   }
 
+  function settleAccess() {
+    accessReady = refreshPublicAccess().catch((err) => {
+      console.error(err);
+    });
+    return accessReady;
+  }
+
   const publicTimer = setInterval(() => {
-    refreshPublicAccess().catch((err) => console.error(err));
+    settleAccess();
   }, 60_000);
   if (publicTimer.unref) publicTimer.unref();
 
@@ -2562,7 +2626,8 @@ function createApp({
   }
 
   store.onChange(() => broadcast());
-  refreshPublicAccess().catch((err) => console.error(err));
+  routesReady = true;
+  settleAccess();
 
   try {
     airplayController.ensureRunning?.();
@@ -2628,7 +2693,13 @@ function createApp({
     return app(req, res);
   }
 
-  return { app, guestApp, attachWebSocket, presentations };
+  return {
+    app,
+    guestApp,
+    attachWebSocket,
+    presentations,
+    get accessReady() { return accessReady; },
+  };
 }
 
 module.exports = { createApp };

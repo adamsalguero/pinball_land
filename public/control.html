@@ -103,7 +103,7 @@
         <div data-panel="settings" hidden>
           <section id="public-access-section">
             <h2>Public access</h2>
-            <p class="muted">Guests open a link from outside the venue WiFi. Turn this on after the one-time Tailscale setup. The wall QR then carries a daily code. Phones on the venue WiFi need no code.</p>
+            <p class="muted">Guests open a link from outside the venue WiFi. Turn this on after the one-time Tailscale setup. The wall QR then carries a daily code. Phones on the venue WiFi need no code. If Tailscale is not installed, the Cloudflare box downloads cloudflared and opens a guest link on its own. The status line shows that link, or the reason it is not up yet.</p>
             <div class="theme-toggle" id="public-access-toggle">
               <button class="btn" type="button" id="public-access-on">On</button>
               <button class="btn" type="button" id="public-access-off">Off</button>
