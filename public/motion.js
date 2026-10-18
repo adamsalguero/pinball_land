@@ -167,13 +167,19 @@ function spiderSilk(point) {
 
 function strokeSpiderSilk(ctx, point, size) {
   const silk = spiderSilk(point);
+  const body = (Number(size) || 28) * 0.22;
+  const yTop = Math.max(silk.y1, silk.y2 - body * 1.2);
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 236, 214, 0.8)";
-  ctx.lineWidth = Math.max(1, (Number(size) || 28) * 0.02);
   ctx.lineCap = "round";
+  const width = Math.max(1, (Number(size) || 28) * 0.01);
   ctx.beginPath();
   ctx.moveTo(silk.x1, silk.y1);
-  ctx.lineTo(silk.x2, silk.y2);
+  ctx.lineTo(silk.x2, yTop);
+  ctx.strokeStyle = "rgba(255, 236, 214, 0.92)";
+  ctx.lineWidth = width + 1.1;
+  ctx.stroke();
+  ctx.strokeStyle = "#141414";
+  ctx.lineWidth = width;
   ctx.stroke();
   ctx.restore();
 }
@@ -184,22 +190,25 @@ function drawSpider(ctx, size, phase) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = "#141414";
-  ctx.lineWidth = Math.max(1.35, size * 0.04);
+  ctx.lineWidth = Math.max(1.25, size * 0.02);
+  // Points in body radii, +y down. Front arches up then the tip drops.
+  // Middles stay near level. The back leg angles down. Left side mirrors this.
+  const shape = [
+    { hip: [0.68, -0.34], ctrl: [1.16, -1.70], foot: [2.00, -0.14] },
+    { hip: [0.92, -0.08], ctrl: [1.52, -0.20], foot: [2.05, 0.08] },
+    { hip: [0.80, 0.34], ctrl: [1.38, 0.18], foot: [1.88, 0.98] },
+    { hip: [0.52, 0.64], ctrl: [0.92, 0.78], foot: [1.18, 1.72] },
+  ];
   for (let i = 0; i < 8; i += 1) {
     const side = i < 4 ? -1 : 1;
     const index = i % 4;
-    const spread = [-0.95, -0.32, 0.32, 0.95][index];
-    const wiggle = Math.sin(pose * 2 + index * 0.8 + (side > 0 ? 0.6 : 0)) * size * 0.028;
-    const hipX = side * body * 0.7;
-    const hipY = spread * body * 0.42;
-    const kneeX = side * size * (0.33 + index * 0.012);
-    const kneeY = hipY - size * 0.15 + wiggle;
-    const footX = side * size * (0.4 + index * 0.018);
-    const footY = hipY + size * 0.09 + wiggle * 0.3;
+    const leg = shape[index];
+    const wiggle = Math.sin(pose * 2 + index * 0.9 + (side > 0 ? 0.45 : 0)) * size * 0.006;
+    const px = (pair) => side * pair[0] * body;
+    const py = (pair, wobble) => pair[1] * body + (wobble || 0);
     ctx.beginPath();
-    ctx.moveTo(hipX, hipY);
-    ctx.lineTo(kneeX, kneeY);
-    ctx.lineTo(footX, footY);
+    ctx.moveTo(px(leg.hip), py(leg.hip));
+    ctx.quadraticCurveTo(px(leg.ctrl), py(leg.ctrl, wiggle * 0.25), px(leg.foot), py(leg.foot, wiggle));
     ctx.stroke();
   }
   ctx.lineWidth = Math.max(1, size * 0.026);
