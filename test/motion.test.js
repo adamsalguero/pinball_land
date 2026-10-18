@@ -51,17 +51,18 @@ test("transitions are subtle or off, and particles move on their own canvas fiel
   assert.ok(plain.particles.every((particle) => particle.kind === "mote"));
 });
 
-test("spider knees rise outward and the lower segment drops", () => {
-  const { drawSpider } = require("../public/motion");
-  const size = 40;
+test("spider legs fan out and the outer segment bends gently down", () => {
+  const { drawSpider, strokeSpiderSilk } = require("../public/motion");
+  const size = 80;
   const legs = [];
   const ctx = {
     beginPath() {},
-    moveTo(x, y) { this.points = [{ x, y }]; },
-    lineTo(x, y) { this.points.push({ x, y }); },
-    stroke() {
-      if (this.points && this.points.length === 3) legs.push(this.points);
+    moveTo(x, y) { this.hip = { x, y }; },
+    quadraticCurveTo(x, y, footX, footY) {
+      legs.push({ hip: this.hip, knee: { x, y }, foot: { x: footX, y: footY } });
     },
+    lineTo() {},
+    stroke() {},
     arc() {},
     fill() {},
   };
@@ -69,11 +70,43 @@ test("spider knees rise outward and the lower segment drops", () => {
   assert.equal(ctx.lineCap, "round");
   assert.equal(ctx.lineJoin, "round");
   assert.equal(legs.length, 8);
-  for (const [hip, knee, foot] of legs) {
-    const side = Math.sign(knee.x);
-    assert.ok(side * (knee.x - hip.x) > size * 0.12);
-    assert.ok(hip.y - knee.y > size * 0.12);
-    assert.ok(foot.y - knee.y > size * 0.28);
-    assert.ok(foot.y > hip.y + size * 0.1);
+  const body = size * 0.22;
+  const diameter = body * 2;
+  for (const side of [-1, 1]) {
+    const group = legs.filter((leg) => Math.sign(leg.foot.x) === side)
+      .sort((a, b) => a.foot.y - b.foot.y);
+    assert.equal(group.length, 4);
+    const angles = group.map((leg) => Math.atan2(leg.foot.y - leg.hip.y, side * (leg.foot.x - leg.hip.x)));
+    assert.ok(group[0].knee.y < group[0].hip.y - body * 0.4, "front leg arches up");
+    assert.ok(group[0].foot.y > group[0].knee.y + body * 0.4, "front tip drops from that arch");
+    assert.ok(Math.abs(angles[1]) < 0.35, "upper middle stays near horizontal");
+    assert.ok(angles[2] > 0.15, "lower middle angles down");
+    assert.ok(angles[3] > angles[2] + 0.2, "back leg is steeper");
+    assert.ok(group[0].knee.y < group[1].knee.y - body * 0.5, "front arch is above the middle legs");
+    assert.ok(group[3].foot.y > group[2].foot.y + body * 0.3, "back foot hangs below the leg above it");
+    for (const leg of group) {
+      const midY = (leg.hip.y + leg.foot.y) / 2;
+      assert.ok(leg.knee.y < midY, "one gentle upward bow before the tip");
+      assert.ok(leg.foot.y > leg.knee.y, "outer segment bends down toward the tip");
+      assert.ok(side * (leg.foot.x - leg.hip.x) > body * 0.25, "every leg still reaches outward");
+    }
+    const level = group[1];
+    const sideways = Math.abs(level.foot.x) - body;
+    assert.ok(sideways > diameter * 0.4 && sideways < diameter * 0.7);
   }
+
+  const silk = { line: null };
+  const silkCtx = {
+    save() {},
+    restore() {},
+    beginPath() { this.pts = []; },
+    moveTo(x, y) { this.pts.push({ x, y }); },
+    lineTo(x, y) { this.pts.push({ x, y }); },
+    stroke() { silk.line = this.pts; },
+  };
+  strokeSpiderSilk(silkCtx, { x: 140, y: 260 }, size);
+  assert.equal(silk.line[0].y, 0);
+  assert.equal(silk.line[0].x, 140);
+  assert.equal(silk.line[1].x, 140);
+  assert.ok(Math.abs(silk.line[1].y - (260 - body * 1.2)) < 0.01);
 });
