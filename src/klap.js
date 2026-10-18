@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const net = require("net");
 
 const PLUG_AUTH_MESSAGE = "This plug needs the TP-Link email and password from the Kasa app.";
 const PLUG_DOWN_MESSAGE = "The plug did not answer.";
@@ -18,6 +19,20 @@ function plugDownError() {
   error.code = "plug-down";
   error.status = 502;
   return error;
+}
+
+function plugRetryError() {
+  const error = new Error(PLUG_DOWN_MESSAGE);
+  error.code = "plug-retry";
+  error.status = 502;
+  return error;
+}
+
+function sanitizePlugLog(line) {
+  const text = String(line || "").replace(/[\r\n]+/g, " ").trim();
+  if (!text) return "";
+  if (/password|tp_sessionid|kasasetup|authorization|cookie\s*=|set-cookie/i.test(text)) return "";
+  return text;
 }
 
 function md5(buffer) {
@@ -118,66 +133,163 @@ class KlapCipher {
   }
 }
 
-function cookieFrom(response) {
+function cookieLines(response) {
   const headers = response?.headers;
   const lines = [];
   if (headers && typeof headers.getSetCookie === "function") lines.push(...headers.getSetCookie());
   const single = headers && typeof headers.get === "function" ? headers.get("set-cookie") : "";
   if (single) lines.push(single);
-  for (const line of lines) {
-    const match = /TP_SESSIONID=([^;]+)/.exec(String(line || ""));
-    if (match) return match[1];
-  }
-  return "";
+  return lines;
 }
 
-async function defaultRequest(url, { body, cookie, timeoutMs = 4000 } = {}) {
-  const headers = {};
-  if (cookie) headers.cookie = `TP_SESSIONID=${cookie}`;
-  let response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers,
-      body,
-      signal: AbortSignal.timeout(timeoutMs),
+function readCookies(response) {
+  const bag = {};
+  for (const line of cookieLines(response)) {
+    for (const part of String(line || "").split(";")) {
+      const eq = part.indexOf("=");
+      if (eq <= 0) continue;
+      const name = part.slice(0, eq).trim();
+      const value = part.slice(eq + 1).trim();
+      if (/^(Path|Domain|Expires|Max-Age|SameSite|HttpOnly|Secure)$/i.test(name)) continue;
+      if (!bag[name]) bag[name] = value;
+    }
+  }
+  return bag;
+}
+
+function cookieFrom(response) {
+  const session = readCookies(response).TP_SESSIONID || "";
+  if (!session || session === "TIMEOUT") return "";
+  return session;
+}
+
+function emitLog(log, line) {
+  if (typeof log !== "function") return;
+  const clean = sanitizePlugLog(line);
+  if (clean) log(clean);
+}
+
+function klapHttpRequest(urlString, { body, cookie, timeoutMs = 4000 } = {}) {
+  const url = new URL(urlString);
+  const payload = Buffer.isBuffer(body) ? body : Buffer.from(body || "");
+  const hostHeader = url.port && url.port !== "80" ? `${url.hostname}:${url.port}` : url.hostname;
+  const lines = [
+    `Host: ${hostHeader}`,
+    `Content-Length: ${payload.length}`,
+  ];
+  if (cookie) lines.push(`Cookie: TP_SESSIONID=${cookie}`);
+  const head = `POST ${url.pathname}${url.search} HTTP/1.1\r\n${lines.join("\r\n")}\r\n\r\n`;
+  const packet = Buffer.concat([Buffer.from(head, "latin1"), payload]);
+  const port = Number(url.port) || 80;
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ host: url.hostname, port });
+    let settled = false;
+    const chunks = [];
+    const timer = setTimeout(() => done(plugDownError()), timeoutMs);
+    function done(err, result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (err) reject(err);
+      else resolve(result);
+    }
+    socket.setNoDelay(true);
+    socket.on("error", () => done(plugDownError()));
+    socket.on("data", (chunk) => {
+      chunks.push(chunk);
+      const buf = Buffer.concat(chunks);
+      const split = buf.indexOf("\r\n\r\n");
+      if (split < 0) return;
+      const headerText = buf.subarray(0, split).toString("latin1");
+      const status = /^HTTP\/1\.[01] (\d+)/.exec(headerText);
+      const lengthMatch = /content-length:\s*(\d+)/i.exec(headerText);
+      const length = lengthMatch ? Number(lengthMatch[1]) : 0;
+      const bodyStart = split + 4;
+      if (buf.length < bodyStart + length) return;
+      const setCookies = [];
+      for (const line of headerText.split("\r\n").slice(1)) {
+        const idx = line.indexOf(":");
+        if (idx < 0) continue;
+        if (/^set-cookie$/i.test(line.slice(0, idx).trim())) setCookies.push(line.slice(idx + 1).trim());
+      }
+      done(null, {
+        status: Number(status?.[1] || 0),
+        body: buf.subarray(bodyStart, bodyStart + length),
+        headers: {
+          getSetCookie: () => setCookies,
+          get(name) {
+            return String(name || "").toLowerCase() === "set-cookie" ? setCookies.join(", ") : null;
+          },
+        },
+      });
     });
-  } catch {
+    socket.on("connect", () => {
+      socket.write(packet);
+    });
+  });
+}
+
+async function defaultRequest(url, options = {}) {
+  try {
+    return await klapHttpRequest(url, options);
+  } catch (err) {
+    if (err.code === "plug-down" || err.code === "plug-auth" || err.code === "plug-retry") throw err;
     throw plugDownError();
   }
-  const payload = Buffer.from(await response.arrayBuffer());
-  return { status: response.status, body: payload, headers: response.headers };
 }
 
-async function openKlapSession(host, account, request = defaultRequest) {
+function sessionExpiry(response) {
+  const timeout = Number(readCookies(response).TIMEOUT);
+  const seconds = Number.isFinite(timeout) && timeout > 0 ? timeout : 86400;
+  return Date.now() + Math.max(1, seconds - 60) * 1000;
+}
+
+async function openKlapSession(host, account, request = defaultRequest, log = () => {}) {
   const localSeed = crypto.randomBytes(16);
   const first = await request(`http://${host}/app/handshake1`, { body: localSeed });
+  emitLog(log, `handshake host=${host} status=${first?.status || 0} bytes=${first?.body?.length || 0}`);
   if (!first || first.status !== 200 || !first.body || first.body.length < 48) throw plugDownError();
   const remoteSeed = first.body.subarray(0, 16);
   const serverHash = first.body.subarray(16, 48);
+  const cookies = readCookies(first);
+  if (cookies.TP_SESSIONID === "TIMEOUT") throw plugRetryError();
   const cookie = cookieFrom(first);
   const matched = matchHandshake(localSeed, remoteSeed, serverHash, account);
-  if (!matched) throw plugAuthError();
+  if (!matched) {
+    emitLog(log, `handshake host=${host} auth-mismatch`);
+    throw plugAuthError();
+  }
   const secondBody = handshake2Hash(matched.version, localSeed, remoteSeed, matched.hash);
   const second = await request(`http://${host}/app/handshake2`, { body: secondBody, cookie });
   if (!second || second.status !== 200) throw plugDownError();
+  emitLog(log, `handshake host=${host} ok version=${matched.version} label=${matched.label}`);
   const cipher = new KlapCipher(localSeed, remoteSeed, matched.hash);
+  const expiresAt = sessionExpiry(first);
   return {
     version: matched.version,
     label: matched.label,
+    expired() {
+      return Date.now() >= expiresAt;
+    },
     async send(payload) {
+      if (Date.now() >= expiresAt) throw plugRetryError();
       const plain = Buffer.from(typeof payload === "string" ? payload : JSON.stringify(payload));
       const { packet, seq } = cipher.encrypt(plain);
       const response = await request(`http://${host}/app/request?seq=${seq}`, { body: packet, cookie });
       if (!response) throw plugDownError();
-      if (response.status === 403) throw plugAuthError();
+      const again = readCookies(response);
+      if (response.status === 403 || again.TP_SESSIONID === "TIMEOUT") {
+        emitLog(log, `request host=${host} status=${response.status} retry`);
+        throw plugRetryError();
+      }
       if (response.status !== 200 || !response.body) throw plugDownError();
       let decoded;
       try {
         decoded = cipher.decrypt(response.body).toString("utf8");
         return JSON.parse(decoded);
       } catch (err) {
-        if (err.code === "plug-auth" || err.code === "plug-down") throw err;
+        if (err.code === "plug-auth" || err.code === "plug-down" || err.code === "plug-retry") throw err;
         throw plugDownError();
       }
     },
@@ -191,18 +303,49 @@ function sysInfoFrom(payload) {
   return info;
 }
 
-function createKlapDevice(host, account, request) {
-  let session = null;
+function createKlapDevice(host, account, request = defaultRequest, options = {}) {
+  const slot = options.slot || { session: null, chain: Promise.resolve(), accountKey: "" };
+  const log = options.log || (() => {});
+  const accountKey = `${account?.username || ""}\0${account?.password || ""}`;
+  function enqueue(fn) {
+    const run = slot.chain.then(fn, fn);
+    slot.chain = run.then(() => {}, () => {});
+    return run;
+  }
+  async function ensureSession(force) {
+    if (!force && slot.session && slot.accountKey === accountKey && !slot.session.expired()) return slot.session;
+    slot.session = null;
+    slot.accountKey = "";
+    const opened = await openKlapSession(host, account, request, log);
+    slot.session = opened;
+    slot.accountKey = accountKey;
+    return opened;
+  }
   async function send(payload) {
-    if (!session) session = await openKlapSession(host, account, request);
-    try {
-      return await session.send(payload);
-    } catch (err) {
-      session = null;
-      if (err.code === "plug-auth") throw err;
-      session = await openKlapSession(host, account, request);
-      return session.send(payload);
-    }
+    return enqueue(async () => {
+      try {
+        const current = await ensureSession(false);
+        return await current.send(payload);
+      } catch (err) {
+        if (err.code === "plug-auth") {
+          slot.session = null;
+          throw err;
+        }
+        if (err.code !== "plug-retry") {
+          slot.session = null;
+          if (err.code === "plug-down") throw err;
+          throw plugDownError();
+        }
+        try {
+          const current = await ensureSession(true);
+          return await current.send(payload);
+        } catch (again) {
+          slot.session = null;
+          if (again.code === "plug-auth") throw again;
+          throw plugDownError();
+        }
+      }
+    });
   }
   return {
     host,
@@ -236,6 +379,8 @@ module.exports = {
   KlapCipher,
   openKlapSession,
   createKlapDevice,
+  klapHttpRequest,
+  sanitizePlugLog,
   sysInfoFrom,
   plugAuthError,
   plugDownError,

@@ -2,6 +2,30 @@ const fs = require("fs");
 const path = require("path");
 
 const STREAM_HOSTS = /^https:\/\/(archive\.org|upload\.wikimedia\.org)\//;
+const REMOVED_STARTER_IDS = ["santas-surprise-1947"];
+
+function removedStarterId(id) {
+  const bare = String(id || "").replace(/^starter:/, "");
+  return REMOVED_STARTER_IDS.includes(bare);
+}
+
+function purgeRemovedStarters(dir) {
+  const removed = [];
+  if (!dir || !fs.existsSync(dir)) return removed;
+  for (const id of REMOVED_STARTER_IDS) {
+    for (const name of [id, `${id}.mp4`, `${id}.mp4.part`, `${id}.part`, `${id}.tmp.mp4`, `${id}.partial`]) {
+      const file = path.join(dir, name);
+      try {
+        if (!fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
+        fs.unlinkSync(file);
+        removed.push(file);
+      } catch {
+        // A locked cache file is tried again on the next startup.
+      }
+    }
+  }
+  return removed;
+}
 
 function catalogProblems(items) {
   const problems = [];
@@ -33,6 +57,7 @@ function loadCatalog(filePath) {
       .map((item) => {
         if (!item || typeof item !== "object") return null;
         const id = String(item.id || "").trim();
+        if (removedStarterId(id)) return null;
         const holiday = item.holiday === "christmas" || item.holiday === "halloween" ? item.holiday : null;
         const streamUrl = String(item.streamUrl || "");
         if (!/^[a-z0-9-]{3,80}$/.test(id) || !holiday) return null;
@@ -75,6 +100,7 @@ function starterCards(items, { theme, allAges = true, urlFor, disabledIds = [], 
   if (theme !== "halloween" && theme !== "christmas") return [];
   return (items || [])
     .filter((item) => {
+      if (removedStarterId(item.id)) return false;
       if (disabled.has(item.id)) return false;
       if (allAges && item.allAges === false) return false;
       if (item.holiday === "christmas" && item.color !== true) return false;
@@ -98,4 +124,13 @@ function starterCards(items, { theme, allAges = true, urlFor, disabledIds = [], 
     .filter((card) => card.url);
 }
 
-module.exports = { loadCatalog, starterFile, starterCards, catalogProblems, STREAM_HOSTS };
+module.exports = {
+  loadCatalog,
+  starterFile,
+  starterCards,
+  catalogProblems,
+  STREAM_HOSTS,
+  REMOVED_STARTER_IDS,
+  removedStarterId,
+  purgeRemovedStarters,
+};

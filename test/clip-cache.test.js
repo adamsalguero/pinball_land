@@ -236,3 +236,29 @@ test("a stall timeout pauses a cached clip and a pinned screen stays on video", 
     server.close();
   }
 });
+
+test("a blocklisted starter is deleted from the cache and never downloaded", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pinball-santa-"));
+  const cacheDir = path.join(dir, "cache");
+  await fsp.mkdir(cacheDir, { recursive: true });
+  await fsp.writeFile(path.join(cacheDir, "santas-surprise-1947.mp4"), "remove me");
+  let fetched = 0;
+  const cache = createClipCache({
+    items: [{
+      id: "santas-surprise-1947",
+      title: "Santa's Surprise",
+      holiday: "christmas",
+      streamUrl: "http://clips.test/santa.mp4",
+      color: true,
+    }],
+    cacheDir,
+    fetchImpl: async () => {
+      fetched += 1;
+      throw new Error("should not download");
+    },
+  });
+  const rows = await cache.runOnce();
+  assert.deepEqual(rows, []);
+  assert.equal(fetched, 0);
+  assert.equal(fs.existsSync(path.join(cacheDir, "santas-surprise-1947.mp4")), false);
+});

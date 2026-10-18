@@ -15,11 +15,11 @@ const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
 const { getLanIPv4s, isLanAddress, forwardedAddress, lanRequired, loopbackRequired } = require("./lan");
 const { Presentations } = require("./presentations");
 const { canonicalDisplayContent, layoutForDisplays, mapDisplaysToSlots } = require("./displays");
-const { PlugService, createPlugClient, createMockPlugClient } = require("./plugs");
+const { PlugService, createPlugClient, createMockPlugClient, sanitizePlugLog } = require("./plugs");
 const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./media");
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
-const { loadCatalog, starterFile, starterCards } = require("./catalog");
+const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
 const { bundledFile } = require("./bundled");
 const { createClipCache } = require("./clip-cache");
 const { prepareLogoSvg } = require("./logo-color");
@@ -209,10 +209,23 @@ function createApp({
     root: mediaRoot,
     catalogPath: mediaCatalog || path.join(mediaRoot, "library.json"),
   });
+  function writePlugLog(line) {
+    const text = sanitizePlugLog(line);
+    if (!text) return;
+    const root = dataDir || path.dirname(mediaRoot);
+    const dir = path.join(root, "logs");
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(path.join(dir, "plugs.log"), `${new Date().toISOString()} ${text}\n`);
+    } catch (err) {
+      console.error(err.message);
+    }
+  }
   const plugService = plugs || new PlugService({
-    client: process.env.PINBALL_PLUG_MOCK === "1" ? createMockPlugClient() : createPlugClient(),
+    client: process.env.PINBALL_PLUG_MOCK === "1" ? createMockPlugClient() : createPlugClient({ log: writePlugLog }),
     getConfig: () => localStore.get(),
     updateConfig: (patch) => localStore.update(patch),
+    log: writePlugLog,
   });
   const deviceFile = devicesPath || path.join(path.dirname(uploadRoot), "devices.json");
   const devices = new DeviceStore(deviceFile);
@@ -230,6 +243,8 @@ function createApp({
     nightlyAt: () => localStore.get().updates?.nightlyAt || "03:17",
     ids: clipIds.length ? clipIds : null,
   });
+  purgeRemovedStarters(path.join(mediaRoot, "cache"));
+  purgeRemovedStarters(path.join(mediaRoot, "christmas"));
   if (clipCache || process.env.PINBALL_CLIP_CACHE === "1") clips.start();
   let playback = null;
   const updateDataDir = dataDir || defaultDataDir();
@@ -1420,6 +1435,7 @@ function createApp({
       broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
+      broadcast();
       next(err);
     }
   });
@@ -1432,6 +1448,7 @@ function createApp({
       broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
+      broadcast();
       next(err);
     }
   });

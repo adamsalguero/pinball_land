@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
 const fs = require("fs");
+const net = require("net");
 const path = require("path");
 const zlib = require("zlib");
 const {
@@ -11,7 +12,9 @@ const {
   handshake2Hash,
   KlapCipher,
   openKlapSession,
+  createKlapDevice,
   PLUG_AUTH_MESSAGE,
+  PLUG_DOWN_MESSAGE,
   DEFAULT_KASA_USERNAME,
   DEFAULT_KASA_PASSWORD,
 } = require("../src/klap");
@@ -261,6 +264,205 @@ test("discovery broadcasts on each real subnet and skips APIPA adapters", () => 
   assert.ok(addresses.includes("255.255.255.255"));
   assert.equal(addresses.some((address) => address.startsWith("169.254.")), false);
   assert.equal(targets.every((target) => target.bind === "192.168.1.94"), true);
+});
+
+const ALLOWED_SHIP_HEADERS = new Set(["Host", "Content-Length", "Cookie", "Content-Type"]);
+
+function startShipServer({ username, password, version = "v2", mode = "ok" } = {}) {
+  let relay = 0;
+  let localSeed = null;
+  let auth = null;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let handshakes = 0;
+  let requests = 0;
+  const seenHeaders = [];
+  const server = net.createServer((socket) => {
+    const chunks = [];
+    socket.on("data", (chunk) => {
+      chunks.push(chunk);
+      const buf = Buffer.concat(chunks);
+      const split = buf.indexOf("\r\n\r\n");
+      if (split < 0) return;
+      const head = buf.subarray(0, split).toString("latin1");
+      const length = Number(/Content-Length:\s*(\d+)/.exec(head)?.[1] || 0);
+      if (buf.length < split + 4 + length) return;
+      const body = buf.subarray(split + 4, split + 4 + length);
+      chunks.length = 0;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const lines = head.split("\r\n");
+      const names = lines.slice(1).filter(Boolean).map((line) => line.slice(0, line.indexOf(":")));
+      seenHeaders.push(names);
+      const bad = names.some((name) => !ALLOWED_SHIP_HEADERS.has(name));
+      function respond(status, payload, extra = "") {
+        const data = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || "");
+        const reason = status === 200 ? "OK" : "Bad Request";
+        const res = `HTTP/1.1 ${status} ${reason}\r\n${extra}Server: SHIP 2.0\r\nContent-Length: ${data.length}\r\nContent-Type: text/html\r\n\r\n`;
+        socket.write(Buffer.concat([Buffer.from(res, "latin1"), data]));
+        inFlight -= 1;
+      }
+      if (bad || mode === "reject-all") return respond(400, Buffer.alloc(0));
+      const requestLine = lines[0] || "";
+      if (requestLine.startsWith("POST /app/handshake1")) {
+        handshakes += 1;
+        if (mode === "handshake-400") return respond(400, Buffer.alloc(0));
+        localSeed = Buffer.from(body);
+        auth = version === "v1" ? authHashV1(username, password) : authHashV2(username, password);
+        const hash = handshake1Hash(version, localSeed, REMOTE, auth);
+        return respond(200, Buffer.concat([REMOTE, hash]), "Set-Cookie: TP_SESSIONID=ship-session;TIMEOUT=86400\r\n");
+      }
+      if (requestLine.startsWith("POST /app/handshake2")) {
+        const expected = handshake2Hash(version, localSeed, REMOTE, auth);
+        if (!expected.equals(body)) return respond(403, Buffer.alloc(0));
+        if (!/Cookie: TP_SESSIONID=ship-session/.test(head)) return respond(400, Buffer.alloc(0));
+        return respond(200, Buffer.alloc(0));
+      }
+      if (requestLine.startsWith("POST /app/request")) {
+        requests += 1;
+        if (mode === "forbid-once" && requests === 1) return respond(403, Buffer.alloc(0));
+        const seq = Number(/seq=(-?\d+)/.exec(requestLine)?.[1]);
+        const cipher = new KlapCipher(localSeed, REMOTE, auth);
+        const plain = JSON.parse(cipher.decryptAt(body, seq).toString("utf8"));
+        let response;
+        if (plain.system?.get_sysinfo) {
+          response = {
+            system: {
+              get_sysinfo: {
+                err_code: 0,
+                alias: "Adam TV",
+                model: "HS103",
+                deviceId: "8006-hs103",
+                mac: "AC:A7:F1:D9:40:DC",
+                relay_state: relay,
+                mic_type: "IOT.SMARTPLUG",
+                hw_ver: "5.0",
+                sw_ver: "1.1.3",
+              },
+            },
+          };
+        } else if (plain.system?.set_relay_state) {
+          relay = plain.system.set_relay_state.state;
+          response = { system: { set_relay_state: { err_code: 0 } } };
+        } else {
+          response = { system: { get_sysinfo: { err_code: -1 } } };
+        }
+        return respond(200, cipher.encryptAt(Buffer.from(JSON.stringify(response)), seq));
+      }
+      return respond(400, Buffer.alloc(0));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      resolve({
+        port,
+        seenHeaders: () => seenHeaders,
+        maxInFlight: () => maxInFlight,
+        handshakes: () => handshakes,
+        close: () => new Promise((done) => server.close(done)),
+      });
+    });
+  });
+}
+
+test("SHIP 2.0 rejects extra headers and the raw KLAP client still turns the plug on", async () => {
+  const ship = await startShipServer({ username: "adam@example.com", password: "venue-secret" });
+  const logs = [];
+  try {
+    const bad = await new Promise((resolve) => {
+      const socket = net.connect(ship.port, "127.0.0.1", () => {
+        socket.write("POST /app/handshake1 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 16\r\nUser-Agent: undici\r\nAccept-Encoding: gzip\r\n\r\n");
+        socket.write(Buffer.alloc(16, 1));
+      });
+      const chunks = [];
+      socket.on("data", (chunk) => {
+        chunks.push(chunk);
+        const buf = Buffer.concat(chunks);
+        const split = buf.indexOf("\r\n\r\n");
+        if (split < 0) return;
+        const head = buf.subarray(0, split).toString("latin1");
+        const length = Number(/Content-Length:\s*(\d+)/.exec(head)?.[1] || 0);
+        if (buf.length < split + 4 + length) return;
+        socket.destroy();
+        resolve({ status: Number(/^HTTP\/1\.[01] (\d+)/.exec(head)?.[1]), bytes: length });
+      });
+    });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.bytes, 0);
+
+    const slot = { session: null, chain: Promise.resolve(), accountKey: "" };
+    const account = { username: "adam@example.com", password: "venue-secret" };
+    const host = `127.0.0.1:${ship.port}`;
+    const first = createKlapDevice(host, account, undefined, { slot, log: (line) => logs.push(line) });
+    const second = createKlapDevice(host, account, undefined, { slot, log: (line) => logs.push(line) });
+    const info = await first.getSysInfo();
+    assert.equal(info.alias, "Adam TV");
+    assert.equal(info.sw_ver, "1.1.3");
+    await Promise.all([first.setPowerState(true), second.setPowerState(false)]);
+    const again = await first.getSysInfo();
+    assert.equal(again.relay_state, 0);
+    assert.equal(ship.handshakes(), 1);
+    assert.equal(ship.maxInFlight(), 1);
+    const namesets = ship.seenHeaders();
+    assert.equal(namesets[0].includes("User-Agent"), true);
+    assert.equal(namesets[0].includes("Accept-Encoding"), true);
+    assert.ok(namesets.length > 1);
+    for (const names of namesets.slice(1)) {
+      assert.equal(names.every((name) => ALLOWED_SHIP_HEADERS.has(name)), true);
+      assert.equal(names.includes("Host"), true);
+      assert.equal(names.includes("Content-Length"), true);
+      assert.equal(names.some((name) => name !== "Host" && name.toLowerCase() === "host"), false);
+    }
+    const text = logs.join("\n");
+    assert.match(text, /handshake host=127\.0\.0\.1:\d+ ok version=v2 label=account/);
+    assert.equal(text.includes("venue-secret"), false);
+    assert.equal(text.includes("ship-session"), false);
+    assert.equal(text.includes("TP_SESSIONID"), false);
+  } finally {
+    await ship.close();
+  }
+});
+
+test("a SHIP handshake rejection is a transport failure, and a hash miss is the login error", async () => {
+  const down = await startShipServer({ mode: "handshake-400" });
+  try {
+    const device = createKlapDevice(`127.0.0.1:${down.port}`, { username: "adam@example.com", password: "venue-secret" });
+    await assert.rejects(() => device.getSysInfo(), (err) => {
+      assert.equal(err.code, "plug-down");
+      assert.equal(err.message, PLUG_DOWN_MESSAGE);
+      assert.equal(err.message.includes("400"), false);
+      return true;
+    });
+  } finally {
+    await down.close();
+  }
+  const auth = await startShipServer({ username: "owner@example.com", password: "real-secret" });
+  try {
+    const device = createKlapDevice(`127.0.0.1:${auth.port}`, { username: "adam@example.com", password: "venue-secret" });
+    await assert.rejects(() => device.getSysInfo(), (err) => {
+      assert.equal(err.code, "plug-auth");
+      assert.equal(err.message, PLUG_AUTH_MESSAGE);
+      assert.equal(err.message.includes("real-secret"), false);
+      return true;
+    });
+  } finally {
+    await auth.close();
+  }
+});
+
+test("a 403 after handshake starts a new session instead of asking for the login", async () => {
+  const ship = await startShipServer({ username: "adam@example.com", password: "venue-secret", mode: "forbid-once" });
+  try {
+    const device = createKlapDevice(`127.0.0.1:${ship.port}`, { username: "adam@example.com", password: "venue-secret" });
+    const info = await device.getSysInfo();
+    assert.equal(info.model, "HS103");
+    assert.equal(ship.handshakes() >= 2, true);
+    await device.setPowerState(true);
+    assert.equal((await device.getSysInfo()).relay_state, 1);
+  } finally {
+    await ship.close();
+  }
 });
 
 test("the installer and the update script allow plug discovery UDP on Public networks", () => {

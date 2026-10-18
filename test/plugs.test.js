@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { PlugService, isOpen, parseClock, LOGIN_NOTICE } = require("../src/plugs");
-const { plugAuthError } = require("../src/klap");
+const { PlugService, isOpen, parseClock, LOGIN_NOTICE, sanitizePlugLog } = require("../src/plugs");
+const { plugAuthError, plugDownError, PLUG_DOWN_MESSAGE } = require("../src/klap");
 
 function fakeDevice({ host, alias, model, deviceId, on }) {
   return {
@@ -137,4 +137,55 @@ test("TP-Link login stays on the server and a KLAP plug can be added by IP", asy
   assert.equal(needs.devices.some((device) => device.needsLogin), true);
   assert.equal(JSON.stringify(needs).includes("stack"), false);
   await assert.rejects(() => service.addHost("not-an-ip"), /IPv4 address/);
+});
+
+test("a transport error clears the login prompt and the log keeps the password out", async () => {
+  const lines = [];
+  const memory = {
+    plugs: {
+      devices: [{ id: "8006", name: "Adam TV", host: "192.168.1.159", protocol: "klap", needsLogin: true }],
+      assignments: { 1: "8006", 2: null, 3: null },
+    },
+  };
+  const service = new PlugService({
+    client: {
+      klap() {
+        return {
+          async setPowerState() {
+            throw plugDownError();
+          },
+        };
+      },
+    },
+    getConfig: () => memory,
+    updateConfig: async (patch) => {
+      memory.plugs = patch.plugs;
+    },
+    log: (line) => lines.push(line),
+  });
+  await assert.rejects(() => service.setSlotPower("1", true), (err) => {
+    assert.equal(err.code, "plug-down");
+    assert.equal(err.message, PLUG_DOWN_MESSAGE);
+    return true;
+  });
+  assert.equal(service.publicState().notice, "");
+  assert.equal(service.publicState().devices[0].needsLogin, false);
+  service.client.klap = () => ({
+    async setPowerState() {
+      throw plugAuthError();
+    },
+  });
+  await assert.rejects(() => service.setSlotPower("1", false), (err) => {
+    assert.equal(err.code, "plug-auth");
+    return true;
+  });
+  assert.equal(service.publicState().notice, LOGIN_NOTICE);
+  assert.equal(service.publicState().devices[0].needsLogin, true);
+  await service.setAccount({ username: "adam@example.com", password: "venue-secret" });
+  const text = lines.join("\n");
+  assert.match(text, /power host=192\.168\.1\.159 on=true fail code=plug-down/);
+  assert.match(text, /power host=192\.168\.1\.159 on=false fail code=plug-auth/);
+  assert.match(text, /account saved/);
+  assert.equal(text.includes("venue-secret"), false);
+  assert.equal(sanitizePlugLog("cookie=TP_SESSIONID=ship-session password=venue-secret"), "");
 });

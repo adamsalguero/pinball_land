@@ -301,6 +301,7 @@ test("catalog and youtube inputs are explicit", () => {
   assert.ok(items.filter((item) => item.holiday === "christmas").every((item) => item.color === true));
   assert.equal(items.find((item) => item.id === "christmas-comes-1936").holiday, "christmas");
   assert.equal(items.some((item) => item.id === "a-christmas-carol-1910"), false);
+  assert.equal(items.some((item) => item.id === "santas-surprise-1947"), false);
   const video = parseYoutubeInput("https://www.youtube.com/watch?v=abcdefghijk");
   assert.deepEqual(video, { kind: "video", id: "abcdefghijk" });
   const list = parseYoutubeInput("https://www.youtube.com/playlist?list=PLabcdefghijklmnop");

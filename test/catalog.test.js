@@ -2,7 +2,8 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { catalogProblems, loadCatalog, starterCards } = require("../src/catalog");
+const os = require("os");
+const { catalogProblems, loadCatalog, starterCards, purgeRemovedStarters, removedStarterId } = require("../src/catalog");
 const { normalizeSlogans } = require("../src/config");
 
 test("video catalog entries are well-formed, unique, and Christmas is color", () => {
@@ -42,6 +43,39 @@ test("video catalog entries are well-formed, unique, and Christmas is color", ()
   });
   assert.ok(christmas.length >= 1);
   assert.ok(christmas.every((card) => card.color === true));
+  assert.equal(raw.items.some((item) => item.id === "santas-surprise-1947"), false);
+  assert.equal(removedStarterId("santas-surprise-1947"), true);
+  assert.equal(removedStarterId("starter:santas-surprise-1947"), true);
+  const blocked = path.join(os.tmpdir(), `pinball-catalog-${Date.now()}.json`);
+  fs.writeFileSync(blocked, JSON.stringify({
+    items: [
+      ...raw.items,
+      {
+        id: "santas-surprise-1947",
+        title: "Santa's Surprise",
+        holiday: "christmas",
+        allAges: true,
+        color: true,
+        streamUrl: "https://archive.org/download/santas-surprise-1947/Santa%27s%20Surprise%20%281947%29.mp4",
+        durationSec: 501,
+      },
+    ],
+  }));
+  const filtered = loadCatalog(blocked);
+  fs.unlinkSync(blocked);
+  assert.equal(filtered.some((item) => item.id === "santas-surprise-1947"), false);
+  assert.equal(starterCards(filtered, {
+    theme: "christmas",
+    isReady: () => true,
+    urlFor: (id) => `/media/cache/${id}`,
+  }).some((card) => card.id.includes("santas-surprise")), false);
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "pinball-santa-"));
+  const cached = path.join(cacheDir, "santas-surprise-1947.mp4");
+  fs.writeFileSync(cached, "remove me");
+  fs.writeFileSync(path.join(cacheDir, "santas-surprise-1947"), "remove me");
+  const gone = purgeRemovedStarters(cacheDir);
+  assert.equal(fs.existsSync(cached), false);
+  assert.equal(gone.length, 2);
   const slogans = normalizeSlogans(undefined);
   assert.equal(slogans.pinnacle, "");
   assert.equal(slogans.halloween, "Happy Halloween!");
