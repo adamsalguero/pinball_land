@@ -379,6 +379,84 @@ test("rotation changes every screen on the interval, not between ticks", () => {
   assert.deepEqual(keys(startedAt + 30000 + 500), next);
 });
 
+test("one holiday clip is never copied, and a season with none stays on non-video screens", () => {
+  const clip = {
+    type: "video",
+    id: "starter:skeleton-dance-1929",
+    url: "/media/cache/skeleton-dance-1929",
+    durationSec: 331,
+    local: true,
+  };
+  const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
+    starters: [clip],
+  });
+  const layout = {
+    1: { content: "rotation", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  let sawVideo = false;
+  for (let tick = 0; tick < 24; tick += 1) {
+    const plan = planRotation(playlist, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now: tick * 30000,
+    });
+    const cards = ["1", "2", "3"].map((slot) => plan[slot]);
+    const keys = cards.map((card) => rotationKey(card));
+    assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
+    const videos = cards.filter((card) => card?.type === "video");
+    assert.ok(videos.length <= 1, JSON.stringify(videos.map((card) => card.id)));
+    for (const card of videos) {
+      assert.equal(card.id, clip.id);
+      assert.equal(card.url, clip.url);
+      sawVideo = true;
+    }
+    for (const card of cards) {
+      if (card?.type === "video") continue;
+      assert.ok(["logo", "amenity", "clock", "pinboard"].includes(card.type), card?.type);
+    }
+  }
+  assert.equal(sawVideo, true);
+
+  const pinned = {
+    1: { content: "video", enabled: true },
+    2: { content: "video", enabled: true },
+    3: { content: "video", enabled: true },
+  };
+  const shared = planRotation(playlist, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout: pinned,
+    now: 0,
+  });
+  const pinnedVideos = ["1", "2", "3"].map((slot) => shared[slot]).filter((card) => card?.type === "video" && card.url);
+  assert.equal(pinnedVideos.length, 1);
+  assert.equal(pinnedVideos[0].id, clip.id);
+  for (const slot of ["1", "2", "3"]) {
+    const card = shared[slot];
+    if (card?.type === "video" && card.url) continue;
+    assert.ok(["logo", "amenity", "clock", "pinboard"].includes(card.type), JSON.stringify(card));
+  }
+
+  const quiet = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] });
+  for (let tick = 0; tick < 12; tick += 1) {
+    const plan = planRotation(quiet, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now: tick * 30000,
+    });
+    const cards = ["1", "2", "3"].map((slot) => plan[slot]);
+    assert.equal(cards.some((card) => card?.type === "video"), false);
+    assert.equal(new Set(cards.map((card) => rotationKey(card))).size, 3);
+  }
+});
+
 test("logo screens swap together at halfway and never share a logo", () => {
   const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
     starters: [{ type: "video", id: "skeleton-dance-1929", url: "/media/cache/skeleton-dance-1929", durationSec: 331 }],

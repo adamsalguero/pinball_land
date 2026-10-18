@@ -342,13 +342,15 @@ test("cached halloween cartoon advances past ten seconds in Chrome", async ({ re
     await page.waitForFunction(() => {
       const video = document.querySelector("#wall-video");
       const screen = document.querySelector("#screen");
+      const src = String(video?.currentSrc || "");
       return screen?.dataset.mode === "video"
         && video
         && !video.hidden
         && !video.paused
         && video.readyState >= 2
         && video.currentTime > 0.3
-        && String(video.currentSrc || "").includes("/media/cache/skeleton-dance-1929");
+        && src.startsWith("blob:")
+        && String(video.dataset.mediaUrl || "").includes("/media/cache/skeleton-dance-1929");
     }, null, { timeout: 30000 });
     await page.waitForTimeout(1500);
     const sample = () => page.evaluate(() => {

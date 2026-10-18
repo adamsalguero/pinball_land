@@ -10,6 +10,7 @@ const { ensureCertificate } = require("./certs");
 const { slotLabel } = require("./displays");
 const { defaultDataDir, dataLayout, migrateData, resolveDataDir } = require("./paths");
 const { displayOrigins } = require("./display-origins");
+const { guestPortFor } = require("./tunnel");
 
 const KEEP_ALIVE_MS = 5000;
 const HEADERS_TIMEOUT_MS = 20000;
@@ -117,6 +118,7 @@ function printBanner(config, httpsReady, origins) {
     console.log("Browser share:       HTTPS did not start. Screen share needs it. See PRESENTING.md.");
   }
   console.log("--------------------------------");
+  console.log(`Guest tunnel:        http://127.0.0.1:${guestPortFor(port)}/  (Funnel and Cloudflare point here, not at ${port})`);
   console.log("Listening on 0.0.0.0 so other devices on this WiFi can connect.");
   console.log("Wall TVs:            npm run kiosk   (windows for enabled displays)");
   console.log("");
@@ -187,7 +189,7 @@ async function launchServer() {
   const config = configStore.get();
   const store = await Store.load(paths.state);
   let httpsReady = false;
-  const { app, attachWebSocket } = createApp({
+  const { app, guestApp, attachWebSocket } = createApp({
     store,
     pin: config.pin,
     publicDir: path.join(root, "public"),
@@ -216,6 +218,16 @@ async function launchServer() {
     throw err;
   }
   const server = bound.servers[0];
+  const guestPort = guestPortFor(config.port);
+  const guestServer = http.createServer(guestApp);
+  tuneServer(guestServer);
+  try {
+    await listen(guestServer, guestPort, "0.0.0.0");
+    bound.servers.push(guestServer);
+  } catch (err) {
+    console.warn(`Guest tunnel port ${guestPort} did not start (${err.message}). Point Funnel and Cloudflare at that port only after it is listening. Do not point them at ${config.port}.`);
+    await closeQuiet(guestServer);
+  }
 
   try {
     const httpsServer = await startHttps({
@@ -270,6 +282,7 @@ module.exports = {
   reportListenError,
   bindDisplayServers,
   tuneServer,
+  guestPortFor,
   KEEP_ALIVE_MS,
   HEADERS_TIMEOUT_MS,
   REQUEST_TIMEOUT_MS,

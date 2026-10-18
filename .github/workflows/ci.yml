@@ -58,3 +58,16 @@ jobs:
       - name: Enable autoupdate dry run
         shell: pwsh
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -DryRun
+      - name: Ensure Chrome
+        shell: pwsh
+        run: |
+          $chrome = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
+          if (Test-Path $chrome) { Write-Host "Chrome present at $chrome"; exit 0 }
+          winget install --id Google.Chrome -e --accept-source-agreements --accept-package-agreements
+          if (-not (Test-Path $chrome)) { Write-Error "Google Chrome is not installed"; exit 1 }
+      - name: Headed blob playback
+        timeout-minutes: 45
+        shell: pwsh
+        env:
+          PINBALL_BLOB_SOAK_MS: "1260000"
+        run: node scripts/blob-soak.js

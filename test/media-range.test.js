@@ -54,8 +54,10 @@ test("open-ended ranges are capped at 4 MB with a matching Content-Range", async
     assert.equal(rest.headers.get("content-length"), "80");
     assert.equal(Buffer.from(await rest.arrayBuffer())[0], 9);
     const whole = await fetch(`http://127.0.0.1:${port}/clip.mp4`);
-    assert.equal(whole.status, 206);
-    assert.equal(whole.headers.get("content-length"), String(MAX_RANGE_BYTES));
+    assert.equal(whole.status, 200);
+    assert.equal(whole.headers.get("content-range"), null);
+    assert.equal(whole.headers.get("content-length"), String(size));
+    assert.equal(Buffer.from(await whole.arrayBuffer()).length, size);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

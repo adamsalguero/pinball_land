@@ -242,6 +242,7 @@ test("a blocklisted starter is deleted from the cache and never downloaded", asy
   const cacheDir = path.join(dir, "cache");
   await fsp.mkdir(cacheDir, { recursive: true });
   await fsp.writeFile(path.join(cacheDir, "santas-surprise-1947.mp4"), "remove me");
+  await fsp.writeFile(path.join(cacheDir, "swing-you-sinners-1930.mp4"), "remove me");
   let fetched = 0;
   const cache = createClipCache({
     items: [{
@@ -250,6 +251,11 @@ test("a blocklisted starter is deleted from the cache and never downloaded", asy
       holiday: "christmas",
       streamUrl: "http://clips.test/santa.mp4",
       color: true,
+    }, {
+      id: "swing-you-sinners-1930",
+      title: "Swing You Sinners!",
+      holiday: "halloween",
+      streamUrl: "http://clips.test/swing.mp4",
     }],
     cacheDir,
     fetchImpl: async () => {
@@ -261,4 +267,5 @@ test("a blocklisted starter is deleted from the cache and never downloaded", asy
   assert.deepEqual(rows, []);
   assert.equal(fetched, 0);
   assert.equal(fs.existsSync(path.join(cacheDir, "santas-surprise-1947.mp4")), false);
+  assert.equal(fs.existsSync(path.join(cacheDir, "swing-you-sinners-1930.mp4")), false);
 });

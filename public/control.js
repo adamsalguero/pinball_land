@@ -1196,11 +1196,24 @@ function renderMedia() {
   }
 }
 
-function renderMotion() {
-  const motion = current.motion === "off" ? "off" : "subtle";
-  for (const button of document.querySelectorAll("[data-motion]")) {
-    button.classList.toggle("active", button.dataset.motion === motion);
-  }
+function assignedTvsOn() {
+  const plugs = current.plugs || {};
+  const ids = new Set(Object.values(plugs.assignments || {}).filter(Boolean));
+  const devices = (plugs.devices || []).filter((device) => ids.has(device.id));
+  if (!devices.length) return null;
+  if (devices.every((device) => device.on === true)) return true;
+  if (devices.some((device) => device.on === true)) return true;
+  if (devices.some((device) => device.on === false)) return false;
+  return null;
+}
+
+function renderTvs() {
+  const button = document.getElementById("tvs-toggle");
+  if (!button) return;
+  const on = assignedTvsOn();
+  button.textContent = on === true ? "TVs On" : on === false ? "TVs Off" : "TVs";
+  button.classList.toggle("primary", on === true);
+  button.setAttribute("aria-pressed", on === true ? "true" : "false");
 }
 
 function render() {
@@ -1221,7 +1234,7 @@ function render() {
   renderPhotos();
   renderAdmin();
   renderAccess();
-  renderMotion();
+  renderTvs();
   fillSlogans();
 }
 
@@ -1647,18 +1660,13 @@ function renderAccess() {
   const status = document.getElementById("public-access-status");
   if (!status || document.getElementById("app").hidden) return;
   const access = current.publicAccess || {};
-  const admin = current.adminAccess || {};
   const guest = current.guest || {};
   document.getElementById("public-access-on")?.classList.toggle("active", access.enabled === true);
   document.getElementById("public-access-off")?.classList.toggle("active", access.enabled !== true);
   document.getElementById("pinboard-on")?.classList.toggle("active", guest.pinboard !== false);
   document.getElementById("pinboard-off")?.classList.toggle("active", guest.pinboard === false);
-  document.getElementById("admin-internet-on")?.classList.toggle("active", admin.internet !== false);
-  document.getElementById("admin-internet-off")?.classList.toggle("active", admin.internet === false);
   const cloudflare = document.getElementById("public-cloudflare");
   if (cloudflare && document.activeElement !== cloudflare) cloudflare.checked = access.cloudflare === true;
-  const longPin = document.getElementById("admin-long-pin");
-  if (longPin && document.activeElement !== longPin) longPin.checked = admin.longPin !== false;
   const url = access.url ? access.url : "";
   status.textContent = access.enabled
     ? (url ? `${access.detail || "Public"} · ${url}` : (access.detail || "Waiting for Tailscale Funnel."))
@@ -1681,44 +1689,10 @@ async function renderAdmin() {
   const nightly = document.getElementById("update-nightly");
   if (enabled && document.activeElement !== enabled) enabled.checked = updates.enabled !== false;
   if (nightly && document.activeElement !== nightly && updates.nightlyAt) nightly.value = updates.nightlyAt;
-  const qr = document.getElementById("join-qr");
-  if (qr && !qr.dataset.loaded) {
-    qr.src = "/api/admin/join-qr";
-    qr.dataset.loaded = "1";
-  }
-  try {
-    const info = await api("/api/admin/bootstrap");
-    document.getElementById("join-link").textContent = info.joinUrl;
-    const list = document.getElementById("device-list");
-    list.replaceChildren();
-    for (const device of info.devices || []) {
-      const row = document.createElement("div");
-      row.className = "card";
-      row.textContent = device.name;
-      const revoke = document.createElement("button");
-      revoke.type = "button";
-      revoke.className = "btn ghost compact";
-      revoke.textContent = "Revoke";
-      revoke.addEventListener("click", async () => {
-        await api(`/api/devices/${device.id}`, { method: "DELETE" });
-        renderAdmin();
-      });
-      row.append(revoke);
-      list.append(row);
-    }
-  } catch {
-    // still locked
-  }
 }
 
 for (const button of document.querySelectorAll("[data-tab]")) {
   button.addEventListener("click", () => showTab(button.dataset.tab));
-}
-for (const button of document.querySelectorAll("[data-motion]")) {
-  button.addEventListener("click", async () => {
-    applyPayload(await api("/api/motion", { method: "PUT", body: { motion: button.dataset.motion } }));
-    toast(button.dataset.motion === "off" ? "Transitions off" : "Transitions subtle");
-  });
 }
 document.getElementById("youtube-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1737,11 +1711,6 @@ document.getElementById("pin-form").addEventListener("submit", async (event) => 
 document.getElementById("reset-pin").addEventListener("click", async () => {
   await api("/api/pin/reset", { method: "POST" });
   toast("PIN reset to the default");
-});
-document.getElementById("revoke-all").addEventListener("click", async () => {
-  await api("/api/devices/revoke-all", { method: "POST" });
-  localStorage.removeItem("pl-admin-device");
-  location.reload();
 });
 document.getElementById("slogan-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1773,11 +1742,6 @@ async function savePublic(patch) {
   toast("Public access saved");
 }
 
-async function saveAdminAccess(patch) {
-  applyPayload(await api("/api/admin-access", { method: "PUT", body: patch }));
-  toast("Admin access saved");
-}
-
 document.getElementById("public-access-on")?.addEventListener("click", () => savePublic({ enabled: true }));
 document.getElementById("public-access-off")?.addEventListener("click", () => savePublic({ enabled: false }));
 document.getElementById("public-cloudflare")?.addEventListener("change", (event) => {
@@ -1791,10 +1755,15 @@ document.getElementById("pinboard-off")?.addEventListener("click", async () => {
   applyPayload(await api("/api/guest-photos/settings", { method: "PUT", body: { pinboard: false } }));
   toast("Pinboard off");
 });
-document.getElementById("admin-internet-on")?.addEventListener("click", () => saveAdminAccess({ internet: true }));
-document.getElementById("admin-internet-off")?.addEventListener("click", () => saveAdminAccess({ internet: false }));
-document.getElementById("admin-long-pin")?.addEventListener("change", (event) => {
-  saveAdminAccess({ longPin: event.target.checked });
+document.getElementById("tvs-toggle")?.addEventListener("click", async () => {
+  const turningOn = assignedTvsOn() !== true;
+  try {
+    applyPayload(await api("/api/plugs/power", { method: "POST", body: { on: turningOn } }));
+    toast(turningOn ? "TVs on" : "TVs off");
+  } catch (err) {
+    toast(err.message || "The plug did not answer.");
+  }
+  renderTvs();
 });
 document.getElementById("update-now").addEventListener("click", async () => {
   const result = await api("/api/updates/now", { method: "POST" });

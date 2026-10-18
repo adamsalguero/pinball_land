@@ -39,6 +39,7 @@
         </div>
         <div class="theme-toggle">
           <button id="guest-toggle" class="btn" type="button">Guest app</button>
+          <button id="tvs-toggle" class="btn" type="button">TVs</button>
           <button id="logout" class="btn ghost compact" type="button">Lock</button>
         </div>
       </header>
@@ -115,12 +116,7 @@
               <button class="btn" type="button" id="pinboard-off">Off</button>
             </div>
             <p class="muted">Off hides the wall pinboard, the QR card, and guest photo upload.</p>
-            <h2>Allow admin from internet</h2>
-            <div class="theme-toggle">
-              <button class="btn" type="button" id="admin-internet-on">On</button>
-              <button class="btn" type="button" id="admin-internet-off">Off</button>
-            </div>
-            <label class="muted"><input id="admin-long-pin" type="checkbox" /> Require a PIN of 6 or more digits off the venue WiFi</label>
+            <p class="muted">Admin stays on the venue WiFi. The public link only opens the guest app.</p>
           </section>
           <section id="airplay-section">
             <h2>AirPlay</h2>
@@ -155,14 +151,6 @@
             <div id="plugs-root"></div>
           </section>
           <section>
-            <h2>Transitions</h2>
-            <p class="muted">A short crossfade between cards, or off. Screens change a few seconds apart.</p>
-            <div class="theme-toggle" id="motion-toggle">
-              <button class="btn" type="button" data-motion="subtle">Subtle</button>
-              <button class="btn" type="button" data-motion="off">Off</button>
-            </div>
-          </section>
-          <section>
             <h2>Updates</h2>
             <p class="muted">At sign-in the PC checks GitHub main before the server starts, then again at this time. A bad update rolls back. Scores, photos, and settings stay put.</p>
             <p id="version-line" class="muted"></p>
@@ -173,13 +161,6 @@
               <button class="btn" type="submit">Save update schedule</button>
             </form>
             <button id="update-now" class="btn" type="button">Update now</button>
-          </section>
-          <section>
-            <h2>This device</h2>
-            <img id="join-qr" alt="Admin install QR" width="180" height="180" />
-            <p id="join-link" class="muted"></p>
-            <div id="device-list" class="stack"></div>
-            <button id="revoke-all" class="btn danger" type="button">Sign out all devices</button>
           </section>
           <section>
             <h2>PIN</h2>

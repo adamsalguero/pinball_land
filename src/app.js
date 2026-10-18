@@ -34,6 +34,7 @@ const {
   scanPage,
 } = require("./guest-link");
 const { detectTailscale, startQuickTunnel } = require("./public-access");
+const { isTunneledRequest, isGuestRoute, guestPortFor } = require("./tunnel");
 const { maskProfanity } = require("./text-filter");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
 const { isInside, defaultDataDir, dataLayout } = require("./paths");
@@ -253,6 +254,7 @@ function createApp({
     ids: clipIds.length ? clipIds : null,
   });
   purgeRemovedStarters(path.join(mediaRoot, "cache"));
+  purgeRemovedStarters(path.join(mediaRoot, "halloween"));
   purgeRemovedStarters(path.join(mediaRoot, "christmas"));
   if (clipCache || process.env.PINBALL_CLIP_CACHE === "1") clips.start();
   let playback = null;
@@ -423,7 +425,7 @@ function createApp({
         })),
       },
       playback: publicPlayback(),
-      motion: config.motion,
+      motion: "subtle",
       slogans: config.slogans,
       motionSync,
       rotationTiming: timing,
@@ -438,8 +440,7 @@ function createApp({
         detail: publicStatus.detail || "",
       },
       adminAccess: {
-        internet: config.admin?.internet !== false,
-        longPin: config.admin?.longPin !== false,
+        lanOnly: true,
       },
       guest: {
         path: "/app",
@@ -682,10 +683,8 @@ function createApp({
   }
 
   function isPublicRequest(req) {
-    if (req.headers["tailscale-funnel"] || req.headers["x-tailscale-funnel"]) return true;
-    const host = String(req.headers.host || "").split(":")[0];
-    if (/\.ts\.net$/i.test(host) || /trycloudflare\.com$/i.test(host)) return true;
-    return !isLanAddress(forwardedAddress(req));
+    if (req.guestListener) return true;
+    return isTunneledRequest(req);
   }
 
   function stopTunnel() {
@@ -718,7 +717,7 @@ function createApp({
     if (access.cloudflare && !process.env.NODE_TEST_CONTEXT) {
       if (!tunnel) {
         tunnel = startQuickTunnel({
-          port: currentConfig().port,
+          port: guestPortFor(currentConfig().port),
           onUrl(url) {
             tunnelUrl = url;
             publicStatus = { url, source: "cloudflare", detail: "Cloudflare quick tunnel", checkedAt: clockNow() };
@@ -790,6 +789,12 @@ function createApp({
     return res.status(403).type("html").send(scanPage());
   }
 
+  app.use((req, res, next) => {
+    if (!req.guestListener && !isTunneledRequest(req)) return next();
+    if (!isGuestRoute(req)) return res.status(404).type("text/plain").send("Not found");
+    return requireGuest(req, res, next);
+  });
+
   function rateKey(req) {
     const cookie = parseCookies(req.headers.cookie)[GUEST_COOKIE] || "";
     const stamp = cookie ? crypto.createHash("sha256").update(cookie).digest("hex").slice(0, 16) : "open";
@@ -804,31 +809,20 @@ function createApp({
     return hits;
   }
 
-  function internetAdminOff(req) {
-    return isPublicRequest(req) && currentConfig().admin?.internet === false;
-  }
-
-  function longPinBlocks(req) {
-    return isPublicRequest(req) && currentConfig().admin?.longPin !== false && String(currentPin()).length < 6;
-  }
-
   function pinAccepted(req, submitted) {
+    if (isPublicRequest(req)) return false;
     const value = submitted === undefined ? req.get("x-pin") : submitted;
-    if (!pinMatches(value)) return false;
-    if (longPinBlocks(req)) return false;
-    return true;
+    return pinMatches(value);
   }
 
   function isAuthed(req) {
-    if (internetAdminOff(req)) return false;
+    if (isPublicRequest(req)) return false;
     if (devices.find(presentedToken(req))) return true;
     return pinAccepted(req);
   }
 
   function clientTrusted(req) {
-    if (!isPublicRequest(req)) return true;
-    if (currentConfig().admin?.internet === false) return false;
-    return Boolean(devices.find(presentedToken(req)));
+    return !isPublicRequest(req);
   }
 
   function recordFailure(ip) {
@@ -892,9 +886,7 @@ function createApp({
   }
 
   function requirePin(req, res, next) {
-    if (internetAdminOff(req)) {
-      return sendJson(res, 403, { error: "Admin from the internet is turned off." });
-    }
+    if (isPublicRequest(req)) return sendJson(res, 404, { error: "Not found" });
     const device = devices.find(presentedToken(req));
     if (device) {
       if (csrfBlocks(req)) return sendJson(res, 403, { error: "Refresh the admin page and try again." });
@@ -910,9 +902,6 @@ function createApp({
       const wait = paceMs(ip);
       if (!wait) return sendJson(res, 401, { error: "PIN required" });
       return setTimeout(() => sendJson(res, 401, { error: "PIN required" }), wait);
-    }
-    if (longPinBlocks(req)) {
-      return sendJson(res, 403, { error: "Set a PIN of 6 or more digits on the venue WiFi before signing in from the internet." });
     }
     if (csrfBlocks(req)) return sendJson(res, 403, { error: "Refresh the admin page and try again." });
     loginFailures.delete(ip);
@@ -938,9 +927,7 @@ function createApp({
 
   app.post("/api/login", async (req, res, next) => {
     try {
-      if (internetAdminOff(req)) {
-        return sendJson(res, 403, { error: "Admin from the internet is turned off." });
-      }
+      if (isPublicRequest(req)) return sendJson(res, 404, { error: "Not found" });
       const ip = forwardedAddress(req);
       if (recentFailures(ip).length >= LOGIN_LIMIT) {
         return sendJson(res, 429, { error: "Too many PIN attempts. Wait 15 minutes." });
@@ -950,9 +937,6 @@ function createApp({
       if (!pinMatches(req.body?.pin)) {
         recordFailure(ip);
         return sendJson(res, 401, { error: "Wrong PIN" });
-      }
-      if (longPinBlocks(req)) {
-        return sendJson(res, 403, { error: "Set a PIN of 6 or more digits on the venue WiFi before signing in from the internet." });
       }
       loginFailures.delete(ip);
       const issued = devices.issue(req.body?.name);
@@ -1504,6 +1488,9 @@ function createApp({
     const readyState = Number.isFinite(Number(body?.readyState)) ? Number(body.readyState) : "";
     const currentTime = Number.isFinite(Number(body?.currentTime)) ? Number(body.currentTime).toFixed(2) : "";
     const src = String(body?.src || "").replace(/\s+/g, "").slice(0, 180);
+    const bytes = Number.isFinite(Number(body?.bytes)) ? String(Math.round(Number(body.bytes))) : "";
+    const ms = Number.isFinite(Number(body?.ms)) ? String(Math.round(Number(body.ms))) : "";
+    const offset = Number.isFinite(Number(body?.offset)) ? Number(body.offset).toFixed(2) : "";
     const slot = ["1", "2", "3"].includes(String(body?.slot || "")) ? String(body.slot) : "";
     const nowMs = clockNow();
     const noisy = event === "waiting" || event === "suspend" || event === "stalled" || event === "abort" || event === "emptied";
@@ -1511,7 +1498,7 @@ function createApp({
     if (!noisy || !seenVideoLog.has(dedupeKey)) {
       if (noisy) seenVideoLog.add(dedupeKey);
       appendVideoLog(
-        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}`,
+        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src} bytes=${bytes} ms=${ms} offset=${offset}`,
       );
     }
     const state = store.getState();
@@ -2044,20 +2031,27 @@ function createApp({
     }
   });
 
-  app.put("/api/admin-access", requirePin, async (req, res, next) => {
-    try {
-      const current = currentConfig().admin || {};
-      await localStore.update({
-        admin: {
-          internet: req.body?.internet === undefined ? current.internet !== false : req.body.internet !== false,
-          longPin: req.body?.longPin === undefined ? current.longPin !== false : req.body.longPin !== false,
-        },
-      });
-      broadcast();
-      sendJson(res, 200, payload());
-    } catch (err) {
-      next(err);
-    }
+  app.get("/api/guest", requireGuest, (req, res) => {
+    const full = payload();
+    const boards = (full.state?.leaderboards || [])
+      .filter((board) => board.kind === "machine")
+      .map((board) => ({
+        id: board.id,
+        name: board.name,
+        kind: board.kind,
+        rows: (board.rows || []).map((row) => ({ name: row.name, score: row.score })),
+      }));
+    sendJson(res, 200, {
+      state: {
+        theme: full.state?.theme || "pinnacle",
+        leaderboards: boards,
+      },
+      guest: {
+        pinboard: full.guest?.pinboard !== false,
+        paused: full.guest?.paused === true,
+        eventName: full.guest?.eventName || "",
+      },
+    });
   });
 
   app.post("/api/guest-photos/:id/approve", requirePin, async (req, res, next) => {
@@ -2613,6 +2607,10 @@ function createApp({
   function attachWebSocket(server) {
     const wss = new WebSocketServer({ server, path: "/ws" });
     wss.on("connection", (socket, req) => {
+      if (isTunneledRequest(req)) {
+        socket.close();
+        return;
+      }
       socket.trusted = clientTrusted(req);
       socket.remoteAddress = req.socket?.remoteAddress || "";
       clients.add(socket);
@@ -2625,7 +2623,12 @@ function createApp({
     return wss;
   }
 
-  return { app, attachWebSocket, presentations };
+  function guestApp(req, res) {
+    req.guestListener = true;
+    return app(req, res);
+  }
+
+  return { app, guestApp, attachWebSocket, presentations };
 }
 
 module.exports = { createApp };

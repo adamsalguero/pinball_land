@@ -5,14 +5,15 @@
 .DESCRIPTION
   Idempotent. Safe to re-run. Installs Tailscale (winget, then the stable MSI),
   starts the Tailscale service, prints a one-time login URL if this PC is not
-  on a tailnet yet, and serves local port 3000 on
+  on a tailnet yet, and serves the guest-only port 3010 on
   https://<machine>.<tailnet>.ts.net. The Tailscale service keeps Funnel up
   across reboot. Then turn Public access on in Admin, Settings.
+  Do not point Funnel at port 3000. That port is the kiosk, including admin.
 .PARAMETER Port
-  Local port the kiosk server listens on. Default 3000.
+  Guest-only port. Default 3010. The kiosk opens this beside port 3000.
 #>
 param(
-  [int]$Port = 3000
+  [int]$Port = 3010
 )
 
 $ErrorActionPreference = "Stop"

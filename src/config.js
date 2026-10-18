@@ -63,8 +63,8 @@ function normalizeMediaSettings(raw) {
   };
 }
 
-function normalizeMotion(raw) {
-  return String(raw || "") === "off" ? "off" : "subtle";
+function normalizeMotion() {
+  return "subtle";
 }
 
 function httpBaseUrl(value) {

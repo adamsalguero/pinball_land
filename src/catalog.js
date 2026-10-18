@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const STREAM_HOSTS = /^https:\/\/(archive\.org|upload\.wikimedia\.org)\//;
-const REMOVED_STARTER_IDS = ["santas-surprise-1947"];
+const REMOVED_STARTER_IDS = ["santas-surprise-1947", "good-will-to-men-1955", "swing-you-sinners-1930"];
 
 function removedStarterId(id) {
   const bare = String(id || "").replace(/^starter:/, "");
