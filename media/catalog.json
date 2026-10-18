@@ -1,7 +1,7 @@
 {
   "version": 2,
   "verified": "2026-10-17",
-  "notes": "Direct URLs were checked with HTTP HEAD and a short playback probe. Halloween may be black and white. Christmas entries are color and family-friendly. Nothing here is committed as a video file.",
+  "notes": "Direct URLs were checked with HTTP HEAD and a short playback probe. Halloween may be black and white. Christmas entries are color and family-friendly. Santa's Surprise (1947, santas-surprise-1947) is blocklisted and must not be added back. Nothing here is committed as a video file.",
   "items": [
     {
       "id": "skeleton-dance-1929",
@@ -47,21 +47,6 @@
       "width": 480,
       "height": 360,
       "bytes": 20491508
-    },
-    {
-      "id": "santas-surprise-1947",
-      "title": "Santa's Surprise",
-      "holiday": "christmas",
-      "allAges": true,
-      "color": true,
-      "year": 1947,
-      "license": "Public domain. Famous Studios Noveltoon, U.S. publication 1947. Color.",
-      "sourceUrl": "https://archive.org/details/santas-surprise-1947",
-      "streamUrl": "https://archive.org/download/santas-surprise-1947/Santa%27s%20Surprise%20%281947%29.mp4",
-      "durationSec": 501,
-      "width": 960,
-      "height": 720,
-      "bytes": 81024625
     },
     {
       "id": "good-will-to-men-1955",

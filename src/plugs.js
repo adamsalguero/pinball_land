@@ -1,4 +1,4 @@
-const { createKlapDevice, plugAuthError } = require("./klap");
+const { createKlapDevice, plugAuthError, sanitizePlugLog } = require("./klap");
 const {
   collectDiscoveryReplies,
   createDiscoveryKeypair,
@@ -143,8 +143,15 @@ function deviceFromInfo(info, host, protocol) {
   });
 }
 
-function createPlugClient({ timeoutMs = 3000, interfaces, request } = {}) {
+function createPlugClient({ timeoutMs = 3000, interfaces, request, log = () => {} } = {}) {
   const legacy = createTplinkClient({ timeoutMs });
+  const klapSlots = new Map();
+  function klap(host, account) {
+    if (!klapSlots.has(host)) {
+      klapSlots.set(host, { session: null, chain: Promise.resolve(), accountKey: "" });
+    }
+    return createKlapDevice(host, account, request, { slot: klapSlots.get(host), log });
+  }
   return {
     legacy,
     async discover(account) {
@@ -167,11 +174,12 @@ function createPlugClient({ timeoutMs = 3000, interfaces, request } = {}) {
           continue;
         }
         try {
-          const live = createKlapDevice(device.host, account, request);
+          const live = klap(device.host, account);
           const info = await live.getSysInfo();
           const normalized = deviceFromInfo(info, device.host, "klap");
           if (normalized) named.push({ ...device, ...normalized, protocol: "klap", needsLogin: false });
         } catch (err) {
+          log(`discover host=${device.host} fail code=${err.code || "error"}`);
           named.push({
             ...device,
             protocol: "klap",
@@ -184,7 +192,7 @@ function createPlugClient({ timeoutMs = 3000, interfaces, request } = {}) {
     },
     async probe(host, account) {
       try {
-        const live = createKlapDevice(host, account, request);
+        const live = klap(host, account);
         const info = await live.getSysInfo();
         const device = deviceFromInfo(info, host, "klap");
         if (device) return { ...device, on: Number(info.relay_state) === 1 };
@@ -208,9 +216,7 @@ function createPlugClient({ timeoutMs = 3000, interfaces, request } = {}) {
       if (!legacy) throw Object.assign(new Error("The plug did not answer."), { status: 502, code: "plug-down" });
       return legacy.getDevice(host);
     },
-    klap(host, account) {
-      return createKlapDevice(host, account, request);
-    },
+    klap,
   };
 }
 
@@ -268,7 +274,7 @@ function createTplinkClient({ Client, timeoutMs = 4000 } = {}) {
 }
 
 class PlugService {
-  constructor({ client = null, now = () => new Date(), getConfig, updateConfig } = {}) {
+  constructor({ client = null, now = () => new Date(), getConfig, updateConfig, log = () => {} } = {}) {
     if (typeof getConfig !== "function" || typeof updateConfig !== "function") {
       throw new Error("PlugService needs getConfig and updateConfig");
     }
@@ -276,6 +282,7 @@ class PlugService {
     this.now = now;
     this.getConfig = getConfig;
     this.updateConfig = updateConfig;
+    this.log = typeof log === "function" ? log : () => {};
     this.power = new Map();
     this.lastApplied = null;
   }
@@ -391,6 +398,7 @@ class PlugService {
       });
       if (normalized) devices.push(normalized);
       if (typeof device.on === "boolean" && normalized) this.power.set(normalized.id, device.on);
+      if (normalized) this.log(`discover host=${normalized.host} protocol=${normalized.protocol} needsLogin=${normalized.needsLogin}`);
       if (typeof device.getPowerState === "function" && normalized && !device.needsLogin) {
         const on = await device.getPowerState().catch(() => null);
         if (typeof on === "boolean") this.power.set(normalized.id, on);
@@ -413,6 +421,7 @@ class PlugService {
       }
     }
     await this.remember({ devices: mergeByMac(devices) });
+    this.log(`discover count=${this.config().devices.length}`);
     return this.publicState();
   }
 
@@ -434,6 +443,7 @@ class PlugService {
     try {
       found = await this.probeHost(ip);
     } catch (err) {
+      this.log(`add host=${ip} fail code=${err.code || "error"}`);
       if (err.code !== "plug-auth") throw err;
       found = normalizeDevice({ id: ip, name: "Kasa plug", host: ip, protocol: "klap", needsLogin: true });
     }
@@ -445,6 +455,7 @@ class PlugService {
       found,
     ]);
     await this.remember({ manualHosts, devices });
+    this.log(`add host=${ip} protocol=${found.protocol} needsLogin=${Boolean(found.needsLogin)}`);
     return this.publicState();
   }
 
@@ -452,6 +463,7 @@ class PlugService {
     const current = this.account();
     if (patch.clear) {
       await this.remember({ account: { username: "", password: "" } });
+      this.log("account cleared");
       return this.publicState();
     }
     const typedUser = patch.username === undefined || patch.username === null ? "" : String(patch.username).trim();
@@ -463,6 +475,7 @@ class PlugService {
       throw Object.assign(new Error("Enter the Kasa app password with that email."), { status: 400 });
     }
     await this.remember({ account: { username, password } });
+    this.log("account saved");
     return this.publicState();
   }
 
@@ -509,13 +522,17 @@ class PlugService {
     try {
       await this.withDevice(device, (live) => live.setPowerState(Boolean(on)));
     } catch (err) {
+      const code = err.code === "plug-auth" ? "plug-auth" : "plug-down";
+      this.log(`power host=${device.host} on=${Boolean(on)} fail code=${code}`);
       if (err.code === "plug-auth") {
-        await this.markLogin(device.id, true);
+        if (!device.needsLogin) await this.markLogin(device.id, true);
         throw plugAuthError();
       }
+      if (device.needsLogin) await this.markLogin(device.id, false);
       if (err.code === "plug-down" || err.status === 404 || err.status === 400) throw err;
       throw Object.assign(new Error("The plug did not answer."), { status: 502, code: "plug-down" });
     }
+    this.log(`power host=${device.host} on=${Boolean(on)} ok`);
     if (device.needsLogin) await this.markLogin(device.id, false);
     this.power.set(device.id, Boolean(on));
     return Boolean(on);
@@ -560,7 +577,13 @@ class PlugService {
           if (device.needsLogin) await this.markLogin(id, false);
         }
       } catch (err) {
-        if (err.code === "plug-auth") await this.markLogin(id, true);
+        if (err.code === "plug-auth") {
+          if (!device.needsLogin) await this.markLogin(id, true);
+          this.log(`refresh host=${device.host} fail code=plug-auth`);
+        } else if (device.needsLogin) {
+          await this.markLogin(id, false);
+          this.log(`refresh host=${device.host} fail code=${err.code || "plug-down"}`);
+        }
       }
     }
     return this.publicState();
@@ -594,4 +617,5 @@ module.exports = {
   createMockPlugClient,
   PlugService,
   LOGIN_NOTICE,
+  sanitizePlugLog,
 };

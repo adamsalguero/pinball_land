@@ -807,6 +807,18 @@ function renderAirplay() {
   root.append(row);
 }
 
+let plugAction = null;
+let plugActionTimer = null;
+
+function notePlugAction(text, ok) {
+  plugAction = { text, ok, at: Date.now() };
+  clearTimeout(plugActionTimer);
+  plugActionTimer = setTimeout(() => {
+    plugAction = null;
+    renderPlugs();
+  }, 2500);
+}
+
 function renderPlugs() {
   const root = document.getElementById("plugs-root");
   if (!root) return;
@@ -834,16 +846,32 @@ function renderPlugs() {
   allOn.className = "btn primary";
   allOn.textContent = "TVs On";
   allOn.addEventListener("click", async () => {
-    applyPayload(await api("/api/plugs/power", { method: "POST", body: { on: true } }));
-    toast("Plugs on");
+    try {
+      const payload = await api("/api/plugs/power", { method: "POST", body: { on: true } });
+      notePlugAction("TVs on", true);
+      applyPayload(payload);
+      toast("Plugs on");
+    } catch (err) {
+      notePlugAction(err.message || "The plug did not answer.", false);
+      renderPlugs();
+      toast(err.message || "The plug did not answer.");
+    }
   });
   const allOff = document.createElement("button");
   allOff.type = "button";
   allOff.className = "btn danger";
   allOff.textContent = "TVs Off";
   allOff.addEventListener("click", async () => {
-    applyPayload(await api("/api/plugs/power", { method: "POST", body: { on: false } }));
-    toast("Plugs off");
+    try {
+      const payload = await api("/api/plugs/power", { method: "POST", body: { on: false } });
+      notePlugAction("TVs off", true);
+      applyPayload(payload);
+      toast("Plugs off");
+    } catch (err) {
+      notePlugAction(err.message || "The plug did not answer.", false);
+      renderPlugs();
+      toast(err.message || "The plug did not answer.");
+    }
   });
   tools.append(discover, allOn, allOff);
   root.append(tools);
@@ -920,6 +948,13 @@ function renderPlugs() {
     }
   });
   root.append(addForm);
+  if (plugAction && Date.now() - plugAction.at < 2500) {
+    const status = document.createElement("p");
+    status.id = "plug-action-status";
+    status.className = "muted";
+    status.textContent = plugAction.text;
+    root.append(status);
+  }
 
   for (const slot of ["1", "2", "3"]) {
     const card = document.createElement("div");
@@ -958,7 +993,15 @@ function renderPlugs() {
     on.textContent = "On";
     on.disabled = !assigned;
     on.addEventListener("click", async () => {
-      applyPayload(await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on: true } }));
+      const label = displayLabel(slot, current.displays?.count);
+      try {
+        const payload = await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on: true } });
+        notePlugAction(`${label} turned on`, true);
+        applyPayload(payload);
+      } catch (err) {
+        notePlugAction(err.message || "The plug did not answer.", false);
+        renderPlugs();
+      }
     });
     const off = document.createElement("button");
     off.type = "button";
@@ -966,7 +1009,15 @@ function renderPlugs() {
     off.textContent = "Off";
     off.disabled = !assigned;
     off.addEventListener("click", async () => {
-      applyPayload(await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on: false } }));
+      const label = displayLabel(slot, current.displays?.count);
+      try {
+        const payload = await api(`/api/plugs/${slot}/power`, { method: "POST", body: { on: false } });
+        notePlugAction(`${label} turned off`, true);
+        applyPayload(payload);
+      } catch (err) {
+        notePlugAction(err.message || "The plug did not answer.", false);
+        renderPlugs();
+      }
     });
     actions.append(on, off);
     card.append(title, select, actions);

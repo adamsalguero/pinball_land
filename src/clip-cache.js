@@ -2,6 +2,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const { spawn } = require("child_process");
+const { purgeRemovedStarters, removedStarterId } = require("./catalog");
 
 function ffmpegBinary() {
   try {
@@ -172,7 +173,7 @@ function createClipCache({
 } = {}) {
   if (!cacheDir) throw new Error("clip cache needs a directory");
   const allow = ids ? new Set(ids) : null;
-  const wanted = () => (items || []).filter((item) => item?.id && item.streamUrl && (!allow || allow.has(item.id)));
+  const wanted = () => (items || []).filter((item) => item?.id && item.streamUrl && !removedStarterId(item.id) && (!allow || allow.has(item.id)));
   let stopped = false;
   let running = false;
   let lastNight = "";
@@ -213,6 +214,7 @@ function createClipCache({
   }
 
   async function ensureOne(item, { force = false } = {}) {
+    if (removedStarterId(item.id)) return;
     const finalFile = readyPath(cacheDir, item.id);
     const part = `${finalFile}.part`;
     if (!force && status.get(item.id)?.ready && fs.existsSync(finalFile)) return;
@@ -245,6 +247,7 @@ function createClipCache({
     if (running) return snapshot();
     running = true;
     try {
+      purgeRemovedStarters(cacheDir);
       await fsp.mkdir(cacheDir, { recursive: true });
       for (const item of wanted()) {
         if (stopped) break;
