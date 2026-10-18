@@ -9,8 +9,84 @@ const { getLanIPv4s } = require("./lan");
 const { ensureCertificate } = require("./certs");
 const { slotLabel } = require("./displays");
 const { defaultDataDir, dataLayout, migrateData, resolveDataDir } = require("./paths");
+const { displayOrigins } = require("./display-origins");
 
-function printBanner(config, httpsReady) {
+const KEEP_ALIVE_MS = 5000;
+const HEADERS_TIMEOUT_MS = 20000;
+const REQUEST_TIMEOUT_MS = 60000;
+
+function tuneServer(server) {
+  server.keepAliveTimeout = KEEP_ALIVE_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+}
+
+function listen(server, port, host) {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => {
+      server.removeListener("error", onError);
+      reject(err);
+    };
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.removeListener("error", onError);
+      resolve();
+    });
+  });
+}
+
+function closeQuiet(server) {
+  return new Promise((resolve) => {
+    if (!server || !server.listening) return resolve();
+    server.close(() => resolve());
+  });
+}
+
+async function bindDisplayServers(requestListener, { port = 0, attach } = {}) {
+  const primary = http.createServer(requestListener);
+  tuneServer(primary);
+  if (attach) attach(primary);
+  await listen(primary, port, "0.0.0.0");
+  const bound = primary.address().port;
+  const secondary = http.createServer(requestListener);
+  tuneServer(secondary);
+  if (attach) attach(secondary);
+  try {
+    await listen(secondary, bound, "::1");
+    return {
+      servers: [primary, secondary],
+      port: bound,
+      ipv6: true,
+      displayOrigins: displayOrigins({ port: bound, ipv6: true }),
+    };
+  } catch (err) {
+    await closeQuiet(secondary);
+    const fallback = http.createServer(requestListener);
+    tuneServer(fallback);
+    if (attach) attach(fallback);
+    try {
+      await listen(fallback, bound + 1, "127.0.0.1");
+      console.warn(`IPv6 loopback [::1]:${bound} did not start (${err.message}). Display 3 is on http://127.0.0.1:${bound + 1}.`);
+      return {
+        servers: [primary, fallback],
+        port: bound,
+        ipv6: false,
+        displayOrigins: displayOrigins({ port: bound, ipv6: false, extraPort: bound + 1 }),
+      };
+    } catch (extraErr) {
+      await closeQuiet(fallback);
+      console.warn(`Display 3 has no separate origin (${err.message}; ${extraErr.message}). It shares 127.0.0.1:${bound}.`);
+      return {
+        servers: [primary],
+        port: bound,
+        ipv6: false,
+        displayOrigins: displayOrigins({ port: bound, ipv6: false, extraPort: bound }),
+      };
+    }
+  }
+}
+
+function printBanner(config, httpsReady, origins) {
   const port = config.port;
   console.log("");
   console.log("Pinball Land kiosk is running");
@@ -26,9 +102,11 @@ function printBanner(config, httpsReady) {
   } else {
     console.log("Phones:              (no LAN IPv4 found — connect to WiFi and restart)");
   }
+  const slots = origins || displayOrigins({ port, ipv6: true });
   for (let slot = 1; slot <= config.displays.count; slot += 1) {
     const label = slotLabel(slot, config.displays.count);
-    console.log(`${label} display:`.padEnd(21) + `http://localhost:${port}/display/${slot}`);
+    const base = slots[slot] || slots[String(slot)] || `http://localhost:${port}`;
+    console.log(`${label} display:`.padEnd(21) + `${base}/display/${slot}`);
   }
   console.log(`Admin PIN:           set in the data-dir config (default 2224)`);
   console.log(`Reset PIN:           npm run reset-pin`);
@@ -63,6 +141,7 @@ async function startHttps({ app, attachWebSocket, config, certDir }) {
     },
     app
   );
+  tuneServer(server);
   attachWebSocket(server);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -129,19 +208,14 @@ async function launchServer() {
     isHttpsReady: () => httpsReady,
   });
 
-  const server = http.createServer(app);
-  attachWebSocket(server);
-
-  await new Promise((resolve, reject) => {
-    server.once("error", (err) => {
-      reportListenError(err, config.port);
-      reject(err);
-    });
-    server.listen(config.port, "0.0.0.0", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
+  let bound;
+  try {
+    bound = await bindDisplayServers(app, { port: config.port, attach: attachWebSocket });
+  } catch (err) {
+    reportListenError(err, config.port);
+    throw err;
+  }
+  const server = bound.servers[0];
 
   try {
     const httpsServer = await startHttps({
@@ -155,8 +229,16 @@ async function launchServer() {
     console.warn(`HTTPS did not start (${err.message}). Browser screen share needs it. See PRESENTING.md.`);
   }
 
-  printBanner(config, httpsReady);
-  return { server, port: config.port, config, httpsReady };
+  printBanner(config, httpsReady, bound.displayOrigins);
+  return {
+    server,
+    servers: bound.servers,
+    port: config.port,
+    config,
+    httpsReady,
+    displayOrigins: bound.displayOrigins,
+    ipv6: bound.ipv6,
+  };
 }
 
 async function startServer() {
@@ -180,4 +262,15 @@ if (require.main === module) {
   });
 }
 
-module.exports = { startServer, printBanner, logStartupFailure, addrInUseMessage, reportListenError };
+module.exports = {
+  startServer,
+  printBanner,
+  logStartupFailure,
+  addrInUseMessage,
+  reportListenError,
+  bindDisplayServers,
+  tuneServer,
+  KEEP_ALIVE_MS,
+  HEADERS_TIMEOUT_MS,
+  REQUEST_TIMEOUT_MS,
+};

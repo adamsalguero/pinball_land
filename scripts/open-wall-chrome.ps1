@@ -1,5 +1,5 @@
 param(
-  [string]$Base = "http://127.0.0.1:3000"
+  [int]$Port = 3000
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +18,33 @@ $candidates = @(
 $chrome = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if (-not $chrome) { throw "Google Chrome was not found." }
 
+function Test-Health([string]$Url) {
+  $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+  if ($curl) {
+    & curl.exe -fsS -o NUL --max-time 3 $Url
+    return $LASTEXITCODE -eq 0
+  }
+  try {
+    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3 -Method GET
+    return $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+  } catch {
+    return $false
+  }
+}
+
+# One Chrome profile shares a 6-connection HTTP/1.1 pool per host. Each display
+# gets its own host so the pools cannot starve each other.
+$third = "http://[::1]:$Port"
+if (-not (Test-Health "$third/api/health")) {
+  $alt = "http://127.0.0.1:$($Port + 1)"
+  if (Test-Health "$alt/api/health") { $third = $alt }
+}
+$bases = @(
+  "http://localhost:$Port",
+  "http://127.0.0.1:$Port",
+  $third
+)
+
 $positions = @(
   @(0, 0),
   @(80, 60),
@@ -25,8 +52,9 @@ $positions = @(
 )
 foreach ($slot in 1, 2, 3) {
   $pos = $positions[$slot - 1]
+  $base = $bases[$slot - 1]
   $args = @(
-    "--app=$Base/display/$slot",
+    "--app=$base/display/$slot",
     "--window-position=$($pos[0]),$($pos[1])",
     "--window-size=1280,720"
   ) + $flags

@@ -27,7 +27,7 @@ const presentVideo = document.getElementById("present-video");
 const presentImage = document.getElementById("present-image");
 const presentFrame = document.getElementById("present-frame");
 const videoPanel = document.getElementById("video-panel");
-const wallVideo = document.getElementById("wall-video");
+let wallVideo = document.getElementById("wall-video");
 const clockPanel = document.getElementById("clock");
 const clockTime = document.getElementById("clock-time");
 const clockEvent = document.getElementById("clock-event");
@@ -190,12 +190,23 @@ function setMode(mode) {
 let swapping = false;
 let heldClip = null;
 let failedClipIds = new Set();
+let consecutiveGiveUps = 0;
+let recoveryHold = null;
 
 function clearSync() {
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = null;
   clearLoadTimer();
   clearStall();
+}
+
+function releaseVideoElement(video) {
+  if (!video) return;
+  video.pause();
+  video.removeAttribute("src");
+  video.preload = "none";
+  try { video.load(); } catch { /* decoder already released */ }
+  video.preload = "metadata";
 }
 
 function stopWallVideo() {
@@ -208,10 +219,12 @@ function stopWallVideo() {
   wallVideo.oncanplay = null;
   wallVideo.onpause = null;
   wallVideo.onerror = null;
-  wallVideo.pause();
-  wallVideo.removeAttribute("src");
+  wallVideo.onwaiting = null;
+  wallVideo.onstalled = null;
+  wallVideo.onsuspend = null;
+  wallVideo.ontimeupdate = null;
+  releaseVideoElement(wallVideo);
   wallVideo.preload = "none";
-  try { wallVideo.load(); } catch { /* decoder already released */ }
   wallVideo.classList.remove("span", "is-ready");
   wallVideo.style.width = "";
   wallVideo.style.transform = "";
@@ -227,9 +240,37 @@ function stopWallVideo() {
   swapping = false;
 }
 
+function replaceWallVideo() {
+  const fresh = document.createElement("video");
+  fresh.id = "wall-video";
+  fresh.muted = true;
+  fresh.defaultMuted = true;
+  fresh.playsInline = true;
+  fresh.setAttribute("playsinline", "");
+  fresh.preload = "metadata";
+  const previous = wallVideo;
+  previous.onended = null;
+  previous.onloadedmetadata = null;
+  previous.onprogress = null;
+  previous.onseeked = null;
+  previous.oncanplay = null;
+  previous.onpause = null;
+  previous.onerror = null;
+  previous.onwaiting = null;
+  previous.onstalled = null;
+  previous.onsuspend = null;
+  previous.ontimeupdate = null;
+  releaseVideoElement(previous);
+  previous.preload = "none";
+  if (previous.isConnected) previous.replaceWith(fresh);
+  else videoPanel.append(fresh);
+  wallVideo = fresh;
+}
+
 function ensureWallVideo() {
   if (!videoPanel.contains(wallVideo)) videoPanel.append(wallVideo);
-  wallVideo.preload = "auto";
+  if (wallVideo.getAttribute("src")) wallVideo.preload = "auto";
+  else wallVideo.preload = "metadata";
   wallVideo.muted = true;
   wallVideo.defaultMuted = true;
   wallVideo.playsInline = true;
@@ -367,8 +408,7 @@ function showAmenity(amenity, photos) {
 }
 
 function stopVideo() {
-  machineVideo.pause();
-  machineVideo.removeAttribute("src");
+  releaseVideoElement(machineVideo);
   machineVideo.hidden = true;
 }
 
@@ -629,6 +669,11 @@ function resolveCard() {
   }
   if (payload.rotationPlan) {
     const planned = payload.rotationPlan[SLOT] || payload.rotationPlan[String(SLOT)] || null;
+    if (recoveryHold) {
+      const stillBad = planned?.type === "video" && planned.id === recoveryHold.avoidId;
+      if (stillBad) return { ...recoveryHold.card, span: false };
+      recoveryHold = null;
+    }
     const pinned = payload.layout?.[SLOT]?.content === "video";
     if (heldClip) {
       if (pinned) {
@@ -875,23 +920,20 @@ function reportVideo(card, eventName) {
   if (event !== "ended" && event !== "give-up" && event !== "stall-timeout" && event !== "error" && reportedEvents.has(seen)) return;
   if (event !== "ended") reportedEvents.add(seen);
   const err = wallVideo.error;
-  fetch("/api/media/failure", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      id,
-      slot: SLOT,
-      event,
-      reason: event,
-      title: card?.title || "",
-      code: err ? err.code : null,
-      networkState: wallVideo.networkState,
-      readyState: wallVideo.readyState,
-      currentTime: wallVideo.currentTime,
-      src: wallVideo.currentSrc || wallVideo.getAttribute("src") || card?.url || "",
-      failedIds: [...failedClipIds],
-    }),
-  }).catch(() => {});
+  sendSocket({
+    type: "media-failure",
+    id,
+    slot: SLOT,
+    event,
+    reason: event,
+    title: card?.title || "",
+    code: err ? err.code : null,
+    networkState: wallVideo.networkState,
+    readyState: wallVideo.readyState,
+    currentTime: wallVideo.currentTime,
+    src: wallVideo.currentSrc || wallVideo.getAttribute("src") || card?.url || "",
+    failedIds: [...failedClipIds],
+  });
 }
 
 function clearStall() {
@@ -926,19 +968,71 @@ function holdClip(card) {
   };
 }
 
+function uniqueVideos(exceptId) {
+  const busy = otherScreenClipIds();
+  return (payload?.playlist || []).filter((item) => (
+    item?.type === "video" && item.url && !item.empty && item.id !== exceptId && !busy.has(item.id) && !failedClipIds.has(item.id)
+  ));
+}
+
+function showRecoveryCard(card) {
+  if (!card) return null;
+  if (card.type === "video" && card.url && !card.empty) {
+    const salt = `${serverTick()}:${consecutiveGiveUps}:${card.id}`;
+    const advanced = {
+      ...card,
+      mode: "card",
+      loop: false,
+      startSec: card.startSec || window.PinballRotation.videoStartSec(card.id, salt, card.durationSec),
+      playId: card.playId || `${card.id}:${salt}`,
+    };
+    holdClip(advanced);
+    lastKey = cardKey(decorate(advanced));
+    showVideo(advanced);
+    return advanced;
+  }
+  heldClip = null;
+  stopWallVideo();
+  const fallback = document.getElementById("video-fallback");
+  if (fallback) fallback.hidden = true;
+  const shown = decorate(card);
+  paintCard(shown);
+  lastKey = cardKey(shown);
+  return shown;
+}
+
+function armPoolReload() {
+  const key = `pinball-pool-reload-${SLOT}`;
+  let last = 0;
+  try { last = Number(sessionStorage.getItem(key) || 0); } catch { /* private mode */ }
+  if (Date.now() - last < 120000) return;
+  try { sessionStorage.setItem(key, String(Date.now())); } catch { /* keep playing the replacement */ }
+  releaseVideoElement(wallVideo);
+  window.location.reload();
+}
+
 function failClip(card, eventName) {
   clearStall();
   reportVideo(card, eventName);
   failedClipIds.add(card.id);
-  const busy = otherScreenClipIds();
-  const videos = (payload?.playlist || []).filter((item) => (
-    item.type === "video" && item.url && !item.empty && !failedClipIds.has(item.id) && !busy.has(item.id)
-  ));
+  const videos = uniqueVideos(card?.id);
   if (!videos.length) {
-    reportVideo(card, "give-up");
-    heldClip = null;
-    stopWallVideo();
-    lastKey = "";
+    consecutiveGiveUps += 1;
+    const action = window.PinballPlayback.poolRecovery(consecutiveGiveUps);
+    if (action === "reset" || action === "reload") replaceWallVideo();
+    failedClipIds = new Set([card?.id].filter(Boolean));
+    const retry = uniqueVideos(card?.id);
+    const replacement = retry.length
+      ? retry[window.PinballRotation.hash32(`${card?.id}:${consecutiveGiveUps}`) % retry.length]
+      : window.PinballRotation.replacementFor(payload?.rotationPlan, SLOT, payload?.playlist, {
+        failedIds: [...failedClipIds, ...otherScreenClipIds()],
+        salt: `${SLOT}:give-up:${consecutiveGiveUps}`,
+      });
+    const videoRetry = replacement?.type === "video" && replacement.url && !replacement.empty;
+    if (!videoRetry || action === "reload") reportVideo(card, "give-up");
+    const shown = showRecoveryCard(replacement);
+    recoveryHold = shown ? { avoidId: card?.id || "", card: shown } : null;
+    if (action === "reload") armPoolReload();
     return;
   }
   const next = videos[window.PinballRotation.hash32(`${card.id}:${failedClipIds.size}`) % videos.length];
@@ -978,6 +1072,8 @@ function onClipEnded(card) {
   reportVideo(card, "ended");
   heldClip = null;
   failedClipIds = new Set();
+  recoveryHold = null;
+  consecutiveGiveUps = 0;
 }
 
 let stallGeneration = 0;
@@ -1000,6 +1096,7 @@ function armStall(card) {
       lastSample = wallVideo.currentTime;
       lastMove = Date.now();
       nudged = false;
+      consecutiveGiveUps = 0;
     }
   };
   wallVideo.ontimeupdate = noteProgress;
@@ -1082,6 +1179,16 @@ function showVideo(card, onReady) {
   clearLoadTimer();
   if (wallVideo.dataset.ready === "1") holdFrame();
   stageWallVideo();
+  swapping = true;
+  wallVideo.onloadedmetadata = null;
+  wallVideo.onended = null;
+  wallVideo.oncanplay = null;
+  wallVideo.onseeked = null;
+  wallVideo.onerror = null;
+  releaseVideoElement(wallVideo);
+  wallVideo.dataset.playId = playToken;
+  wallVideo.dataset.ready = "0";
+  swapping = false;
   loadTimer = window.setTimeout(() => {
     if (wallVideo.dataset.playId !== playToken || wallVideo.dataset.ready === "1") return;
     failClip(card, "stall-timeout");
@@ -1089,7 +1196,6 @@ function showVideo(card, onReady) {
   const slots = card.slots || [SLOT];
   const primary = String(slots[0] || SLOT);
   wallVideo.classList.remove("is-ready");
-  wallVideo.dataset.ready = "0";
   if (card.mode === "span") {
     const count = Math.max(1, slots.length);
     const index = Math.max(0, slots.map(String).indexOf(String(SLOT)));
@@ -1158,20 +1264,16 @@ function showVideo(card, onReady) {
     if (card.loop && card.mode !== "card") return;
     if (card.mode && card.mode !== "card") {
       if (String(SLOT) !== primary) return;
-      fetch("/api/media/next", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ videoId: card.id }),
-      }).catch(() => {});
+      sendSocket({ type: "media-next", videoId: card.id });
       return;
     }
     onClipEnded(card);
   };
-  wallVideo.dataset.playId = playToken;
-  swapping = true;
-  if (wallVideo.getAttribute("src") !== card.url) wallVideo.src = card.url;
-  else wallVideo.load();
-  swapping = false;
+  wallVideo.preload = "auto";
+  wallVideo.muted = true;
+  wallVideo.defaultMuted = true;
+  wallVideo.playsInline = true;
+  wallVideo.src = card.url;
 }
 
 function warmAsset(url) {
@@ -1222,10 +1324,14 @@ function shareLines() {
   return `${protocol}://${host}:${share.port}${share.path || "/present"}`;
 }
 
-function sendPresent(message) {
+function sendSocket(message) {
   const data = JSON.stringify(message);
   if (socket && socket.readyState === 1) socket.send(data);
   else pendingMessages.push(data);
+}
+
+function sendPresent(message) {
+  sendSocket(message);
 }
 
 function flushPending() {
@@ -1765,7 +1871,7 @@ window.addEventListener("message", (event) => {
   const failed = data?.event === "onError" && [100, 101, 150].includes(code);
   if (!ended && !failed) return;
   if (String(SLOT) !== "1" && payload?.playback?.slots?.[0] && String(payload.playback.slots[0]) !== String(SLOT)) return;
-  fetch("/api/media/next", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+  sendSocket({ type: "media-next", videoId: payload?.playback?.videoId || "" });
 });
 
 let clockSkew = 0;
@@ -1854,6 +1960,8 @@ if (new URLSearchParams(location.search).has("shot")) {
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
+  // State, clip failures, and playlist advance use this socket. The only HTTP
+  // from a display after startup is short media ranges and images (logos, art, QR).
   socket = new WebSocket(`${proto}://${location.host}/ws`);
   socket.addEventListener("open", () => {
     helloId = null;
