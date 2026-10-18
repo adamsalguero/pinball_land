@@ -1,7 +1,7 @@
 {
   "version": 2,
   "verified": "2026-10-17",
-  "notes": "Direct URLs were checked with HTTP HEAD and a short playback probe. Halloween may be black and white. Christmas entries are color and family-friendly. Santa's Surprise (1947, santas-surprise-1947) and Good Will to Men (1955, good-will-to-men-1955) are blocklisted and must not be added back. Remaining starters are The Skeleton Dance (1929), Swing You Sinners! (1930), and Christmas Comes But Once a Year (1936). Nothing here is committed as a video file.",
+  "notes": "Direct URLs were checked with HTTP HEAD and a short playback probe. Halloween may be black and white. Christmas entries are color and family-friendly. Santa's Surprise (1947, santas-surprise-1947), Good Will to Men (1955, good-will-to-men-1955), and Swing You Sinners! (1930, swing-you-sinners-1930) are blocklisted and must not be added back. Remaining starters are The Skeleton Dance (1929) for Halloween and Christmas Comes But Once a Year (1936) for Christmas. A holiday with no ready clip stays on logos, amenities, the clock, and the pinboard. Nothing here is committed as a video file.",
   "items": [
     {
       "id": "skeleton-dance-1929",
@@ -17,21 +17,6 @@
       "width": 480,
       "height": 360,
       "bytes": 18786296
-    },
-    {
-      "id": "swing-you-sinners-1930",
-      "title": "Swing You Sinners!",
-      "holiday": "halloween",
-      "allAges": true,
-      "color": false,
-      "year": 1930,
-      "license": "Public domain. U.S. publication 1930.",
-      "sourceUrl": "https://archive.org/details/swing-you-sinners-1930",
-      "streamUrl": "https://archive.org/download/swing-you-sinners-1930/Swing_You_Sinners%21_by_Fleischer_Studios_%281930%29.mp4",
-      "durationSec": 496,
-      "width": 640,
-      "height": 480,
-      "bytes": 47234984
     },
     {
       "id": "christmas-comes-1936",

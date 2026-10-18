@@ -254,6 +254,7 @@ function createApp({
     ids: clipIds.length ? clipIds : null,
   });
   purgeRemovedStarters(path.join(mediaRoot, "cache"));
+  purgeRemovedStarters(path.join(mediaRoot, "halloween"));
   purgeRemovedStarters(path.join(mediaRoot, "christmas"));
   if (clipCache || process.env.PINBALL_CLIP_CACHE === "1") clips.start();
   let playback = null;

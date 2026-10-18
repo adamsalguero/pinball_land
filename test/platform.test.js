@@ -294,13 +294,15 @@ test("watchdog waits for late monitors and reloads crashed windows", () => {
 
 test("catalog and youtube inputs are explicit", () => {
   const items = loadCatalog(path.join(__dirname, "..", "media", "catalog.json"));
-  assert.ok(items.length >= 3);
+  assert.equal(items.length, 2);
   assert.ok(items.every((item) => item.streamUrl.startsWith("https://")));
   assert.ok(items.filter((item) => item.holiday === "christmas").every((item) => item.color === true));
   assert.equal(items.find((item) => item.id === "christmas-comes-1936").holiday, "christmas");
+  assert.equal(items.find((item) => item.id === "skeleton-dance-1929").holiday, "halloween");
   assert.equal(items.some((item) => item.id === "a-christmas-carol-1910"), false);
   assert.equal(items.some((item) => item.id === "santas-surprise-1947"), false);
   assert.equal(items.some((item) => item.id === "good-will-to-men-1955"), false);
+  assert.equal(items.some((item) => item.id === "swing-you-sinners-1930"), false);
   const video = parseYoutubeInput("https://www.youtube.com/watch?v=abcdefghijk");
   assert.deepEqual(video, { kind: "video", id: "abcdefghijk" });
   const list = parseYoutubeInput("https://www.youtube.com/playlist?list=PLabcdefghijklmnop");
