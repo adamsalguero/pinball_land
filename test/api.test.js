@@ -69,6 +69,10 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
     assert.match(logo.headers.get("content-type") || "", /image\/svg\+xml/);
     assert.doesNotMatch(logoText, /PLACEHOLDER LOGO/);
     assert.match(logoText, /Pinnacle Group Financial Services/);
+    assert.doesNotMatch(logoText, /<rect\b/i);
+    assert.match(logoText, /#F4EFE4/);
+    assert.match(logoText, /#81338B/);
+    assert.doesNotMatch(logoText, /#504E50/);
     assert.match(photo.headers.get("content-type") || "", /image\/(png|jpeg)/);
   } finally {
     server.close();

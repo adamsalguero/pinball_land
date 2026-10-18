@@ -44,7 +44,11 @@ test("video catalog entries are well-formed, unique, and Christmas is color", ()
   assert.ok(christmas.every((card) => card.color === true));
   const slogans = normalizeSlogans(undefined);
   assert.equal(slogans.pinnacle, "");
-  assert.equal(slogans.halloween, "Happy Halloween");
-  assert.equal(slogans.christmas, "Merry Christmas");
+  assert.equal(slogans.halloween, "Happy Halloween!");
+  assert.equal(slogans.christmas, "Merry Christmas!");
+  assert.equal(normalizeSlogans({ halloween: "Happy Halloween" }).halloween, "Happy Halloween!");
+  assert.equal(normalizeSlogans({ christmas: "Merry Christmas" }).christmas, "Merry Christmas!");
   assert.equal(normalizeSlogans({ halloween: "  Boo  " }).halloween, "Boo");
+  assert.equal(normalizeSlogans({ halloween: "" }).halloween, "");
+  assert.equal(normalizeSlogans({ christmas: "Merry Christmas!" }).christmas, "Merry Christmas!");
 });

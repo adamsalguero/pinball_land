@@ -560,6 +560,42 @@ test("delete a score and archive a party board", async () => {
   assert.equal(store.getState().leaderboards[0].rows[0].name, "High");
 });
 
+test("approving a guest score updates the matching player", async () => {
+  const store = await Store.load(filePath);
+  const boardId = await addMachine(store);
+  await store.addRow(boardId, { name: "Adam Salguero", score: 1000 });
+  const proof = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jpg";
+  const higher = await store.submitScore({
+    boardId,
+    name: "  adam   salguero ",
+    score: "2500",
+    proofFile: proof,
+    ip: "10.0.0.21",
+    now: 5_000,
+  });
+  await store.reviewScore(higher.id, "approved");
+  let rows = store.getState().leaderboards[0].rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].name, "Adam Salguero");
+  assert.equal(rows[0].score, 2500);
+  assert.equal(rows[0].proofFile, proof);
+  assert.equal(rows[0].createdAt, 5000);
+  const lower = await store.submitScore({
+    boardId,
+    name: "ADAM SALGUERO",
+    score: 900,
+    proofFile: "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee.jpg",
+    ip: "10.0.0.22",
+    now: 9_000,
+  });
+  await store.reviewScore(lower.id, "approved");
+  rows = store.getState().leaderboards[0].rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].score, 2500);
+  assert.equal(rows[0].proofFile, "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee.jpg");
+  assert.equal(rows[0].createdAt, 9000);
+});
+
 test("guest scores wait for approval and are rate limited", async () => {
   const store = await Store.load(filePath);
   const boardId = await addMachine(store);
