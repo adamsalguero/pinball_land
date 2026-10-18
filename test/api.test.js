@@ -81,16 +81,22 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
 
 test("PIN gates mutations; login cookie allows a live update and black does not blank the wall", async () => {
   const { server, origin, port } = await startServer();
+  let socket;
   try {
     const denied = await json(origin, "/api/theme", { method: "PUT", body: { theme: "halloween" } });
     assert.equal(denied.res.status, 401);
 
     const login = await json(origin, "/api/login", { method: "POST", body: { pin: "2224" } });
     assert.equal(login.res.status, 200);
-    const cookie = login.res.headers.get("set-cookie");
-    assert.ok(cookie);
+    const lines = login.res.headers.getSetCookie();
+    const device = lines.find((line) => line.startsWith("pl_device="));
+    const csrf = lines.find((line) => line.startsWith("pl_csrf="));
+    assert.ok(device);
+    assert.ok(csrf);
+    const cookie = `${device.split(";")[0]}; ${csrf.split(";")[0]}`;
+    const csrfHeaders = { cookie, "x-csrf": decodeURIComponent(csrf.split(";")[0].split("=")[1]) };
 
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     await new Promise((resolve, reject) => {
       socket.on("open", resolve);
       socket.on("error", reject);
@@ -109,20 +115,21 @@ test("PIN gates mutations; login cookie allows a live update and black does not 
 
     const themed = await json(origin, "/api/theme", {
       method: "PUT",
-      headers: { cookie: cookie.split(";")[0] },
+      headers: csrfHeaders,
       body: { theme: "halloween" },
     });
     assert.equal(themed.res.status, 200);
     assert.equal(themed.data.state.theme, "halloween");
     const off = await json(origin, "/api/off", {
       method: "POST",
-      headers: { cookie: cookie.split(";")[0] },
+      headers: csrfHeaders,
     });
     assert.equal(off.res.status, 200);
     assert.equal(off.data.state.blackout, false);
     assert.equal(off.data.state.rotation.enabled, true);
     await wsState;
   } finally {
+    socket?.close();
     server.close();
   }
 });

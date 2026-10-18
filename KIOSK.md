@@ -165,6 +165,25 @@ Control stays PIN-protected. The guest page (`/present`) is only for devices on 
 
 ---
 
+## Guests from outside the venue WiFi
+
+Tailscale Funnel gives the wall a free, fixed `https://<machine>.<tailnet>.ts.net` address. Guests open it in a phone browser. They do not install an app. The wall QR adds a code that changes every day at 4:00 AM. A phone that scanned it stays signed in for 12 hours. Phones on the venue WiFi skip the code. Anyone on the internet without the code sees “Scan the QR code at Pinball Land”.
+
+One-time setup, from an Administrator Command Prompt, in the install folder (usually `C:\pinball-land`):
+
+```bat
+cd /d C:\pinball-land
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\enable-public-access.ps1
+```
+
+The script installs Tailscale if it is missing (winget, then the stable MSI), starts the Tailscale service, and prints a login URL the first time this PC joins the tailnet. Open that URL, sign in with the free Tailscale account, then let the script finish. It runs `tailscale funnel --bg 3000` so `https://<machine>.<tailnet>.ts.net` points at the kiosk. The Tailscale service keeps that up across reboot. Re-run the same command any time; it does not redo a login that already worked. If the server is not on port 3000, pass `-Port` with the real port.
+
+Then on the admin iPad, Settings, turn **Public access** on. The status line shows the public URL when Funnel is up. Until then, the QR stays on the venue WiFi address.
+
+Optional: the same Settings section has **Cloudflare quick tunnel if Tailscale is not up**. Leave it off unless Funnel is unavailable. That address changes when the PC restarts. It is a fallback, not the guest link to print.
+
+Admin from the internet stays behind the PIN. After five wrong PINs from one address, that address waits 15 minutes. A successful sign-in remembers the phone for 30 days. **Require a PIN of 6 or more digits off the venue WiFi** is on by default, so the usual `2224` works on the venue WiFi and does not work from the public link until you set a longer PIN from the venue WiFi. **Allow admin from internet** can be turned off. **Pause uploads** stops new photos. **Pinboard photos** off removes the pinboard from rotation, hides the QR card, and hides photo upload on the guest page. Scores still wait for approval.
+
 ## Boot checklist
 
 - BIOS **Restore on AC Power** (or Auto Power On) = On. See section 1.

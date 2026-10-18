@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
@@ -106,11 +107,29 @@ function normalizePhotos(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   const eventName = String(incoming.eventName || "Tonight").trim().slice(0, 60);
   return {
-    autoApprove: Boolean(incoming.autoApprove),
+    autoApprove: incoming.autoApprove !== false,
+    paused: incoming.paused === true,
+    pinboard: incoming.pinboard !== false,
     publicBaseUrl: httpBaseUrl(incoming.publicBaseUrl),
     style: "pinboard",
     span: false,
     eventName: eventName || "Tonight",
+  };
+}
+
+function normalizePublicAccess(raw) {
+  const incoming = raw && typeof raw === "object" ? raw : {};
+  return {
+    enabled: incoming.enabled === true,
+    cloudflare: incoming.cloudflare === true,
+  };
+}
+
+function normalizeAdminAccess(raw) {
+  const incoming = raw && typeof raw === "object" ? raw : {};
+  return {
+    internet: incoming.internet !== false,
+    longPin: incoming.longPin !== false,
   };
 }
 
@@ -172,6 +191,9 @@ function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
     media: normalizeMediaSettings(fileConfig.media),
     motion: normalizeMotion(fileConfig.motion),
     photos: normalizePhotos(fileConfig.photos),
+    publicAccess: normalizePublicAccess(fileConfig.publicAccess),
+    admin: normalizeAdminAccess(fileConfig.admin),
+    guestSecret: typeof fileConfig.guestSecret === "string" && fileConfig.guestSecret.length >= 16 ? fileConfig.guestSecret : "",
     slogans: normalizeSlogans(fileConfig.slogans),
     youtube: normalizeYoutubeLists(fileConfig.youtube),
     updates: normalizeUpdates(fileConfig.updates),
@@ -201,6 +223,17 @@ async function writeConfigFile(configPath, data) {
   const tmp = `${configPath}.tmp`;
   await fsp.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   await fsp.rename(tmp, configPath);
+}
+
+function ensureGuestSecret(configPath) {
+  const raw = readConfigFile(configPath);
+  if (typeof raw.guestSecret === "string" && raw.guestSecret.length >= 16) return raw.guestSecret;
+  raw.guestSecret = crypto.randomBytes(32).toString("hex");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const tmp = `${configPath}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`);
+  fs.renameSync(tmp, configPath);
+  return raw.guestSecret;
 }
 
 function writeDefaultPin(configPath) {
@@ -258,6 +291,15 @@ function createConfigStore(configPath) {
       if (patch.photos) {
         raw.photos = normalizePhotos({ ...normalizePhotos(raw.photos), ...patch.photos });
       }
+      if (patch.publicAccess) {
+        raw.publicAccess = normalizePublicAccess({ ...normalizePublicAccess(raw.publicAccess), ...patch.publicAccess });
+      }
+      if (patch.admin) {
+        raw.admin = normalizeAdminAccess({ ...normalizeAdminAccess(raw.admin), ...patch.admin });
+      }
+      if (patch.guestSecret !== undefined && typeof patch.guestSecret === "string" && patch.guestSecret.length >= 16) {
+        raw.guestSecret = patch.guestSecret;
+      }
       if (patch.slogans) {
         raw.slogans = normalizeSlogans({ ...normalizeSlogans(raw.slogans), ...patch.slogans });
       }
@@ -292,6 +334,9 @@ module.exports = {
   normalizeMediaSettings,
   normalizeMotion,
   normalizePhotos,
+  normalizePublicAccess,
+  normalizeAdminAccess,
+  ensureGuestSecret,
   normalizeSlogans,
   normalizeUpdates,
 };

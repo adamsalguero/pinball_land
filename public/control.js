@@ -65,9 +65,16 @@ function deviceToken() {
   return localStorage.getItem("pl-admin-device") || "";
 }
 
+function csrfToken() {
+  const match = document.cookie.match(/(?:^|; )pl_csrf=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 async function api(url, options = {}) {
   const headers = { "content-type": "application/json", ...(options.headers || {}) };
   if (deviceToken()) headers["x-device-token"] = deviceToken();
+  const csrf = csrfToken();
+  if (csrf) headers["x-csrf"] = csrf;
   const res = await fetch(url, {
     headers,
     credentials: "same-origin",
@@ -118,7 +125,9 @@ function renderRotation() {
     intervalInput.value = String(rotation.intervalSec || 30);
   }
   rotationItemsEl.replaceChildren();
+  const pinboardOn = current.guest?.pinboard !== false;
   for (const item of ROTATION_TOGGLES) {
+    if (item.id === "pinboard" && !pinboardOn) continue;
     const button = document.createElement("button");
     button.type = "button";
     button.className = `btn toggle${rotation.items?.[item.id] !== false ? " active" : ""}`;
@@ -157,6 +166,7 @@ function renderSlots() {
       const choices = document.createElement("div");
       choices.className = "choices";
       for (const option of group.options) {
+        if (option.id === "pinboard" && current.guest?.pinboard === false) continue;
         const button = document.createElement("button");
         button.type = "button";
         button.className = `btn${isSlotActive(slot.content, option.id) ? " active" : ""}`;
@@ -1048,6 +1058,7 @@ function render() {
   renderYoutube();
   renderPhotos();
   renderAdmin();
+  renderAccess();
   renderMotion();
   fillSlogans();
 }
@@ -1075,7 +1086,10 @@ function showTab(name) {
   }
   localStorage.setItem("pl-admin-tab", name);
   if (name === "photos") renderPhotos();
-  if (name === "settings") renderAdmin();
+  if (name === "settings") {
+    renderAdmin();
+    renderAccess();
+  }
 }
 
 async function boot() {
@@ -1382,7 +1396,15 @@ async function renderPhotos() {
   downloadAll.className = "btn";
   downloadAll.href = "/api/guest-photos/zip";
   downloadAll.textContent = "Download all";
-  root.append(auto, downloadAll);
+  const pause = document.createElement("button");
+  pause.type = "button";
+  pause.className = `btn${data.settings?.paused ? " active" : ""}`;
+  pause.textContent = data.settings?.paused ? "Uploads paused" : "Pause uploads";
+  pause.addEventListener("click", async () => {
+    applyPayload(await api("/api/guest-photos/settings", { method: "PUT", body: { paused: !data.settings?.paused } }));
+    renderPhotos();
+  });
+  root.append(auto, pause, downloadAll);
   for (const photo of data.photos || []) {
     if (photo.status === "rejected") continue;
     const card = document.createElement("article");
@@ -1449,6 +1471,28 @@ async function renderPhotos() {
     }
     root.append(card);
   }
+}
+
+function renderAccess() {
+  const status = document.getElementById("public-access-status");
+  if (!status || document.getElementById("app").hidden) return;
+  const access = current.publicAccess || {};
+  const admin = current.adminAccess || {};
+  const guest = current.guest || {};
+  document.getElementById("public-access-on")?.classList.toggle("active", access.enabled === true);
+  document.getElementById("public-access-off")?.classList.toggle("active", access.enabled !== true);
+  document.getElementById("pinboard-on")?.classList.toggle("active", guest.pinboard !== false);
+  document.getElementById("pinboard-off")?.classList.toggle("active", guest.pinboard === false);
+  document.getElementById("admin-internet-on")?.classList.toggle("active", admin.internet !== false);
+  document.getElementById("admin-internet-off")?.classList.toggle("active", admin.internet === false);
+  const cloudflare = document.getElementById("public-cloudflare");
+  if (cloudflare && document.activeElement !== cloudflare) cloudflare.checked = access.cloudflare === true;
+  const longPin = document.getElementById("admin-long-pin");
+  if (longPin && document.activeElement !== longPin) longPin.checked = admin.longPin !== false;
+  const url = access.url ? access.url : "";
+  status.textContent = access.enabled
+    ? (url ? `${access.detail || "Public"} · ${url}` : (access.detail || "Waiting for Tailscale Funnel."))
+    : "Off. Guests use the venue WiFi.";
 }
 
 async function renderAdmin() {
@@ -1553,6 +1597,34 @@ document.getElementById("update-settings").addEventListener("submit", async (eve
   if (saved.updates) current.updates = { ...current.updates, ...saved.updates };
   toast(saved.note || "Update schedule saved");
   renderAdmin();
+});
+async function savePublic(patch) {
+  applyPayload(await api("/api/public-access", { method: "PUT", body: patch }));
+  toast("Public access saved");
+}
+
+async function saveAdminAccess(patch) {
+  applyPayload(await api("/api/admin-access", { method: "PUT", body: patch }));
+  toast("Admin access saved");
+}
+
+document.getElementById("public-access-on")?.addEventListener("click", () => savePublic({ enabled: true }));
+document.getElementById("public-access-off")?.addEventListener("click", () => savePublic({ enabled: false }));
+document.getElementById("public-cloudflare")?.addEventListener("change", (event) => {
+  savePublic({ cloudflare: event.target.checked });
+});
+document.getElementById("pinboard-on")?.addEventListener("click", async () => {
+  applyPayload(await api("/api/guest-photos/settings", { method: "PUT", body: { pinboard: true } }));
+  toast("Pinboard on");
+});
+document.getElementById("pinboard-off")?.addEventListener("click", async () => {
+  applyPayload(await api("/api/guest-photos/settings", { method: "PUT", body: { pinboard: false } }));
+  toast("Pinboard off");
+});
+document.getElementById("admin-internet-on")?.addEventListener("click", () => saveAdminAccess({ internet: true }));
+document.getElementById("admin-internet-off")?.addEventListener("click", () => saveAdminAccess({ internet: false }));
+document.getElementById("admin-long-pin")?.addEventListener("change", (event) => {
+  saveAdminAccess({ longPin: event.target.checked });
 });
 document.getElementById("update-now").addEventListener("click", async () => {
   const result = await api("/api/updates/now", { method: "POST" });

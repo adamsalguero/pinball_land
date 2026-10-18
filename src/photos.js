@@ -3,9 +3,13 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const { classifyImage } = require("./resolution");
+const { maskProfanity } = require("./text-filter");
+const { checkImage } = require("./nsfw");
 
 const WINDOW_MS = 10 * 60 * 1000;
-const MAX_PER_WINDOW = 30;
+const MAX_PER_WINDOW = 6;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_PER_DAY = 30;
 const MAX_STORED = 400;
 
 function cleanText(value, max) {
@@ -23,6 +27,7 @@ class GuestAlbum {
     this.events = [];
     this.photos = [];
     this.hits = new Map();
+    this.dayHits = new Map();
     this.load();
   }
 
@@ -48,12 +53,16 @@ class GuestAlbum {
   allow(ip, now = Date.now()) {
     const key = String(ip || "unknown");
     const recent = (this.hits.get(key) || []).filter((stamp) => now - stamp < WINDOW_MS);
-    if (recent.length >= MAX_PER_WINDOW) {
+    const day = (this.dayHits.get(key) || []).filter((stamp) => now - stamp < DAY_MS);
+    if (recent.length >= MAX_PER_WINDOW || day.length >= MAX_PER_DAY) {
       this.hits.set(key, recent);
+      this.dayHits.set(key, day);
       return false;
     }
     recent.push(now);
+    day.push(now);
     this.hits.set(key, recent);
+    this.dayHits.set(key, day);
     return true;
   }
 
@@ -78,7 +87,10 @@ class GuestAlbum {
     return this.sharp;
   }
 
-  async ingest(buffer, { caption, guestName, eventName, autoApprove = false, ip, now } = {}) {
+  async ingest(buffer, { caption, guestName, eventName, autoApprove = false, paused = false, ip, now, nsfw } = {}) {
+    if (paused) {
+      throw Object.assign(new Error("Photo uploads are paused."), { status: 403 });
+    }
     if (!this.allow(ip, now)) {
       throw Object.assign(new Error("Too many photos from this phone. Wait a few minutes."), { status: 429 });
     }
@@ -102,6 +114,8 @@ class GuestAlbum {
         .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 84, progressive: true })
         .toBuffer({ resolveWithObject: true });
+      const scan = typeof nsfw === "function" ? await nsfw(processed.data) : await checkImage(processed.data);
+      const held = Boolean(scan?.flagged);
       const event = this.currentEvent(eventName);
       const id = crypto.randomUUID();
       await fsp.mkdir(this.filesDir, { recursive: true });
@@ -112,9 +126,9 @@ class GuestAlbum {
         file: `${id}.jpg`,
         width: processed.info.width,
         height: processed.info.height,
-        caption: cleanText(caption, 80),
-        guestName: cleanText(guestName, 80),
-        status: autoApprove ? "approved" : "pending",
+        caption: maskProfanity(cleanText(caption, 80)),
+        guestName: maskProfanity(cleanText(guestName, 40)),
+        status: autoApprove && !held ? "approved" : "pending",
         createdAt: now || Date.now(),
       };
       this.photos.push(photo);

@@ -69,7 +69,7 @@ function buildPlaylist(state, options = {}) {
   if (items.clock) {
     cards.push({ type: "clock", id: "clock" });
   }
-  if (items.pinboard) {
+  if (items.pinboard && options.pinboard !== false) {
     cards.push({
       type: "pinboard",
       id: "pinboard",

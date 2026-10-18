@@ -5,7 +5,7 @@ const path = require("path");
 
 const COOKIE_NAME = "pl_device";
 const DEFAULT_PIN = "2224";
-const DEVICE_MAX_AGE_MS = 400 * 24 * 60 * 60 * 1000;
+const DEVICE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(String(token)).digest("hex");

@@ -100,6 +100,28 @@
         </div>
 
         <div data-panel="settings" hidden>
+          <section id="public-access-section">
+            <h2>Public access</h2>
+            <p class="muted">Guests open a link from outside the venue WiFi. Turn this on after the one-time Tailscale setup. The wall QR then carries a daily code. Phones on the venue WiFi need no code.</p>
+            <div class="theme-toggle" id="public-access-toggle">
+              <button class="btn" type="button" id="public-access-on">On</button>
+              <button class="btn" type="button" id="public-access-off">Off</button>
+            </div>
+            <p id="public-access-status" class="muted"></p>
+            <label class="muted"><input id="public-cloudflare" type="checkbox" /> Cloudflare quick tunnel if Tailscale is not up</label>
+            <h2>Pinboard photos</h2>
+            <div class="theme-toggle">
+              <button class="btn" type="button" id="pinboard-on">On</button>
+              <button class="btn" type="button" id="pinboard-off">Off</button>
+            </div>
+            <p class="muted">Off hides the wall pinboard, the QR card, and guest photo upload.</p>
+            <h2>Allow admin from internet</h2>
+            <div class="theme-toggle">
+              <button class="btn" type="button" id="admin-internet-on">On</button>
+              <button class="btn" type="button" id="admin-internet-off">Off</button>
+            </div>
+            <label class="muted"><input id="admin-long-pin" type="checkbox" /> Require a PIN of 6 or more digits off the venue WiFi</label>
+          </section>
           <section id="airplay-section">
             <h2>AirPlay</h2>
             <p class="muted">One tap picks the TV. When an iPhone connects, that screen leaves rotation and comes back when the mirror ends.</p>

@@ -1388,11 +1388,31 @@ function placePhotos(target, card) {
   });
 }
 
+let qrDayShown = "";
+
+function refreshGuestQr() {
+  const qr = document.querySelector("#pin-qr");
+  const card = document.querySelector(".pin-qr");
+  if (!qr || !card) return;
+  if (payload?.guest?.pinboard === false) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const day = payload?.guest?.qrDay || "";
+  if (day && day !== qrDayShown) {
+    qrDayShown = day;
+    const next = `/api/guest-qr?d=${encodeURIComponent(day)}`;
+    if (qr.getAttribute("src") !== next) qr.src = next;
+  }
+}
+
 function showPinboard(card) {
   setMode("pinboard");
   stopVideo();
   stopWallVideo();
   teardownPresent();
+  refreshGuestQr();
   const place = () => placePhotos(pinWall, card);
   place();
   const qr = document.querySelector("#pin-qr");
@@ -1492,6 +1512,7 @@ function motionFrame(ts) {
 function tick() {
   if (!payload) return;
   applyTheme(payload.state?.theme);
+  refreshGuestQr();
   renderCard(resolveCard());
   if (screen.dataset.mode === "board") paintBoardArt();
   if (screen.dataset.mode === "clock") paintClock();
