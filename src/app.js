@@ -9,7 +9,7 @@ const { resolveLogos, resolvePhotos, LOGO_KEYS, PHOTO_KEYS } = require("./logos"
 const { AMENITIES } = require("./amenities");
 const { buildPlaylist, planRotation, currentTick, replacementFor } = require("./playlist");
 const { createOpdb, manufacturerName, manufactureYear, safeId, BUILTIN_OPDB_API_KEY } = require("./opdb");
-const { sendByteRange } = require("./media-range");
+const { createMediaTracker } = require("./media-range");
 const { createConfigStore, ensureGuestSecret } = require("./config");
 const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
 const { getLanIPv4s, isLanAddress, forwardedAddress, lanRequired, loopbackRequired } = require("./lan");
@@ -179,6 +179,15 @@ function createApp({
   };
   const slotFallback = {};
   const seenVideoLog = new Set();
+  function appendVideoLog(line) {
+    const root = dataDir || path.dirname(store.filePath);
+    const dir = path.join(root, "logs");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "video.log"), line.endsWith("\n") ? line : `${line}\n`);
+  }
+  const mediaTracker = createMediaTracker({
+    log: appendVideoLog,
+  });
   const motionSync = {
     seed: 0x50494e,
     epoch: Date.now(),
@@ -896,7 +905,12 @@ function createApp({
   }
 
   app.get("/api/health", (_req, res) => {
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, {
+      ok: true,
+      openMedia: mediaTracker.count(),
+      maxOpenMedia: mediaTracker.maxOpen(),
+      longestMediaMs: mediaTracker.longestMs(),
+    });
   });
 
   app.get("/api/state", (req, res) => {
@@ -1464,27 +1478,23 @@ function createApp({
     }
   });
 
-  app.post("/api/media/failure", lanRequired, (req, res) => {
-    const event = String(req.body?.event || req.body?.reason || "event").replace(/[^\w-]/g, "").slice(0, 40) || "event";
-    const id = String(req.body?.id || "").replace(/[^\w:-]/g, "").slice(0, 80);
-    const title = String(req.body?.title || "").replace(/\s+/g, " ").slice(0, 80);
-    const code = Number.isFinite(Number(req.body?.code)) ? Number(req.body.code) : "";
-    const networkState = Number.isFinite(Number(req.body?.networkState)) ? Number(req.body.networkState) : "";
-    const readyState = Number.isFinite(Number(req.body?.readyState)) ? Number(req.body.readyState) : "";
-    const currentTime = Number.isFinite(Number(req.body?.currentTime)) ? Number(req.body.currentTime).toFixed(2) : "";
-    const src = String(req.body?.src || "").replace(/\s+/g, "").slice(0, 180);
-    const slot = ["1", "2", "3"].includes(String(req.body?.slot || "")) ? String(req.body.slot) : "";
-    const root = dataDir || path.dirname(store.filePath);
-    const dir = path.join(root, "logs");
-    fs.mkdirSync(dir, { recursive: true });
+  function recordMediaFailure(body) {
+    const event = String(body?.event || body?.reason || "event").replace(/[^\w-]/g, "").slice(0, 40) || "event";
+    const id = String(body?.id || "").replace(/[^\w:-]/g, "").slice(0, 80);
+    const title = String(body?.title || "").replace(/\s+/g, " ").slice(0, 80);
+    const code = Number.isFinite(Number(body?.code)) ? Number(body.code) : "";
+    const networkState = Number.isFinite(Number(body?.networkState)) ? Number(body.networkState) : "";
+    const readyState = Number.isFinite(Number(body?.readyState)) ? Number(body.readyState) : "";
+    const currentTime = Number.isFinite(Number(body?.currentTime)) ? Number(body.currentTime).toFixed(2) : "";
+    const src = String(body?.src || "").replace(/\s+/g, "").slice(0, 180);
+    const slot = ["1", "2", "3"].includes(String(body?.slot || "")) ? String(body.slot) : "";
     const nowMs = clockNow();
     const noisy = event === "waiting" || event === "suspend" || event === "stalled" || event === "abort" || event === "emptied";
     const dedupeKey = `${slot}:${id}:${event}`;
     if (!noisy || !seenVideoLog.has(dedupeKey)) {
       if (noisy) seenVideoLog.add(dedupeKey);
-      fs.appendFileSync(
-        path.join(dir, "video.log"),
-        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}\n`,
+      appendVideoLog(
+        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}`,
       );
     }
     const state = store.getState();
@@ -1499,7 +1509,7 @@ function createApp({
       const timing = effectiveRotation(state);
       const tick = currentTick(state.rotation.startedAt, timing.intervalSec, nowMs, timing.minInterval);
       const plan = payload().rotationPlan;
-      const failed = new Set(Array.isArray(req.body?.failedIds) ? req.body.failedIds.map(String) : [id]);
+      const failed = new Set(Array.isArray(body?.failedIds) ? body.failedIds.map(String) : [id]);
       slotFallback[slot] = {
         tick,
         card: replacementFor(plan, slot, payload().playlist, { failedIds: failed, salt: `${slot}:give-up` }),
@@ -1508,7 +1518,32 @@ function createApp({
       changed = true;
     }
     if (changed) broadcast();
-    sendJson(res, 200, { ok: true, blockedUntil: null });
+    return { ok: true, blockedUntil: null };
+  }
+
+  function advancePlayback(videoId) {
+    if (!playback || !Array.isArray(playback.playlist) || playback.playlist.length < 2) return payload();
+    const from = String(videoId || playback.videoId);
+    if (from !== playback.videoId) return payload();
+    const nextIndex = playback.index + 1;
+    if (nextIndex >= playback.playlist.length) {
+      if (!playback.loop) {
+        playback = null;
+        broadcast();
+        return payload();
+      }
+      playback.index = 0;
+    } else {
+      playback.index = nextIndex;
+    }
+    playback.videoId = playback.playlist[playback.index];
+    playback.startedAt = Date.now();
+    broadcast();
+    return payload();
+  }
+
+  app.post("/api/media/failure", lanRequired, (req, res) => {
+    sendJson(res, 200, recordMediaFailure(req.body || {}));
   });
 
   app.get("/api/media/cache", lanRequired, (req, res) => {
@@ -1572,24 +1607,7 @@ function createApp({
   });
 
   app.post("/api/media/next", lanRequired, (req, res) => {
-    if (!playback || playback.playlist.length < 2) return sendJson(res, 200, payload());
-    const from = String(req.body?.videoId || playback.videoId);
-    if (from !== playback.videoId) return sendJson(res, 200, payload());
-    const nextIndex = playback.index + 1;
-    if (nextIndex >= playback.playlist.length) {
-      if (!playback.loop) {
-        playback = null;
-        broadcast();
-        return sendJson(res, 200, payload());
-      }
-      playback.index = 0;
-    } else {
-      playback.index = nextIndex;
-    }
-    playback.videoId = playback.playlist[playback.index];
-    playback.startedAt = Date.now();
-    broadcast();
-    sendJson(res, 200, payload());
+    sendJson(res, 200, advancePlayback(req.body?.videoId));
   });
 
   app.post("/api/media", lanRequired, requirePin, async (req, res, next) => {
@@ -1672,7 +1690,7 @@ function createApp({
   app.get("/media/bundled/:file", (req, res) => {
     const filePath = bundledFile(appRoot, req.params.file);
     if (!filePath) return res.status(404).send("Not found");
-    sendByteRange(req, res, filePath);
+    mediaTracker.serve(req, res, filePath);
   });
 
   app.get("/media/videos/:id", lanRequired, (req, res) => {
@@ -1683,7 +1701,7 @@ function createApp({
       return res.status(404).send("Not found");
     }
     if (!fs.existsSync(filePath)) return res.status(404).send("Not found");
-    sendByteRange(req, res, filePath);
+    mediaTracker.serve(req, res, filePath);
   });
 
   app.post("/api/present/join", lanRequired, (req, res) => {
@@ -2125,7 +2143,7 @@ function createApp({
     const item = catalogItems.find((entry) => entry.id === req.params.id);
     const filePath = item ? starterFile(mediaRoot, item) : null;
     if (!filePath) return res.status(404).send("Not downloaded");
-    sendByteRange(req, res, filePath);
+    mediaTracker.serve(req, res, filePath);
   });
 
   app.get("/media/cache/:id", lanRequired, (req, res) => {
@@ -2133,7 +2151,7 @@ function createApp({
     if (!/^[a-z0-9-]{3,80}$/.test(id)) return res.status(404).send("Not found");
     const filePath = clips.fileFor(id);
     if (!filePath || !fs.existsSync(filePath)) return res.status(404).send("Not cached");
-    sendByteRange(req, res, filePath);
+    mediaTracker.serve(req, res, filePath);
   });
 
   app.get("/api/admin/bootstrap", requirePin, (req, res) => {
@@ -2460,6 +2478,16 @@ function createApp({
     }
     if (!message || typeof message !== "object") return;
 
+    if (message.type === "media-failure" || message.type === "media-next") {
+      if (!isLanAddress(socket.remoteAddress || "")) return;
+      if (message.type === "media-next") {
+        advancePlayback(message.videoId);
+        return;
+      }
+      recordMediaFailure(message);
+      return;
+    }
+
     if (message.type === "present-hello") {
       const presentationId = String(message.presentationId || "");
       const role = message.role === "sharer" || message.role === "viewer" ? message.role : null;
@@ -2569,6 +2597,7 @@ function createApp({
     const wss = new WebSocketServer({ server, path: "/ws" });
     wss.on("connection", (socket, req) => {
       socket.trusted = clientTrusted(req);
+      socket.remoteAddress = req.socket?.remoteAddress || "";
       clients.add(socket);
       socket.on("close", () => clients.delete(socket));
       socket.send(JSON.stringify({ type: "state", ...stateFor(socket.trusted) }));

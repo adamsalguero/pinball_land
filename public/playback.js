@@ -12,7 +12,15 @@ function stallAction({ quietMs = 0, visible = true, nudged = false, paused = fal
   return "wait";
 }
 
-const playbackApi = { STALL_NUDGE_MS, STALL_SKIP_MS, stallAction };
+// Two give-ups in a row replace the element. A third, still stuck, reloads the page.
+function poolRecovery(consecutiveGiveUps) {
+  const count = Number(consecutiveGiveUps) || 0;
+  if (count >= 3) return "reload";
+  if (count >= 2) return "reset";
+  return "swap";
+}
+
+const playbackApi = { STALL_NUDGE_MS, STALL_SKIP_MS, stallAction, poolRecovery };
 
 if (typeof module !== "undefined" && module.exports) module.exports = playbackApi;
 if (typeof window !== "undefined") window.PinballPlayback = playbackApi;

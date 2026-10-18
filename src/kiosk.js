@@ -20,6 +20,7 @@ const { placementDecision, expectedMonitorCount, monitorSignature } = require(".
 const { defaultDataDir, dataLayout } = require("./paths");
 const { buildPlacementScript } = require("./airplay");
 const { bootPlan } = require("./kiosk-boot");
+const { discoverDisplayOrigins } = require("./display-origins");
 
 const waitingPage = path.join(__dirname, "..", "public", "waiting.html");
 
@@ -29,6 +30,7 @@ if (!gotLock) {
 }
 
 let port = null;
+let slotOrigins = null;
 let layoutKey = "";
 let lastMonitors = "";
 let displaysConfig = null;
@@ -88,6 +90,12 @@ function openWaitingWindows() {
   console.warn("Waiting for server. Retrying.");
 }
 
+function displayUrl(slot) {
+  const base = slotOrigins && (slotOrigins[slot] || slotOrigins[String(slot)]);
+  if (base) return `${base}/display/${slot}`;
+  return `http://127.0.0.1:${port}/display/${slot}`;
+}
+
 function openDisplayWindows() {
   closeWindows();
   const mapped = mapDisplaysToSlots(screen.getAllDisplays(), displaysConfig || {});
@@ -123,14 +131,14 @@ function openDisplayWindows() {
     });
     win.setMenuBarVisibility(false);
     win.setFullScreen(true);
-    win.loadURL(`http://127.0.0.1:${port}/display/${item.slot}`);
+    win.loadURL(displayUrl(item.slot));
     win.on("unresponsive", () => {
       console.warn(`Display ${item.slot} is unresponsive. Reloading.`);
       if (!win.isDestroyed()) win.reload();
     });
     win.webContents.on("render-process-gone", (_event, details) => {
       console.warn(`Display ${item.slot} renderer ${details?.reason || "gone"}. Reloading.`);
-      if (!win.isDestroyed()) win.loadURL(`http://127.0.0.1:${port}/display/${item.slot}`);
+      if (!win.isDestroyed()) win.loadURL(displayUrl(item.slot));
     });
     win.on("closed", () => {
       if (windows.get(item.slot) === win) windows.delete(item.slot);
@@ -290,6 +298,7 @@ async function tryBringUpServer() {
     if (res.ok) {
       console.log(`Using already-running server on port ${config.port}`);
       port = config.port;
+      slotOrigins = await discoverDisplayOrigins(port);
       serverReady = true;
       return true;
     }
@@ -299,6 +308,7 @@ async function tryBringUpServer() {
   try {
     const started = await startServer();
     port = started.port;
+    slotOrigins = started.displayOrigins || await discoverDisplayOrigins(port);
     await waitForHealth(port, 20);
     serverReady = true;
     return true;

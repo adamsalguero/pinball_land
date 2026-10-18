@@ -115,17 +115,19 @@ npm install
 npm start
 ```
 
-Open `http://localhost:3000/display/1` (and `/display/2` on a second monitor if you have one). Control from `/` or a phone on the same WiFi. Optional: `npm run kiosk` if you want to try auto-fullscreen on the monitors you have. With fewer monitors than **Displays** says are active, the kiosk skips the missing ones and prints that in the terminal.
+Open the three displays with `scripts\open-wall-chrome.ps1` after `npm start`. Control from `/admin` or a phone on the same WiFi. Optional: `npm run kiosk` if you want to try auto-fullscreen on the monitors you have. With fewer monitors than **Displays** says are active, the kiosk skips the missing ones and prints that in the terminal.
 
-Overlapping Chrome windows on Windows pause muted video in the covered window. Launch each display with the occlusion flags (or run `scripts/open-wall-chrome.ps1`):
+Chrome allows six HTTP/1.1 connections per host, and every window in one profile shares that pool. The wall therefore opens each screen on its own origin: `http://localhost:3000/display/1`, `http://127.0.0.1:3000/display/2`, and `http://[::1]:3000/display/3`. Admin stays on `http://localhost:3000/admin` (or the LAN address printed at startup). WebSockets follow the page host, so each display talks to the server it loaded from. If IPv6 loopback does not come up, the server listens on `http://127.0.0.1:3001` for screen 3 and the script uses that instead.
+
+Overlapping Chrome windows on Windows pause muted video in the covered window. Launch each display with the occlusion flags (or run `scripts\open-wall-chrome.ps1`, which picks the three origins above):
 
 ```bat
-chrome.exe --app=http://127.0.0.1:3000/display/1 --window-position=0,0 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
+chrome.exe --app=http://localhost:3000/display/1 --window-position=0,0 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
 chrome.exe --app=http://127.0.0.1:3000/display/2 --window-position=80,60 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
-chrome.exe --app=http://127.0.0.1:3000/display/3 --window-position=160,120 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
+chrome.exe --app=http://[::1]:3000/display/3 --window-position=160,120 --window-size=1280,720 --autoplay-policy=no-user-gesture-required --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-media-suspend --disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo
 ```
 
-The Electron kiosk sets the same switches and `backgroundThrottling: false`.
+The Electron kiosk sets the same switches, `backgroundThrottling: false`, and the same three origins. Displays stay on HTTP/1.1. Browser HTTP/2 needs TLS, and the bounded media ranges plus separate origins are what keep the connection pool free.
 
 ---
 

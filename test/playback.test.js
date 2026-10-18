@@ -2,7 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { stallAction, STALL_SKIP_MS } = require("../public/playback");
+const { stallAction, poolRecovery, STALL_SKIP_MS } = require("../public/playback");
 
 test("waiting and suspend are not a skip, and a stall waits 20s while visible", () => {
   assert.equal(STALL_SKIP_MS, 20000);
@@ -14,6 +14,9 @@ test("waiting and suspend are not a skip, and a stall waits 20s while visible", 
   assert.equal(stallAction({ quietMs: 1000, visible: true, paused: true }), "play");
   assert.equal(stallAction({ quietMs: 20000, visible: true, paused: true, nudged: true }), "skip");
   assert.equal(stallAction({ ended: true, quietMs: 30000 }), "ended");
+  assert.equal(poolRecovery(1), "swap");
+  assert.equal(poolRecovery(2), "reset");
+  assert.equal(poolRecovery(3), "reload");
 });
 
 test("wall scripts do not reuse the same top-level name", () => {
@@ -47,6 +50,14 @@ test("the wall player resumes occluded video and only one element stays loaded",
   assert.doesNotMatch(display, /is-leaving/);
   assert.match(display, /wallVideo\.remove\(\)/);
   assert.match(display, /preload = "none"/);
+  assert.match(display, /preload = "metadata"/);
+  assert.match(display, /releaseVideoElement/);
+  assert.match(display, /replaceWallVideo/);
+  assert.match(display, /poolRecovery/);
+  assert.match(display, /type: "media-failure"/);
+  assert.match(display, /type: "media-next"/);
+  assert.doesNotMatch(display, /\/api\/media\/failure/);
+  assert.doesNotMatch(display, /\/api\/media\/next/);
   assert.match(display, /function serverTick/);
   assert.match(display, /stageWallVideo/);
   assert.match(display, /holdFrame/);
@@ -71,6 +82,14 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
     assert.match(source, /IntensiveWakeUpThrottling/);
   }
   assert.match(kiosk, /backgroundThrottling: false/);
+  assert.match(kiosk, /displayUrl/);
+  assert.match(kiosk, /discoverDisplayOrigins/);
+  assert.match(launcher, /localhost/);
+  assert.match(launcher, /127\.0\.0\.1/);
+  assert.match(launcher, /\[::1\]/);
+  assert.match(doc, /http:\/\/localhost:3000\/display\/1/);
+  assert.match(doc, /http:\/\/127\.0\.0\.1:3000\/display\/2/);
+  assert.match(doc, /http:\/\/\[::1\]:3000\/display\/3/);
   const control = fs.readFileSync(path.join(__dirname, "..", "public", "control.js"), "utf8");
   assert.match(control, /Show photo on wall/);
   assert.match(control, /Remove photo/);

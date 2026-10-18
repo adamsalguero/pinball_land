@@ -24,6 +24,8 @@ npm start
 This PC control:     http://localhost:3000/
 Phone / iPad:        http://192.168.1.42:3000/
 Left display:        http://localhost:3000/display/1
+Center display:      http://127.0.0.1:3000/display/2
+Right display:       http://[::1]:3000/display/3
 ...
 ```
 
