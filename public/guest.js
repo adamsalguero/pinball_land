@@ -233,10 +233,27 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
+function applyGuestAccess(data) {
+  const guest = data?.guest || {};
+  const off = guest.pinboard === false;
+  for (const name of ["camera", "board"]) {
+    const button = document.querySelector(`[data-guest-tab="${name}"]`);
+    if (button) button.hidden = off;
+  }
+  if (off && document.querySelector("[data-guest-tab].active")?.dataset.guestTab !== "scores") {
+    showTab("scores");
+  }
+  if (guest.paused) {
+    post.disabled = true;
+    if (!status.textContent) status.textContent = "Photo uploads are paused.";
+  }
+}
+
 async function watchTheme() {
   try {
     const res = await fetch("/api/state");
     const data = await res.json();
+    applyGuestAccess(data);
     applyTheme(data.state?.theme);
     boards = (data.state?.leaderboards || []).filter((board) => board.kind === "machine");
     if (!document.getElementById("panel-scores").hidden) {

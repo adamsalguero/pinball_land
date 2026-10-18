@@ -180,48 +180,57 @@ function strokeSpiderSilk(ctx, point, size) {
 
 function drawSpider(ctx, size, phase) {
   const pose = Number(phase) || 0;
-  ctx.strokeStyle = "#3a2a22";
-  ctx.lineWidth = Math.max(1.2, size * 0.045);
+  const body = size * 0.22;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  ctx.strokeStyle = "#141414";
+  ctx.lineWidth = Math.max(1.35, size * 0.04);
   for (let i = 0; i < 8; i += 1) {
     const side = i < 4 ? -1 : 1;
     const index = i % 4;
-    const hipY = (index - 1.5) * size * 0.1;
-    const swing = Math.sin(pose * 3 + index * 1.2) * size * 0.12;
-    const lift = (index % 2 === 0 ? -1 : 1) * size * 0.16 + swing * 0.35;
-    const hipX = side * size * 0.1;
-    const kneeX = side * size * (0.28 + index * 0.015);
-    const kneeY = hipY + lift * 0.45;
-    const footX = side * size * (0.42 + Math.cos(pose * 3 + index) * 0.02);
-    const footY = hipY + size * 0.12 + Math.max(0, -lift) * 0.08;
+    const spread = [-0.95, -0.32, 0.32, 0.95][index];
+    const wiggle = Math.sin(pose * 2 + index * 0.8 + (side > 0 ? 0.6 : 0)) * size * 0.028;
+    const hipX = side * body * 0.7;
+    const hipY = spread * body * 0.42;
+    const kneeX = side * size * (0.33 + index * 0.012);
+    const kneeY = hipY - size * 0.15 + wiggle;
+    const footX = side * size * (0.4 + index * 0.018);
+    const footY = hipY + size * 0.09 + wiggle * 0.3;
     ctx.beginPath();
     ctx.moveTo(hipX, hipY);
-    ctx.quadraticCurveTo(kneeX, kneeY, footX, footY);
+    ctx.lineTo(kneeX, kneeY);
+    ctx.lineTo(footX, footY);
     ctx.stroke();
   }
-  ctx.fillStyle = "#4a3428";
-  ctx.beginPath();
-  ctx.ellipse(0, size * 0.04, size * 0.16, size * 0.2, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#2c1d16";
-  ctx.beginPath();
-  ctx.ellipse(-size * 0.04, size * 0.08, size * 0.08, size * 0.11, -0.4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#5c4034";
-  ctx.beginPath();
-  ctx.arc(0, -size * 0.2, size * 0.11, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#fff6ea";
-  for (const eye of [-0.045, 0.045]) {
+  ctx.lineWidth = Math.max(1, size * 0.026);
+  const fuzz = 26;
+  for (let i = 0; i < fuzz; i += 1) {
+    const angle = (i / fuzz) * Math.PI * 2;
+    const len = body * (0.26 + (i % 4) * 0.08);
     ctx.beginPath();
-    ctx.arc(eye * size, -size * 0.22, size * 0.028, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(Math.cos(angle) * body * 0.8, Math.sin(angle) * body * 0.8);
+    ctx.lineTo(Math.cos(angle) * (body + len), Math.sin(angle) * (body + len));
+    ctx.stroke();
   }
-  ctx.fillStyle = "#1a100c";
-  for (const eye of [-0.045, 0.045]) {
+  ctx.fillStyle = "#111";
+  ctx.beginPath();
+  ctx.arc(0, 0, body, 0, Math.PI * 2);
+  ctx.fill();
+  const eye = size * 0.086;
+  for (const side of [-1, 1]) {
+    const ex = side * size * 0.07;
+    const ey = -size * 0.012;
+    ctx.fillStyle = "#fff";
     ctx.beginPath();
-    ctx.arc(eye * size, -size * 0.215, size * 0.012, 0, Math.PI * 2);
+    ctx.arc(ex, ey, eye, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#111";
+    ctx.lineWidth = Math.max(1, size * 0.012);
+    ctx.stroke();
+    ctx.fillStyle = "#161616";
+    const look = Math.sin(pose * 0.5) * eye * 0.1;
+    ctx.beginPath();
+    ctx.arc(ex + look, ey + eye * 0.12, eye * 0.4, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -247,6 +256,7 @@ function drawCandy(ctx, size) {
 }
 
 function drawBat(ctx, size, flap) {
+  size = (Number(size) || 0) * 0.8;
   const wing = Math.max(-1, Math.min(1, Number(flap) || 0));
   const lift = 0.15 + (wing + 1) * 0.42;
   const membrane = (side) => {
@@ -308,6 +318,39 @@ function drawOrnament(ctx, size, hue) {
   ctx.fillRect(-size * 0.08, -size * 0.36, size * 0.16, size * 0.12);
 }
 
+function silkHitsAvoid(x, y, avoid) {
+  if (!Array.isArray(avoid) || !avoid.length) return false;
+  const lineX = Number(x) || 0;
+  const lineY = Number(y) || 0;
+  for (const rect of avoid) {
+    if (!rect) continue;
+    const left = Number(rect.x) || 0;
+    const top = Number(rect.y) || 0;
+    const right = left + (Number(rect.w) || 0);
+    const bottom = top + (Number(rect.h) || 0);
+    if (lineX >= left && lineX <= right && lineY > top && bottom > 0) return true;
+  }
+  return false;
+}
+
+function overlapsAvoid(x, y, radius, avoid) {
+  if (!Array.isArray(avoid) || !avoid.length) return false;
+  const reach = Math.max(0, Number(radius) || 0);
+  for (const rect of avoid) {
+    if (!rect) continue;
+    const left = Number(rect.x) || 0;
+    const top = Number(rect.y) || 0;
+    const right = left + (Number(rect.w) || 0);
+    const bottom = top + (Number(rect.h) || 0);
+    const nearestX = Math.max(left, Math.min(x, right));
+    const nearestY = Math.max(top, Math.min(y, bottom));
+    const dx = x - nearestX;
+    const dy = y - nearestY;
+    if (dx * dx + dy * dy <= reach * reach) return true;
+  }
+  return false;
+}
+
 function drawField(ctx, field, width, height, options = {}) {
   ctx.clearRect(0, 0, width, height);
   if (!field) return;
@@ -318,7 +361,8 @@ function drawField(ctx, field, width, height, options = {}) {
     const world = worldPoint(particle, elapsed);
     const point = screenPoint(world, slot, width, height);
     if (point.x < -margin || point.x > width + margin || point.y < -margin || point.y > height + margin) continue;
-    if (particle.kind === "spider") strokeSpiderSilk(ctx, point, particle.size);
+    if (overlapsAvoid(point.x, point.y, particle.size * 0.7, options.avoid)) continue;
+    if (particle.kind === "spider" && !silkHitsAvoid(point.x, point.y, options.avoid)) strokeSpiderSilk(ctx, point, particle.size);
     ctx.save();
     ctx.translate(point.x, point.y);
     if (particle.kind === "pumpkin") drawPumpkin(ctx, particle.size);

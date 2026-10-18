@@ -199,7 +199,7 @@ test("leaderboard and pinboard subtypes count as one card, and video mode plays 
   }
 });
 
-test("a pinned video with no cached clip is replaced by an unused card", () => {
+test("a pinned video with no cached clip stays a video screen", () => {
   const playlist = [
     { type: "logo", key: "pinnacle" },
     { type: "logo", key: "pinball-land" },
@@ -222,7 +222,98 @@ test("a pinned video with no cached clip is replaced by an unused card", () => {
     });
     const keys = ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
     assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
-    assert.notEqual(plan["1"] && plan["1"].type, "video");
-    assert.ok(keys[0]);
+    assert.equal(plan["1"].type, "video");
+    assert.equal(plan["1"].empty, true);
+    assert.equal(plan["1"].url, "");
   }
+});
+
+test("videos keep being scheduled across two hours of stalls and a pin stays video", () => {
+  const videos = ["reel-a", "reel-b", "reel-c", "reel-d"].map((id) => ({
+    type: "video",
+    id,
+    url: `/media/cache/${id}`,
+    durationSec: 180,
+    local: true,
+  }));
+  const playlist = [
+    { type: "logo", key: "pinnacle" },
+    { type: "logo", key: "pinball-land" },
+    { type: "amenity", id: "amenities", cycle: true },
+    { type: "clock", id: "clock" },
+    { type: "pinboard", id: "pinboard" },
+    ...videos,
+  ];
+  const layout = {
+    1: { content: "video", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  const blockMs = 10 * 60 * 1000;
+  const blocked = new Map();
+  const interval = 30 * 1000;
+  const steps = Math.round((2.5 * 60 * 60 * 1000) / interval);
+  let cursor = 0;
+  let rotationVideos = 0;
+  const seen = new Set();
+  for (let step = 0; step < steps; step += 1) {
+    const now = step * interval;
+    if (step % 80 === 10) blocked.set(videos[step % videos.length].id, now + blockMs);
+    for (const [id, until] of blocked) {
+      if (until <= now) blocked.delete(id);
+    }
+    const marked = playlist.map((card) => (
+      card.type === "video" && (blocked.get(card.id) || 0) > now ? { ...card, blocked: true } : card
+    ));
+    const plan = planRotation(marked, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now,
+      videoCursor: cursor,
+    });
+    assert.equal(plan["1"].type, "video", `pin left video at step ${step}`);
+    assert.ok(plan["1"].url, `pin had no clip at step ${step}`);
+    assert.equal(plan["1"].startSec, 0);
+    for (const slot of ["2", "3"]) {
+      if (plan[slot]?.type === "video") {
+        rotationVideos += 1;
+        seen.add(plan[slot].id);
+        assert.notEqual(plan[slot].blocked, true);
+      }
+    }
+    if (step % 50 === 5) {
+      blocked.set(plan["1"].id, now + blockMs);
+      cursor += 1;
+    }
+  }
+  assert.ok(rotationVideos > 40, `scheduled video slots ${rotationVideos}`);
+  assert.ok(seen.size >= 3, `clips seen in rotation: ${[...seen].join(",")}`);
+
+  const allBlocked = playlist.map((card) => (card.type === "video" ? { ...card, blocked: true } : card));
+  const stuck = planRotation(allBlocked, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout,
+    now: steps * interval,
+    videoCursor: cursor,
+  });
+  assert.equal(stuck["1"].type, "video");
+  assert.ok(stuck["1"].url);
+
+  let returned = false;
+  for (let tick = 0; tick < 40; tick += 1) {
+    const plan = planRotation(playlist, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now: (steps * interval) + blockMs + tick * interval,
+      videoCursor: 0,
+    });
+    if (plan["2"]?.type === "video" || plan["3"]?.type === "video") returned = true;
+  }
+  assert.equal(returned, true);
 });

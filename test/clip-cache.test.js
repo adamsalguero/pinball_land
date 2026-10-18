@@ -88,12 +88,14 @@ test("a moov-at-end h264 clip is remuxed to faststart and a non-h264 clip is tra
   assert.match(log, /cache ready mpeg-clip/);
 });
 
-test("a stalled event is logged and only a stall timeout removes the clip", async () => {
+test("a stall timeout pauses a cached clip and a pinned screen stays on video", async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pinball-fail-"));
   const media = path.join(dir, "media");
   const id = crypto.randomUUID();
+  const other = crypto.randomUUID();
   await fsp.mkdir(path.join(media, "library"), { recursive: true });
   await fsp.writeFile(path.join(media, "library", "clip.mp4"), Buffer.from("mp4"));
+  await fsp.writeFile(path.join(media, "library", "other.mp4"), Buffer.from("mp4"));
   await fsp.writeFile(path.join(media, "library.json"), JSON.stringify({
     items: [{
       id,
@@ -106,10 +108,22 @@ test("a stalled event is logged and only a stall timeout removes the clip", asyn
       loop: true,
       bytes: 3,
       addedAt: 1,
+    }, {
+      id: other,
+      title: "Second loop",
+      file: "other.mp4",
+      folder: "library",
+      tags: [],
+      allAges: true,
+      inRotation: true,
+      loop: true,
+      bytes: 3,
+      addedAt: 2,
     }],
   }));
   const store = await Store.load(path.join(dir, "state.json"));
   const root = path.join(__dirname, "..");
+  let nowMs = 1_700_000_000_000;
   const { app } = createApp({
     store,
     pin: "2224",
@@ -121,6 +135,7 @@ test("a stalled event is logged and only a stall timeout removes the clip", asyn
     mediaCatalog: path.join(media, "library.json"),
     dataDir: dir,
     clipCache: false,
+    clock: () => nowMs,
   });
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -134,13 +149,14 @@ test("a stalled event is logged and only a stall timeout removes the clip", asyn
     });
     assert.equal(pinned.status, 200);
     const before = await (await fetch(`${origin}/api/state`)).json();
-    assert.equal(before.rotationPlan["1"].id, id);
+    const firstId = before.rotationPlan["1"].id;
+    assert.ok([id, other].includes(firstId));
     const stalled = await fetch(`${origin}/api/media/failure`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         event: "stalled",
-        id,
+        id: firstId,
         title: "Lobby loop",
         code: 4,
         networkState: 2,
@@ -151,11 +167,21 @@ test("a stalled event is logged and only a stall timeout removes the clip", asyn
     });
     assert.equal(stalled.status, 200);
     const still = await (await fetch(`${origin}/api/state`)).json();
-    assert.equal(still.rotationPlan["1"].id, id);
+    assert.equal(still.rotationPlan["1"].id, firstId);
+    const ended = await fetch(`${origin}/api/media/failure`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "ended", id: firstId, title: "Lobby loop", currentTime: 12, src: `/media/videos/${firstId}` }),
+    });
+    assert.equal(ended.status, 200);
+    const advanced = await (await fetch(`${origin}/api/state`)).json();
+    assert.equal(advanced.rotationPlan["1"].type, "video");
+    assert.notEqual(advanced.rotationPlan["1"].id, firstId);
+    const secondId = advanced.rotationPlan["1"].id;
     const timeout = await fetch(`${origin}/api/media/failure`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ event: "stall-timeout", id, title: "Lobby loop", code: null, networkState: 2, readyState: 2, currentTime: 0.2, src: `/media/videos/${id}` }),
+      body: JSON.stringify({ event: "stall-timeout", id: secondId, title: "Second loop", code: null, networkState: 2, readyState: 2, currentTime: 0.2, src: `/media/videos/${secondId}` }),
     });
     assert.equal(timeout.status, 200);
     const after = await (await fetch(`${origin}/api/state`)).json();
@@ -167,12 +193,31 @@ test("a stalled event is logged and only a stall timeout removes the clip", asyn
       return card.type;
     });
     assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
-    assert.notEqual(after.rotationPlan["1"].type, "video");
+    assert.equal(after.rotationPlan["1"].type, "video");
+    assert.equal(after.rotationPlan["1"].id, firstId);
+    assert.equal(after.playlist.find((card) => card.id === secondId).blocked, true);
+    assert.equal(fs.existsSync(path.join(media, "library", "clip.mp4")), true);
+    const both = await fetch(`${origin}/api/media/failure`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: "stall-timeout", id: firstId, title: "Lobby loop", currentTime: 1, src: `/media/videos/${firstId}` }),
+    });
+    assert.equal(both.status, 200);
+    const stuck = await (await fetch(`${origin}/api/state`)).json();
+    assert.equal(stuck.rotationPlan["1"].type, "video");
+    assert.ok(stuck.rotationPlan["1"].url);
+    nowMs += 10 * 60 * 1000 + 1;
+    const expired = await (await fetch(`${origin}/api/state`)).json();
+    assert.notEqual(expired.playlist.find((card) => card.id === firstId).blocked, true);
+    assert.notEqual(expired.playlist.find((card) => card.id === secondId).blocked, true);
+    assert.equal(expired.rotationPlan["1"].type, "video");
     const log = fs.readFileSync(path.join(dir, "logs", "video.log"), "utf8");
-    assert.match(log, new RegExp(`event=stalled id=${id}`));
+    assert.match(log, new RegExp(`event=stalled id=${firstId}`));
     assert.match(log, /networkState=2/);
     assert.match(log, /readyState=1/);
     assert.match(log, /event=stall-timeout/);
+    assert.match(log, /blockedUntil=/);
+    assert.match(log, /event=ended/);
   } finally {
     server.close();
   }

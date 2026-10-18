@@ -71,6 +71,20 @@ test("admin can permanently delete a guest photo", async () => {
   }
 });
 
+test("admin login page does not reveal the default PIN", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const admin = await fetch(`${origin}/admin`);
+    const html = await admin.text();
+    assert.equal(admin.status, 200);
+    assert.match(html, /id="pin-input"/);
+    assert.doesNotMatch(html, /2224/);
+    assert.doesNotMatch(html, /default pin/i);
+  } finally {
+    server.close();
+  }
+});
+
 test("guest app is public and admin app is separate", async () => {
   const { server, origin } = await startServer();
   try {
@@ -82,7 +96,7 @@ test("guest app is public and admin app is separate", async () => {
     assert.match(guestText, /manifest.webmanifest/);
     assert.doesNotMatch(guestText, /Kiosk control/);
     assert.match(adminText, /Pinball Land Admin/);
-    assert.match(adminText, /2224/);
+    assert.doesNotMatch(adminText, /2224/);
     assert.match(adminText, /admin.webmanifest/);
   } finally {
     server.close();
@@ -92,6 +106,12 @@ test("guest app is public and admin app is separate", async () => {
 test("guest upload needs no PIN, admin actions need a device token", async () => {
   const { server, origin } = await startServer();
   try {
+    const held = await json(origin, "/api/guest-photos/settings", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { autoApprove: false },
+    });
+    assert.equal(held.res.status, 200);
     const jpeg = await sharp({
       create: { width: 400, height: 300, channels: 3, background: "#62006e" },
     }).jpeg().toBuffer();
@@ -160,7 +180,7 @@ test("guest upload needs no PIN, admin actions need a device token", async () =>
   }
 });
 
-test("internet clients can post a photo but cannot run admin or read share codes", async () => {
+test("internet clients need the wall QR and cannot run admin with the venue PIN", async () => {
   const { server, origin } = await startServer();
   const remote = { "x-forwarded-for": "8.8.8.8" };
   try {
@@ -182,7 +202,9 @@ test("internet clients can post a photo but cannot run admin or read share codes
       headers: { "content-type": "image/jpeg", "x-forwarded-for": "8.8.8.8", "x-guest-name": "Sam" },
       body: jpeg,
     });
-    assert.equal(uploaded.status, 200);
+    const uploadedBody = await uploaded.json();
+    assert.equal(uploaded.status, 403);
+    assert.match(uploadedBody.error, /Scan the QR code at Pinball Land/);
   } finally {
     server.close();
   }
@@ -192,7 +214,7 @@ test("repeated wrong PINs lock login, and expired device tokens stop working", a
   const { DeviceStore } = require("../src/devices");
   const { server, origin, dir } = await startServer();
   try {
-    for (let i = 0; i < 8; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       const wrong = await json(origin, "/api/login", { method: "POST", body: { pin: "0000" } });
       assert.equal(wrong.res.status, 401);
     }

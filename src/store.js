@@ -205,6 +205,7 @@ function normalizeRow(row) {
     name: String(row.name || "").trim(),
     score: parseScore(row.score),
     proofFile,
+    createdAt: Number(row.createdAt) > 0 ? Number(row.createdAt) : null,
   };
 }
 
@@ -247,6 +248,10 @@ function normalizeLeaderboard(board) {
 
 function sortRows(rows) {
   return [...rows].sort((a, b) => b.score - a.score || String(a.name).localeCompare(String(b.name)));
+}
+
+function playerKey(name) {
+  return String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function isMachineBoard(board) {
@@ -782,7 +787,20 @@ class Store {
     if (status === "approved") {
       const board = this.findBoard(item.boardId);
       if (!board) throw Object.assign(new Error("That machine is no longer on a board"), { status: 404 });
-      board.rows.push(normalizeRow({ name: item.name, score: item.score, proofFile: item.proofFile }));
+      const key = playerKey(item.name);
+      const existing = board.rows.find((row) => playerKey(row.name) === key);
+      if (existing) {
+        if (item.score > existing.score) existing.score = item.score;
+        if (item.proofFile) existing.proofFile = item.proofFile;
+        existing.createdAt = item.createdAt || Date.now();
+      } else {
+        board.rows.push(normalizeRow({
+          name: item.name,
+          score: item.score,
+          proofFile: item.proofFile,
+          createdAt: item.createdAt,
+        }));
+      }
       board.rows = sortRows(board.rows);
     }
     return this.commit();

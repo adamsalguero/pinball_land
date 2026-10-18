@@ -10,7 +10,7 @@ const { AMENITIES } = require("./amenities");
 const { buildPlaylist, planRotation } = require("./playlist");
 const { createOpdb, manufacturerName, manufactureYear, safeId, BUILTIN_OPDB_API_KEY } = require("./opdb");
 const { sendByteRange } = require("./media-range");
-const { createConfigStore } = require("./config");
+const { createConfigStore, ensureGuestSecret } = require("./config");
 const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
 const { getLanIPv4s, isLanAddress, forwardedAddress, lanRequired, loopbackRequired } = require("./lan");
 const { Presentations } = require("./presentations");
@@ -22,6 +22,19 @@ const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards } = require("./catalog");
 const { bundledFile } = require("./bundled");
 const { createClipCache } = require("./clip-cache");
+const { prepareLogoSvg } = require("./logo-color");
+const {
+  GUEST_COOKIE,
+  COOKIE_MS,
+  guestDay,
+  guestToken,
+  tokenMatches,
+  signGuestCookie,
+  readGuestCookie,
+  scanPage,
+} = require("./guest-link");
+const { detectTailscale, startQuickTunnel } = require("./public-access");
+const { maskProfanity } = require("./text-filter");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
 const { isInside, defaultDataDir, dataLayout } = require("./paths");
 const { launchDetachedUpdate, launchRegisterTasks, readGitCommit, readUpdateStatusSync } = require("./self-update");
@@ -36,6 +49,7 @@ const UPLOAD_TYPES = {
 };
 
 const COOKIE_NAME = DEVICE_COOKIE;
+const CSRF_COOKIE = "pl_csrf";
 const SESSION_MAX_AGE_MS = DEVICE_MAX_AGE_MS;
 
 function parseCookies(header) {
@@ -133,12 +147,15 @@ function createApp({
   guestPhotosDir = null,
   catalogPath = null,
   now,
+  clock = null,
   dataDir = null,
   appRoot = path.join(__dirname, ".."),
   clipCache = false,
   clipIdList = null,
+  publicProbe = null,
 }) {
   const app = express();
+  app.set("trust proxy", "loopback");
   const opdb = createOpdb({
     apiKey: opdbApiKey,
     cacheDir,
@@ -146,6 +163,7 @@ function createApp({
   });
   const externalConfig = Boolean(configStore);
   const localStore = configStore || createConfigStore(path.join(os.tmpdir(), `pinball-land-${crypto.randomUUID()}`, "config.json"));
+  ensureGuestSecret(localStore.path);
   let activePin = pin;
   const uploadRoot = uploadsDir || path.join(os.tmpdir(), `pinball-land-uploads-${crypto.randomUUID()}`);
   const presentations = new Presentations({
@@ -153,7 +171,17 @@ function createApp({
     now,
   });
   let restartToken = 0;
-  const blockedVideos = new Set();
+  const clockNow = typeof clock === "function" ? clock : () => Date.now();
+  const VIDEO_BLOCK_MS = 10 * 60 * 1000;
+  const blockedVideos = new Map();
+  let videoCursor = 0;
+
+  function videoIsBlocked(id, nowMs) {
+    const until = blockedVideos.get(id) || 0;
+    if (until > nowMs) return true;
+    if (until) blockedVideos.delete(id);
+    return false;
+  }
   const motionSync = {
     seed: 0x50494e,
     epoch: Date.now(),
@@ -297,10 +325,11 @@ function createApp({
     const displays = config.displays;
     const mapped = mapDisplaysToSlots(monitors, displays);
     const air = airplayController.ready();
-    const layout = layoutForDisplays(displays);
+    const layout = wallLayout(displays);
     const playlist = buildPlaylist(state, {
       videos: library.list(),
       allAges: config.media.allAges,
+      pinboard: config.photos.pinboard !== false,
       starters: starterCards(catalogItems, {
         theme: state.theme,
         allAges: config.media.allAges,
@@ -309,7 +338,11 @@ function createApp({
         isReady: (id) => clips.isReady(id),
       }),
       youtube: config.youtube?.[state.theme] || [],
-    }).filter((card) => !(card.type === "video" && blockedVideos.has(card.id)));
+    }).map((card) => (
+      card.type === "video" && videoIsBlocked(card.id, clockNow())
+        ? { ...card, blocked: true }
+        : card
+    ));
     const timing = effectiveRotation(state);
     const rotationPlan = planRotation(playlist, {
       startedAt: state.rotation.startedAt,
@@ -317,7 +350,8 @@ function createApp({
       minInterval: timing.minInterval,
       screenCount: displays.count,
       layout,
-      now: Date.now(),
+      now: clockNow(),
+      videoCursor,
     });
     return {
       state: {
@@ -362,16 +396,32 @@ function createApp({
       motion: config.motion,
       slogans: config.slogans,
       motionSync,
-      serverNow: Date.now(),
+      rotationTiming: timing,
+      videoCursor,
+      serverNow: clockNow(),
       version: pkg.version,
       youtube: config.youtube,
+      publicAccess: {
+        enabled: config.publicAccess?.enabled === true,
+        cloudflare: config.publicAccess?.cloudflare === true,
+        url: publicStatus.url || "",
+        source: publicStatus.source || "",
+        detail: publicStatus.detail || "",
+      },
+      adminAccess: {
+        internet: config.admin?.internet !== false,
+        longPin: config.admin?.longPin !== false,
+      },
       guest: {
         path: "/app",
-        publicUrl: config.photos.publicBaseUrl ? `${config.photos.publicBaseUrl.replace(/\/$/, "")}/app` : null,
+        publicUrl: entryUrl() || null,
         eventName: config.photos.eventName,
         style: config.photos.style,
         span: config.photos.span,
-        autoApprove: config.photos.autoApprove,
+        autoApprove: config.photos.autoApprove !== false,
+        pinboard: config.photos.pinboard !== false,
+        paused: config.photos.paused === true,
+        qrDay: guestDay(clockNow()),
         photos: album.feed(),
         events: album.events.map((event) => ({ id: event.id, name: event.name, createdAt: event.createdAt })),
       },
@@ -406,6 +456,9 @@ function createApp({
         style: full.guest.style,
         photos: full.guest.photos,
         events: full.guest.events,
+        pinboard: full.guest.pinboard,
+        paused: full.guest.paused,
+        autoApprove: full.guest.autoApprove,
       },
       serverNow: full.serverNow,
       version: full.version,
@@ -426,23 +479,33 @@ function createApp({
     }
   };
 
+  function wallLayout(displays) {
+    const layout = layoutForDisplays(displays || currentConfig().displays);
+    if (currentConfig().photos?.pinboard === false) {
+      for (const slot of Object.values(layout)) {
+        if (slot?.content === "pinboard") slot.content = "rotation";
+      }
+    }
+    return layout;
+  }
+
   function assertOpen(slot) {
     if (!["1", "2", "3"].includes(String(slot))) {
       throw Object.assign(new Error("Unknown display"), { status: 404 });
     }
-    const layout = layoutForDisplays(currentConfig().displays)[String(slot)];
+    const layout = wallLayout()[String(slot)];
     if (!layout?.enabled) {
       throw Object.assign(new Error("That display is turned off. Enable it under Displays first."), { status: 400 });
     }
   }
 
   function enabledSlots() {
-    const layout = layoutForDisplays(currentConfig().displays);
+    const layout = wallLayout();
     return ["1", "2", "3"].filter((slot) => layout[slot]?.enabled);
   }
 
   function targetSlots(target, displays) {
-    const layout = layoutForDisplays(displays || currentConfig().displays);
+    const layout = wallLayout(displays);
     if (target === "all") return ["1", "2", "3"].filter((slot) => layout[slot]?.enabled);
     if (["1", "2", "3"].includes(String(target)) && layout[String(target)]?.enabled) return [String(target)];
     return [];
@@ -557,8 +620,9 @@ function createApp({
   }
 
   function presentedToken(req) {
-    const cookies = parseCookies(req.headers.cookie);
-    return cookies[COOKIE_NAME] || req.get("x-device-token") || "";
+    const cookies = parseCookies(req.headers?.cookie);
+    const headerToken = typeof req.get === "function" ? req.get("x-device-token") : req.headers?.["x-device-token"];
+    return cookies[COOKIE_NAME] || headerToken || "";
   }
 
   function pinMatches(submitted) {
@@ -570,7 +634,138 @@ function createApp({
 
   const loginFailures = new Map();
   const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-  const LOGIN_LIMIT = 8;
+  const LOGIN_LIMIT = 5;
+  const globalLoginFailures = [];
+  let publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: 0 };
+  let tunnel = null;
+  let tunnelUrl = "";
+
+  function guestSecret() {
+    return currentConfig().guestSecret || ensureGuestSecret(localStore.path);
+  }
+
+  function cookieSecure(req) {
+    if (req.secure) return true;
+    const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+    if (proto === "https") return true;
+    const host = String(req.headers.host || "");
+    return /\.ts\.net(?::\d+)?$/i.test(host) || /trycloudflare\.com/i.test(host);
+  }
+
+  function isPublicRequest(req) {
+    if (req.headers["tailscale-funnel"] || req.headers["x-tailscale-funnel"]) return true;
+    const host = String(req.headers.host || "").split(":")[0];
+    if (/\.ts\.net$/i.test(host) || /trycloudflare\.com$/i.test(host)) return true;
+    return !isLanAddress(forwardedAddress(req));
+  }
+
+  function stopTunnel() {
+    if (tunnel) {
+      tunnel.kill();
+      tunnel = null;
+    }
+    tunnelUrl = "";
+  }
+
+  async function refreshPublicAccess() {
+    const access = currentConfig().publicAccess;
+    if (!access?.enabled) {
+      stopTunnel();
+      publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: clockNow() };
+      return publicStatus;
+    }
+    const probe = publicProbe || detectTailscale;
+    let found = { url: "", source: "" };
+    try {
+      found = await probe();
+    } catch {
+      found = { url: "", source: "" };
+    }
+    if (found?.url) {
+      stopTunnel();
+      publicStatus = { url: found.url, source: found.source || "tailscale", detail: "Tailscale Funnel", checkedAt: clockNow() };
+      return publicStatus;
+    }
+    if (access.cloudflare && !process.env.NODE_TEST_CONTEXT) {
+      if (!tunnel) {
+        tunnel = startQuickTunnel({
+          port: currentConfig().port,
+          onUrl(url) {
+            tunnelUrl = url;
+            publicStatus = { url, source: "cloudflare", detail: "Cloudflare quick tunnel", checkedAt: clockNow() };
+          },
+        });
+      }
+      if (tunnelUrl) {
+        publicStatus = { url: tunnelUrl, source: "cloudflare", detail: "Cloudflare quick tunnel", checkedAt: clockNow() };
+        return publicStatus;
+      }
+    } else {
+      stopTunnel();
+    }
+    publicStatus = {
+      url: "",
+      source: "",
+      detail: "Funnel is not up yet. Guests stay on the venue WiFi until it is.",
+      checkedAt: clockNow(),
+    };
+    return publicStatus;
+  }
+
+  const publicTimer = setInterval(() => {
+    refreshPublicAccess().catch((err) => console.error(err));
+  }, 60_000);
+  if (publicTimer.unref) publicTimer.unref();
+
+  function entryUrl() {
+    const config = currentConfig();
+    const base = config.publicAccess?.enabled && publicStatus.url ? String(publicStatus.url).replace(/\/$/, "") : "";
+    if (base) {
+      const token = guestToken(guestSecret(), guestDay(clockNow()));
+      return `${base}/?k=${token}`;
+    }
+    const configured = config.photos.publicBaseUrl;
+    if (configured) return `${configured.replace(/\/$/, "")}/app`;
+    const host = getLanIPv4s()[0];
+    if (host) return `http://${host}:${config.port}/app`;
+    return "";
+  }
+
+  function guestGate(req) {
+    if (!isPublicRequest(req)) return true;
+    if (isAuthed(req)) return true;
+    const cookies = parseCookies(req.headers.cookie);
+    if (readGuestCookie(guestSecret(), cookies[GUEST_COOKIE], clockNow())) return true;
+    if (tokenMatches(guestSecret(), req.query?.k, clockNow())) return "set";
+    return false;
+  }
+
+  function setGuestCookie(req, res) {
+    const value = signGuestCookie(guestSecret(), clockNow() + COOKIE_MS);
+    res.cookie(GUEST_COOKIE, value, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: cookieSecure(req),
+      path: "/",
+      maxAge: COOKIE_MS,
+    });
+  }
+
+  function requireGuest(req, res, next) {
+    const gate = guestGate(req);
+    if (gate === "set") setGuestCookie(req, res);
+    if (gate === true || gate === "set") return next();
+    if (String(req.path || req.originalUrl || "").startsWith("/api/")) {
+      return sendJson(res, 403, { error: "Scan the QR code at Pinball Land" });
+    }
+    return res.status(403).type("html").send(scanPage());
+  }
+
+  function rateKey(req) {
+    const cookie = parseCookies(req.headers.cookie)[GUEST_COOKIE] || "";
+    const stamp = cookie ? crypto.createHash("sha256").update(cookie).digest("hex").slice(0, 16) : "open";
+    return `${stamp}|${forwardedAddress(req)}`;
+  }
 
   function recentFailures(ip) {
     const now = Date.now();
@@ -580,33 +775,101 @@ function createApp({
     return hits;
   }
 
+  function internetAdminOff(req) {
+    return isPublicRequest(req) && currentConfig().admin?.internet === false;
+  }
+
+  function longPinBlocks(req) {
+    return isPublicRequest(req) && currentConfig().admin?.longPin !== false && String(currentPin()).length < 6;
+  }
+
+  function pinAccepted(req, submitted) {
+    const value = submitted === undefined ? req.get("x-pin") : submitted;
+    if (!pinMatches(value)) return false;
+    if (longPinBlocks(req)) return false;
+    return true;
+  }
+
   function isAuthed(req) {
+    if (internetAdminOff(req)) return false;
     if (devices.find(presentedToken(req))) return true;
-    return pinMatches(req.get("x-pin"));
+    return pinAccepted(req);
+  }
+
+  function clientTrusted(req) {
+    if (!isPublicRequest(req)) return true;
+    if (currentConfig().admin?.internet === false) return false;
+    return Boolean(devices.find(presentedToken(req)));
+  }
+
+  function recordFailure(ip) {
+    const hits = recentFailures(ip);
+    hits.push(Date.now());
+    loginFailures.set(ip, hits);
+    const now = Date.now();
+    globalLoginFailures.push(now);
+    while (globalLoginFailures.length && now - globalLoginFailures[0] > 60_000) globalLoginFailures.shift();
+  }
+
+  function paceMs(ip) {
+    if (process.env.NODE_TEST_CONTEXT) return 0;
+    const local = recentFailures(ip).length;
+    const global = globalLoginFailures.filter((stamp) => Date.now() - stamp < 60_000).length;
+    return Math.min(1500, local * 80 + global * 20);
+  }
+
+  function csrfBlocks(req) {
+    const origin = req.get("origin");
+    if (origin) {
+      let host = "";
+      try {
+        host = new URL(origin).host;
+      } catch {
+        return true;
+      }
+      if (host !== req.get("host")) return true;
+    }
+    if (req.get("x-pin") || req.get("x-device-token")) return false;
+    const cookies = parseCookies(req.headers.cookie);
+    if (!cookies[COOKIE_NAME]) return false;
+    const given = String(req.get("x-csrf") || "");
+    const expected = String(cookies[CSRF_COOKIE] || "");
+    if (!given || given.length !== expected.length) return true;
+    return !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
   }
 
   function setDeviceCookie(req, res, token) {
+    const secure = cookieSecure(req);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: Boolean(req.secure),
+      secure,
+      path: "/",
+      maxAge: SESSION_MAX_AGE_MS,
+    });
+    res.cookie(CSRF_COOKIE, crypto.randomBytes(18).toString("base64url"), {
+      httpOnly: false,
+      sameSite: "lax",
+      secure,
       path: "/",
       maxAge: SESSION_MAX_AGE_MS,
     });
   }
 
+  function touchDevice(device) {
+    const stale = Date.now() - device.lastSeen > 60 * 1000;
+    devices.touch(device.id);
+    if (stale) devices.save().catch((err) => console.error(err));
+  }
+
   function requirePin(req, res, next) {
-    if (!isLanAddress(forwardedAddress(req))) {
-      return sendJson(res, 403, { error: "Admin controls stay on the venue network." });
+    if (internetAdminOff(req)) {
+      return sendJson(res, 403, { error: "Admin from the internet is turned off." });
     }
     const device = devices.find(presentedToken(req));
     if (device) {
-      if (Date.now() - device.lastSeen > 60 * 1000) {
-        devices.touch(device.id);
-        devices.save().catch((err) => console.error(err));
-      } else {
-        devices.touch(device.id);
-      }
+      if (csrfBlocks(req)) return sendJson(res, 403, { error: "Refresh the admin page and try again." });
+      touchDevice(device);
       return next();
     }
     const ip = forwardedAddress(req);
@@ -614,13 +877,15 @@ function createApp({
       return sendJson(res, 429, { error: "Too many PIN attempts. Wait 15 minutes." });
     }
     if (!pinMatches(req.get("x-pin"))) {
-      if (req.get("x-pin")) {
-        const hits = recentFailures(ip);
-        hits.push(Date.now());
-        loginFailures.set(ip, hits);
-      }
-      return sendJson(res, 401, { error: "PIN required" });
+      if (req.get("x-pin")) recordFailure(ip);
+      const wait = paceMs(ip);
+      if (!wait) return sendJson(res, 401, { error: "PIN required" });
+      return setTimeout(() => sendJson(res, 401, { error: "PIN required" }), wait);
     }
+    if (longPinBlocks(req)) {
+      return sendJson(res, 403, { error: "Set a PIN of 6 or more digits on the venue WiFi before signing in from the internet." });
+    }
+    if (csrfBlocks(req)) return sendJson(res, 403, { error: "Refresh the admin page and try again." });
     loginFailures.delete(ip);
     return next();
   }
@@ -630,24 +895,30 @@ function createApp({
   });
 
   app.get("/api/state", (req, res) => {
-    sendJson(res, 200, stateFor(isLanAddress(forwardedAddress(req))));
+    sendJson(res, 200, stateFor(clientTrusted(req)));
   });
 
   app.get("/api/auth", (req, res) => {
     sendJson(res, 200, { ok: isAuthed(req) });
   });
 
-  app.post("/api/login", lanRequired, async (req, res, next) => {
+  app.post("/api/login", async (req, res, next) => {
     try {
+      if (internetAdminOff(req)) {
+        return sendJson(res, 403, { error: "Admin from the internet is turned off." });
+      }
       const ip = forwardedAddress(req);
       if (recentFailures(ip).length >= LOGIN_LIMIT) {
         return sendJson(res, 429, { error: "Too many PIN attempts. Wait 15 minutes." });
       }
+      const wait = paceMs(ip);
+      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
       if (!pinMatches(req.body?.pin)) {
-        const hits = recentFailures(ip);
-        hits.push(Date.now());
-        loginFailures.set(ip, hits);
+        recordFailure(ip);
         return sendJson(res, 401, { error: "Wrong PIN" });
+      }
+      if (longPinBlocks(req)) {
+        return sendJson(res, 403, { error: "Set a PIN of 6 or more digits on the venue WiFi before signing in from the internet." });
       }
       loginFailures.delete(ip);
       const issued = devices.issue(req.body?.name);
@@ -665,6 +936,7 @@ function createApp({
       if (device) devices.revoke(device.id);
       await devices.save();
       res.clearCookie(COOKIE_NAME, { path: "/" });
+      res.clearCookie(CSRF_COOKIE, { path: "/" });
       sendJson(res, 200, { ok: true });
     } catch (err) {
       next(err);
@@ -673,6 +945,9 @@ function createApp({
 
   app.put("/api/slots/:id", requirePin, async (req, res, next) => {
     try {
+      if (req.body?.content === "pinboard" && currentConfig().photos.pinboard === false) {
+        return sendJson(res, 400, { error: "Pinboard photos are turned off." });
+      }
       await store.setSlot(req.params.id, {
         content: req.body?.content,
         leaderboardId: req.body?.leaderboardId,
@@ -722,10 +997,12 @@ function createApp({
 
   app.put("/api/rotation", requirePin, async (req, res, next) => {
     try {
+      const items = req.body?.items && typeof req.body.items === "object" ? { ...req.body.items } : undefined;
+      if (items && currentConfig().photos.pinboard === false) items.pinboard = false;
       await store.setRotation({
         enabled: req.body?.enabled,
         intervalSec: req.body?.intervalSec,
-        items: req.body?.items,
+        items,
       });
       sendJson(res, 200, payload());
     } catch (err) {
@@ -916,7 +1193,14 @@ function createApp({
     if (!LOGO_KEYS.includes(req.params.key)) {
       return res.status(404).send("Unknown logo");
     }
-    sendMedia(res, resolveLogos(logosDir), req.params.key, "Logo");
+    const resolved = resolveLogos(logosDir)[req.params.key];
+    if (!resolved?.filePath) return res.status(404).send("Logo file not found");
+    res.setHeader("Cache-Control", "no-store");
+    if (String(resolved.filePath).endsWith(".svg")) {
+      res.type("image/svg+xml");
+      return res.send(prepareLogoSvg(fs.readFileSync(resolved.filePath, "utf8")));
+    }
+    return res.sendFile(resolved.filePath);
   });
 
   app.get("/photos/:key", (req, res) => {
@@ -1157,16 +1441,20 @@ function createApp({
     const root = dataDir || path.dirname(store.filePath);
     const dir = path.join(root, "logs");
     fs.mkdirSync(dir, { recursive: true });
+    const nowMs = clockNow();
+    const blocking = event === "failed" || event === "error" || event === "stall-timeout";
+    const blockedUntil = blocking && id ? new Date(nowMs + VIDEO_BLOCK_MS).toISOString() : "";
     fs.appendFileSync(
       path.join(dir, "video.log"),
-      `${new Date().toISOString()} event=${event} id=${id} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}\n`,
+      `${new Date(nowMs).toISOString()} event=${event} id=${id} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}${blockedUntil ? ` blockedUntil=${blockedUntil}` : ""}\n`,
     );
-    const blocking = event === "failed" || event === "error" || event === "stall-timeout";
-    if (blocking && id && !blockedVideos.has(id)) {
-      blockedVideos.add(id);
-      broadcast();
+    if (event === "ended" && id) videoCursor += 1;
+    if (blocking && id) {
+      blockedVideos.set(id, nowMs + VIDEO_BLOCK_MS);
+      videoCursor += 1;
     }
-    sendJson(res, 200, { ok: true });
+    if ((event === "ended" || blocking) && id) broadcast();
+    sendJson(res, 200, { ok: true, blockedUntil: blockedUntil || null });
   });
 
   app.get("/api/media/cache", lanRequired, (req, res) => {
@@ -1468,15 +1756,14 @@ function createApp({
   }
 
   function guestPublicUrl(req) {
-    const configured = currentConfig().photos.publicBaseUrl;
-    if (configured) return `${configured.replace(/\/$/, "")}/app`;
-    const host = getLanIPv4s()[0];
-    if (host) return `http://${host}:${currentConfig().port}/app`;
+    const entry = entryUrl();
+    if (entry) return entry;
     return `${req.protocol}://${req.get("host")}/app`;
   }
 
   app.get("/api/guest-qr", async (req, res, next) => {
     try {
+      if (isPublicRequest(req) && !isAuthed(req)) return sendJson(res, 404, { error: "Not found" });
       const QRCode = require("qrcode");
       const png = await QRCode.toBuffer(guestPublicUrl(req), {
         margin: 1,
@@ -1507,11 +1794,13 @@ function createApp({
   }
 
   app.post("/api/scores", (req, res, next) => {
-    const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (mime.startsWith("image/")) {
-      return express.raw({ limit: "12mb", type: () => true })(req, res, () => acceptScore(req, res, next, true));
-    }
-    return acceptScore(req, res, next, false);
+    requireGuest(req, res, () => {
+      const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      if (mime.startsWith("image/")) {
+        return express.raw({ limit: "12mb", type: () => true })(req, res, () => acceptScore(req, res, next, true));
+      }
+      return acceptScore(req, res, next, false);
+    });
   });
 
   async function acceptScore(req, res, next, withPhoto) {
@@ -1526,12 +1815,12 @@ function createApp({
           return sendJson(res, 400, { error: "Upload a JPEG, PNG, or WEBP of the score." });
         }
         boardId = safeHeader(req.get("x-board-id"));
-        name = safeHeader(req.get("x-name"));
+        name = maskProfanity(safeHeader(req.get("x-name")));
         score = safeHeader(req.get("x-score"));
         proofFile = await saveScoreProof(req.body);
       } else {
         boardId = req.body?.boardId;
-        name = req.body?.name;
+        name = maskProfanity(req.body?.name);
         score = req.body?.score;
       }
       const submission = await store.submitScore({
@@ -1590,12 +1879,13 @@ function createApp({
     res.type("jpeg").sendFile(filePath);
   });
 
-  app.get("/api/guest-photos/feed", (_req, res) => {
+  app.get("/api/guest-photos/feed", requireGuest, (_req, res) => {
     sendJson(res, 200, { photos: album.feed(), events: album.events });
   });
 
   app.post(
     "/api/guest-photos",
+    requireGuest,
     express.raw({ limit: "25mb", type: () => true }),
     async (req, res, next) => {
       try {
@@ -1608,7 +1898,8 @@ function createApp({
           guestName: safeHeader(req.get("x-guest-name")),
           eventName: currentConfig().photos.eventName,
           autoApprove: currentConfig().photos.autoApprove,
-          ip: req.socket?.remoteAddress || "",
+          paused: currentConfig().photos.paused,
+          ip: rateKey(req),
         });
         broadcast();
         sendJson(res, 200, { photo });
@@ -1622,9 +1913,57 @@ function createApp({
     sendJson(res, 200, { photos: album.list(), events: album.events, settings: currentConfig().photos });
   });
 
+  async function syncPinboardFlag() {
+    const state = store.getState();
+    if (currentConfig().photos.pinboard === false) {
+      if (state.rotation?.items?.pinboard !== false) {
+        await store.setRotation({ items: { pinboard: false } });
+      }
+      for (const id of ["1", "2", "3"]) {
+        if (state.slots?.[id]?.content === "pinboard") {
+          await store.setSlot(id, { content: "rotation" });
+        }
+      }
+    }
+  }
+
   app.put("/api/guest-photos/settings", requirePin, async (req, res, next) => {
     try {
       await localStore.update({ photos: req.body || {} });
+      await syncPinboardFlag();
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.put("/api/public-access", requirePin, async (req, res, next) => {
+    try {
+      const current = currentConfig().publicAccess || {};
+      await localStore.update({
+        publicAccess: {
+          enabled: req.body?.enabled === undefined ? current.enabled === true : req.body.enabled === true,
+          cloudflare: req.body?.cloudflare === undefined ? current.cloudflare === true : req.body.cloudflare === true,
+        },
+      });
+      await refreshPublicAccess();
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.put("/api/admin-access", requirePin, async (req, res, next) => {
+    try {
+      const current = currentConfig().admin || {};
+      await localStore.update({
+        admin: {
+          internet: req.body?.internet === undefined ? current.internet !== false : req.body.internet !== false,
+          longPin: req.body?.longPin === undefined ? current.longPin !== false : req.body.longPin !== false,
+        },
+      });
       broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
@@ -1708,7 +2047,11 @@ function createApp({
     }
   });
 
-  app.get("/media/guest/:file", (req, res) => {
+  app.get("/media/guest/:file", (req, res, next) => {
+    requireGuest(req, res, () => serveGuestPhoto(req, res, next));
+  });
+
+  function serveGuestPhoto(req, res) {
     const name = String(req.params.file || "");
     if (!/^[0-9a-f-]{36}\.jpg$/i.test(name)) return res.status(404).send("Not found");
     const id = name.slice(0, -4);
@@ -1722,7 +2065,7 @@ function createApp({
       res.setHeader("Content-Disposition", `attachment; filename="${id}.jpg"`);
     }
     res.type("jpeg").sendFile(filePath);
-  });
+  }
 
   app.get("/media/starter/:id", lanRequired, (req, res) => {
     const item = catalogItems.find((entry) => entry.id === req.params.id);
@@ -1984,7 +2327,16 @@ function createApp({
     res.sendFile(path.join(publicDir, "display.html"));
   });
 
-  app.get(["/", "/app"], (_req, res) => {
+  app.get(["/", "/app"], (req, res) => {
+    const gate = guestGate(req);
+    if (gate === "set") {
+      setGuestCookie(req, res);
+      const url = new URL(req.originalUrl, "http://pinball.local");
+      url.searchParams.delete("k");
+      const search = url.searchParams.toString();
+      return res.redirect(302, `${url.pathname}${search ? `?${search}` : ""}`);
+    }
+    if (gate === false) return res.status(403).type("html").send(scanPage());
     res.sendFile(path.join(publicDir, "guest.html"));
   });
 
@@ -2117,6 +2469,7 @@ function createApp({
   }
 
   store.onChange(() => broadcast());
+  refreshPublicAccess().catch((err) => console.error(err));
 
   try {
     airplayController.ensureRunning?.();
@@ -2161,7 +2514,7 @@ function createApp({
   function attachWebSocket(server) {
     const wss = new WebSocketServer({ server, path: "/ws" });
     wss.on("connection", (socket, req) => {
-      socket.trusted = isLanAddress(forwardedAddress(req));
+      socket.trusted = clientTrusted(req);
       clients.add(socket);
       socket.on("close", () => clients.delete(socket));
       socket.send(JSON.stringify({ type: "state", ...stateFor(socket.trusted) }));
