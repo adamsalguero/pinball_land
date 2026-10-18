@@ -63,9 +63,24 @@ test("guest upload has no PIN and admin approves it", async ({ page, request }) 
   await expect(page.getByText("approved:", { exact: false }).first()).toBeVisible();
 });
 
-test("mock plug toggle and video section", async ({ page }) => {
+test("mock plug toggle and video section", async ({ page, request }) => {
   await unlock(page);
   await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("button", { name: "Save TP-Link login" })).toBeVisible();
+  await expect(page.getByLabel("TP-Link password")).toHaveValue("");
+  await page.getByLabel("TP-Link email").fill("adam@example.com");
+  await page.getByLabel("TP-Link password").fill("venue-secret");
+  await page.getByRole("button", { name: "Save TP-Link login" }).click();
+  await expect(page.locator("#toast")).toHaveText("TP-Link login saved");
+  await expect(page.getByLabel("TP-Link password")).toHaveValue("");
+  await expect(page.getByLabel("TP-Link email")).toHaveAttribute("placeholder", /a•••@example.com/);
+  const state = await (await request.get("/api/state")).json();
+  expect(JSON.stringify(state.plugs || {})).not.toContain("venue-secret");
+  expect(state.plugs.account.configured).toBe(true);
+  expect(state.plugs.account.username).toBe("a•••@example.com");
+  await page.getByLabel("Plug IP address").fill("not-an-ip");
+  await page.getByRole("button", { name: "Add plug" }).click();
+  await expect(page.locator("#toast")).toHaveText(/IPv4 address/);
   await page.getByRole("button", { name: "Find plugs" }).click();
   const plug = page.getByLabel("Plug for display 1");
   await expect(plug.locator("option")).toHaveCount(2);
@@ -75,6 +90,7 @@ test("mock plug toggle and video section", async ({ page }) => {
   await expect(page.getByText("· On")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Videos", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "YouTube" })).toBeVisible();
+  await page.getByRole("button", { name: "Clear TP-Link login" }).click();
 });
 
 test("wall and controller snapshots", async ({ page }) => {

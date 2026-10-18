@@ -15,7 +15,7 @@ const { AirplayController, AIRPLAY_TARGETS } = require("./airplay");
 const { getLanIPv4s, isLanAddress, forwardedAddress, lanRequired, loopbackRequired } = require("./lan");
 const { Presentations } = require("./presentations");
 const { canonicalDisplayContent, layoutForDisplays, mapDisplaysToSlots } = require("./displays");
-const { PlugService, createTplinkClient } = require("./plugs");
+const { PlugService, createPlugClient, createMockPlugClient } = require("./plugs");
 const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./media");
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
@@ -210,7 +210,7 @@ function createApp({
     catalogPath: mediaCatalog || path.join(mediaRoot, "library.json"),
   });
   const plugService = plugs || new PlugService({
-    client: process.env.PINBALL_PLUG_MOCK === "1" ? require("./plugs").createMockPlugClient() : createTplinkClient(),
+    client: process.env.PINBALL_PLUG_MOCK === "1" ? createMockPlugClient() : createPlugClient(),
     getConfig: () => localStore.get(),
     updateConfig: (patch) => localStore.update(patch),
   });
@@ -1355,7 +1355,28 @@ function createApp({
 
   app.post("/api/plugs/discover", lanRequired, requirePin, async (req, res, next) => {
     try {
+      if (req.body?.host) await plugService.addHost(req.body.host);
       await plugService.discover();
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/plugs/add", lanRequired, requirePin, async (req, res, next) => {
+    try {
+      await plugService.addHost(req.body?.host);
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.put("/api/plugs/account", lanRequired, requirePin, async (req, res, next) => {
+    try {
+      await plugService.setAccount(req.body || {});
       broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
