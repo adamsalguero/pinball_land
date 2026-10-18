@@ -32,6 +32,11 @@ test("guest upload has no PIN and admin approves it", async ({ page, request }) 
   const jpeg = await sharp({
     create: { width: 640, height: 480, channels: 3, background: "#2d4c32" },
   }).jpeg().toBuffer();
+  const open = await request.put("/api/guest-photos/settings", {
+    headers: { "x-pin": "2224" },
+    data: { autoApprove: true },
+  });
+  expect(open.ok()).toBeTruthy();
   const posted = await request.post("/api/guest-photos", {
     headers: { "content-type": "image/jpeg", "x-guest-name": "Sam", "x-caption": "Wall" },
     data: jpeg,

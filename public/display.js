@@ -1388,7 +1388,7 @@ function placePhotos(target, card) {
   });
 }
 
-let qrDayShown = "";
+let qrDayShown = null;
 
 function refreshGuestQr() {
   const qr = document.querySelector("#pin-qr");
@@ -1400,11 +1400,14 @@ function refreshGuestQr() {
   }
   card.hidden = false;
   const day = payload?.guest?.qrDay || "";
-  if (day && day !== qrDayShown) {
+  if (qrDayShown === null) {
     qrDayShown = day;
-    const next = `/api/guest-qr?d=${encodeURIComponent(day)}`;
-    if (qr.getAttribute("src") !== next) qr.src = next;
+    return;
   }
+  if (!day || day === qrDayShown) return;
+  qrDayShown = day;
+  const next = `/api/guest-qr?d=${encodeURIComponent(day)}`;
+  if (qr.getAttribute("src") !== next) qr.src = next;
 }
 
 function showPinboard(card) {
@@ -1416,7 +1419,12 @@ function showPinboard(card) {
   const place = () => placePhotos(pinWall, card);
   place();
   const qr = document.querySelector("#pin-qr");
-  if (qr && !qr.complete) qr.addEventListener("load", place, { once: true });
+  if (qr && !qr.complete) {
+    qr.addEventListener("load", () => {
+      place();
+      if (FIXTURE) requestAnimationFrame(() => fitVisibleText());
+    }, { once: true });
+  }
 }
 
 function showCollage() {
