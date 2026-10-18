@@ -69,7 +69,7 @@ function queryTheme() {
 }
 
 function transitionsOn() {
-  return !SHOT && payload?.motion !== "off";
+  return !SHOT;
 }
 
 function setFit(el, text) {
@@ -190,8 +190,11 @@ function setMode(mode) {
 let swapping = false;
 let heldClip = null;
 let failedClipIds = new Set();
-let consecutiveGiveUps = 0;
 let recoveryHold = null;
+let blobFailures = 0;
+let showToken = 0;
+let lastProgressAt = 0;
+const clipBlobs = new Map();
 
 function clearSync() {
   if (syncTimer) clearInterval(syncTimer);
@@ -206,7 +209,6 @@ function releaseVideoElement(video) {
   video.removeAttribute("src");
   video.preload = "none";
   try { video.load(); } catch { /* decoder already released */ }
-  video.preload = "metadata";
 }
 
 function stopWallVideo() {
@@ -247,7 +249,7 @@ function replaceWallVideo() {
   fresh.defaultMuted = true;
   fresh.playsInline = true;
   fresh.setAttribute("playsinline", "");
-  fresh.preload = "metadata";
+  fresh.preload = "auto";
   const previous = wallVideo;
   previous.onended = null;
   previous.onloadedmetadata = null;
@@ -269,8 +271,7 @@ function replaceWallVideo() {
 
 function ensureWallVideo() {
   if (!videoPanel.contains(wallVideo)) videoPanel.append(wallVideo);
-  if (wallVideo.getAttribute("src")) wallVideo.preload = "auto";
-  else wallVideo.preload = "metadata";
+  wallVideo.preload = "auto";
   wallVideo.muted = true;
   wallVideo.defaultMuted = true;
   wallVideo.playsInline = true;
@@ -858,33 +859,41 @@ function renderCard(raw) {
   finish();
 }
 
-function alignVideo(startedAt) {
-  if (!wallVideo.duration || !Number.isFinite(wallVideo.duration)) return;
-  const elapsed = ((Date.now() - Number(startedAt)) / 1000) % wallVideo.duration;
-  if (Math.abs(wallVideo.currentTime - elapsed) > 0.35) wallVideo.currentTime = elapsed;
+function retainClipBlobs(keep) {
+  for (const [url, entry] of clipBlobs) {
+    if (keep.has(url)) continue;
+    entry.dropped = true;
+    if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
+    clipBlobs.delete(url);
+  }
 }
 
-function bufferedEnd(video) {
-  const ranges = video?.buffered;
-  if (!ranges || !ranges.length) return 0;
-  const time = video.currentTime || 0;
-  for (let i = 0; i < ranges.length; i += 1) {
-    if (ranges.start(i) <= time + 0.35 && ranges.end(i) > time) return ranges.end(i);
-  }
-  return 0;
+function noteBlob(card, entry) {
+  if (!entry || entry.logged) return;
+  entry.logged = true;
+  reportVideo(card, "blob-loaded", { bytes: entry.bytes, ms: entry.ms, src: entry.mediaUrl });
 }
 
-function seekIntoCard(card) {
-  const start = Number(card?.startSec) || 0;
-  if (!(start > 0.5) || wallVideo.dataset.sought === String(card?.id || "")) return;
-  const end = bufferedEnd(wallVideo);
-  if (end < start) return;
-  try {
-    wallVideo.currentTime = Math.min(start, Math.max(0, end - 0.25));
-    wallVideo.dataset.sought = String(card?.id || "");
-  } catch {
-    // Stay at 0 when the byte range is not buffered yet.
-  }
+function loadClipBlob(mediaUrl) {
+  const existing = clipBlobs.get(mediaUrl);
+  if (existing?.blobUrl) return Promise.resolve(existing);
+  if (existing?.promise) return existing.promise;
+  const started = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const slot = { mediaUrl, dropped: false, promise: null };
+  slot.promise = fetch(mediaUrl, { cache: "no-store" }).then(async (res) => {
+    if (!res.ok) throw new Error(String(res.status));
+    const blob = await res.blob();
+    const ms = Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - started);
+    if (slot.dropped) return null;
+    const entry = { mediaUrl, blobUrl: URL.createObjectURL(blob), bytes: blob.size, ms };
+    clipBlobs.set(mediaUrl, entry);
+    return entry;
+  }).catch((err) => {
+    if (clipBlobs.get(mediaUrl) === slot) clipBlobs.delete(mediaUrl);
+    throw err;
+  });
+  clipBlobs.set(mediaUrl, slot);
+  return slot.promise;
 }
 
 let stallTimer = null;
@@ -897,28 +906,13 @@ function clearLoadTimer() {
 const reportedEvents = new Set();
 const warmedAssets = new Set();
 
-function resumePlayback() {
-  if (swapping || !wallVideo.isConnected || wallVideo.ended || !wallVideo.getAttribute("src")) return;
-  const pending = wallVideo.play();
-  if (pending && typeof pending.catch === "function") pending.catch(() => {});
-}
-
-function nudgePlayback() {
-  try {
-    const time = wallVideo.currentTime || 0;
-    if (Number.isFinite(time)) wallVideo.currentTime = time + 0.04;
-  } catch {
-    // play() is enough when the element refuses a seek.
-  }
-  resumePlayback();
-}
-
-function reportVideo(card, eventName) {
+function reportVideo(card, eventName, extra = {}) {
   const id = String(card?.id || "");
   const event = String(eventName || "event");
   const seen = `${id}:${event}`;
-  if (event !== "ended" && event !== "give-up" && event !== "stall-timeout" && event !== "error" && reportedEvents.has(seen)) return;
-  if (event !== "ended") reportedEvents.add(seen);
+  const always = event === "ended" || event === "give-up" || event === "stall-timeout" || event === "error" || event === "progress" || event === "blob-loaded" || event === "play-start" || event === "replay";
+  if (!always && reportedEvents.has(seen)) return;
+  if (!always) reportedEvents.add(seen);
   const err = wallVideo.error;
   sendSocket({
     type: "media-failure",
@@ -931,7 +925,10 @@ function reportVideo(card, eventName) {
     networkState: wallVideo.networkState,
     readyState: wallVideo.readyState,
     currentTime: wallVideo.currentTime,
-    src: wallVideo.currentSrc || wallVideo.getAttribute("src") || card?.url || "",
+    src: extra.src || wallVideo.dataset.mediaUrl || card?.url || "",
+    bytes: Number.isFinite(Number(extra.bytes)) ? Number(extra.bytes) : undefined,
+    ms: Number.isFinite(Number(extra.ms)) ? Number(extra.ms) : undefined,
+    offset: Number.isFinite(Number(extra.offset)) ? Number(extra.offset) : undefined,
     failedIds: [...failedClipIds],
   });
 }
@@ -978,7 +975,7 @@ function uniqueVideos(exceptId) {
 function showRecoveryCard(card) {
   if (!card) return null;
   if (card.type === "video" && card.url && !card.empty) {
-    const salt = `${serverTick()}:${consecutiveGiveUps}:${card.id}`;
+    const salt = `${serverTick()}:${failedClipIds.size}:${card.id}`;
     const advanced = {
       ...card,
       mode: "card",
@@ -1001,38 +998,20 @@ function showRecoveryCard(card) {
   return shown;
 }
 
-function armPoolReload() {
-  const key = `pinball-pool-reload-${SLOT}`;
-  let last = 0;
-  try { last = Number(sessionStorage.getItem(key) || 0); } catch { /* private mode */ }
-  if (Date.now() - last < 120000) return;
-  try { sessionStorage.setItem(key, String(Date.now())); } catch { /* keep playing the replacement */ }
-  releaseVideoElement(wallVideo);
-  window.location.reload();
-}
-
 function failClip(card, eventName) {
   clearStall();
   reportVideo(card, eventName);
+  blobFailures = 0;
   failedClipIds.add(card.id);
   const videos = uniqueVideos(card?.id);
   if (!videos.length) {
-    consecutiveGiveUps += 1;
-    const action = window.PinballPlayback.poolRecovery(consecutiveGiveUps);
-    if (action === "reset" || action === "reload") replaceWallVideo();
     failedClipIds = new Set([card?.id].filter(Boolean));
-    const retry = uniqueVideos(card?.id);
-    const replacement = retry.length
-      ? retry[window.PinballRotation.hash32(`${card?.id}:${consecutiveGiveUps}`) % retry.length]
-      : window.PinballRotation.replacementFor(payload?.rotationPlan, SLOT, payload?.playlist, {
-        failedIds: [...failedClipIds, ...otherScreenClipIds()],
-        salt: `${SLOT}:give-up:${consecutiveGiveUps}`,
-      });
-    const videoRetry = replacement?.type === "video" && replacement.url && !replacement.empty;
-    if (!videoRetry || action === "reload") reportVideo(card, "give-up");
-    const shown = showRecoveryCard(replacement);
+    reportVideo(card, "give-up");
+    const shown = showRecoveryCard(window.PinballRotation.replacementFor(payload?.rotationPlan, SLOT, payload?.playlist, {
+      failedIds: [...failedClipIds, ...otherScreenClipIds()],
+      salt: `${SLOT}:give-up`,
+    }));
     recoveryHold = shown ? { avoidId: card?.id || "", card: shown } : null;
-    if (action === "reload") armPoolReload();
     return;
   }
   const next = videos[window.PinballRotation.hash32(`${card.id}:${failedClipIds.size}`) % videos.length];
@@ -1063,17 +1042,25 @@ function onClipEnded(card) {
   const pinned = payload?.layout?.[SLOT]?.content === "video";
   if (!pinned) {
     const target = seekTargetFor(card);
-    swapping = true;
-    try { wallVideo.currentTime = target; } catch { /* replay from the current frame */ }
-    swapping = false;
-    resumePlayback();
+    blobFailures = 0;
+    wallVideo.onseeked = () => {
+      wallVideo.onseeked = null;
+      const pending = wallVideo.play();
+      if (pending && typeof pending.catch === "function") pending.catch(() => {});
+      armStall(card);
+    };
+    try {
+      wallVideo.currentTime = target;
+    } catch {
+      armStall(card);
+    }
     return;
   }
   reportVideo(card, "ended");
   heldClip = null;
   failedClipIds = new Set();
   recoveryHold = null;
-  consecutiveGiveUps = 0;
+  blobFailures = 0;
 }
 
 let stallGeneration = 0;
@@ -1084,19 +1071,24 @@ function armStall(card) {
   let lastSample = wallVideo.currentTime || 0;
   let lastMove = Date.now();
   let lastCheck = 0;
-  let nudged = false;
-  let hiddenAt = 0;
+  let sawMove = false;
   const note = (eventName) => {
     if (swapping || wallVideo.dataset.ready !== "1") return;
     reportVideo(card, eventName);
   };
   const noteProgress = () => {
     if (wallVideo.seeking) return;
-    if (Math.abs((wallVideo.currentTime || 0) - lastSample) >= 1) {
-      lastSample = wallVideo.currentTime;
+    const time = wallVideo.currentTime || 0;
+    if (!sawMove) {
+      sawMove = true;
+      lastSample = time;
       lastMove = Date.now();
-      nudged = false;
-      consecutiveGiveUps = 0;
+      return;
+    }
+    if (Math.abs(time - lastSample) >= 0.5) {
+      lastSample = time;
+      lastMove = Date.now();
+      blobFailures = 0;
     }
   };
   wallVideo.ontimeupdate = noteProgress;
@@ -1104,64 +1096,135 @@ function armStall(card) {
     if (swapping) return;
     failClip(card, "error");
   };
-  wallVideo.onwaiting = () => { note("waiting"); resumePlayback(); };
-  wallVideo.onstalled = () => { note("stalled"); resumePlayback(); };
-  wallVideo.onsuspend = () => { note("suspend"); resumePlayback(); };
-  wallVideo.onpause = () => {
-    if (swapping || wallVideo.ended) return;
-    resumePlayback();
-  };
+  wallVideo.onwaiting = () => note("waiting");
+  wallVideo.onstalled = () => note("stalled");
+  wallVideo.onsuspend = () => note("suspend");
   const check = () => {
     if (generation !== stallGeneration || !wallVideo.isConnected || swapping) return;
     const now = Date.now();
     if (now - lastCheck < 500) return;
     lastCheck = now;
-    const visible = document.visibilityState === "visible";
-    if (!visible) {
-      if (!hiddenAt) hiddenAt = Date.now();
-      return;
+    if (now - lastProgressAt >= 60000 && wallVideo.dataset.ready === "1") {
+      lastProgressAt = now;
+      reportVideo(card, "progress");
     }
-    if (hiddenAt) {
-      lastMove += now - hiddenAt;
-      hiddenAt = 0;
+    if (wallVideo.paused || wallVideo.ended || wallVideo.seeking) {
+      lastMove = now;
+      lastSample = wallVideo.currentTime || lastSample;
+      return;
     }
     noteProgress();
     const quiet = now - lastMove;
-    const action = window.PinballPlayback.stallAction({
+    const action = window.PinballPlayback.blobWatchdog({
       quietMs: quiet,
-      visible: true,
-      nudged,
       paused: wallVideo.paused,
       ended: wallVideo.ended,
+      failures: blobFailures,
     });
     screen.dataset.quiet = String(Math.round(quiet));
     screen.dataset.stall = action;
-    if (action === "play") resumePlayback();
-    else if (action === "nudge") {
-      nudged = true;
-      nudgePlayback();
-    } else if (action === "skip") {
-      failClip(card, "stall-timeout");
-    }
+    if (action === "replay") replayBlob(card, wallVideo.currentTime);
+    else if (action === "next") failClip(card, "stall-timeout");
   };
   stallTimer = setInterval(check, 1000);
-  const frame = () => {
-    if (generation !== stallGeneration) return;
-    check();
-    requestAnimationFrame(frame);
-  };
-  requestAnimationFrame(frame);
 }
 
-function showVideo(card, onReady) {
-  const playToken = String(card?.playId || card?.id || "");
-  if (card?.url && wallVideo.dataset.playId === playToken && wallVideo.getAttribute("src") === card.url && !wallVideo.ended) {
-    ensureWallVideo();
-    if (wallVideo.dataset.ready === "1") {
-      if (screen.dataset.mode !== "video") setMode("video");
-      resumePlayback();
-      if (onReady) onReady();
+function startOffset(card, explicit) {
+  if (Number.isFinite(Number(explicit))) return Math.max(0, Number(explicit));
+  if (card?.mode && card.mode !== "card" && card.startedAt) {
+    const duration = Number(wallVideo.duration) || 0;
+    if (duration > 0) return ((Date.now() - Number(card.startedAt)) / 1000) % duration;
+  }
+  return seekTargetFor(card);
+}
+
+function beginPlayback(card, playToken, offset, onReady) {
+  if (wallVideo.dataset.playId !== playToken) return;
+  clearLoadTimer();
+  wallVideo.dataset.ready = "1";
+  videoPanel.classList.remove("is-staging");
+  wallVideo.classList.add("is-ready");
+  setMode("video");
+  releaseHold();
+  const fallback = document.getElementById("video-fallback");
+  if (fallback) fallback.hidden = true;
+  if (!lastProgressAt) lastProgressAt = Date.now();
+  reportVideo(card, "play-start", { offset: wallVideo.currentTime || offset || 0 });
+  const pending = wallVideo.play();
+  if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  armStall(card);
+  if (onReady) onReady();
+}
+
+function armClip(card, { playToken, startAt, onReady }) {
+  const slots = card.slots || [SLOT];
+  const primary = String(slots[0] || SLOT);
+  wallVideo.onloadedmetadata = () => {
+    if (wallVideo.dataset.playId !== playToken) return;
+    const target = startOffset(card, startAt);
+    const go = () => beginPlayback(card, playToken, target, onReady);
+    if (!(target > 0.25)) {
+      go();
+      return;
     }
+    wallVideo.onseeked = () => {
+      wallVideo.onseeked = null;
+      go();
+    };
+    try {
+      wallVideo.currentTime = target;
+    } catch {
+      go();
+    }
+  };
+  wallVideo.onended = () => {
+    clearStall();
+    if (card.loop && card.mode !== "card") return;
+    if (card.mode && card.mode !== "card") {
+      if (String(SLOT) !== primary) return;
+      sendSocket({ type: "media-next", videoId: card.id });
+      return;
+    }
+    onClipEnded(card);
+  };
+  wallVideo.onerror = () => {
+    if (swapping || wallVideo.dataset.playId !== playToken) return;
+    failClip(card, "error");
+  };
+}
+
+function replayBlob(card, atTime) {
+  const blobUrl = wallVideo.dataset.blobUrl;
+  const mediaUrl = wallVideo.dataset.mediaUrl || card?.url || "";
+  if (!blobUrl) {
+    failClip(card, "stall-timeout");
+    return;
+  }
+  blobFailures += 1;
+  const playToken = String(card?.playId || card?.id || "");
+  reportVideo(card, "replay", { offset: Number(atTime) || 0 });
+  clearStall();
+  swapping = true;
+  replaceWallVideo();
+  wallVideo.dataset.playId = playToken;
+  wallVideo.dataset.mediaUrl = mediaUrl;
+  wallVideo.dataset.blobUrl = blobUrl;
+  wallVideo.dataset.ready = "0";
+  wallVideo.preload = "auto";
+  wallVideo.muted = true;
+  wallVideo.defaultMuted = true;
+  wallVideo.playsInline = true;
+  armClip(card, { playToken, startAt: Number(atTime) || 0 });
+  wallVideo.src = blobUrl;
+  swapping = false;
+}
+
+async function showVideo(card, onReady) {
+  const playToken = String(card?.playId || card?.id || "");
+  if (card?.url && wallVideo.dataset.playId === playToken && wallVideo.dataset.blobUrl && !wallVideo.ended && wallVideo.dataset.ready === "1") {
+    ensureWallVideo();
+    if (screen.dataset.mode !== "video") setMode("video");
+    if (onReady) onReady();
     return;
   }
   stopVideo();
@@ -1176,9 +1239,27 @@ function showVideo(card, onReady) {
     if (onReady) onReady();
     return;
   }
+  const token = ++showToken;
   clearLoadTimer();
   if (wallVideo.dataset.ready === "1") holdFrame();
   stageWallVideo();
+  wallVideo.dataset.playId = playToken;
+  wallVideo.dataset.ready = "0";
+  wallVideo.dataset.mediaUrl = card.url;
+  loadTimer = window.setTimeout(() => {
+    if (token !== showToken || wallVideo.dataset.ready === "1") return;
+    failClip(card, "stall-timeout");
+  }, 20000);
+  let entry;
+  try {
+    entry = await loadClipBlob(card.url);
+  } catch {
+    if (token !== showToken) return;
+    failClip(card, "error");
+    return;
+  }
+  if (!entry || token !== showToken || wallVideo.dataset.playId !== playToken) return;
+  noteBlob(card, entry);
   swapping = true;
   wallVideo.onloadedmetadata = null;
   wallVideo.onended = null;
@@ -1186,19 +1267,10 @@ function showVideo(card, onReady) {
   wallVideo.onseeked = null;
   wallVideo.onerror = null;
   releaseVideoElement(wallVideo);
-  wallVideo.dataset.playId = playToken;
-  wallVideo.dataset.ready = "0";
-  swapping = false;
-  loadTimer = window.setTimeout(() => {
-    if (wallVideo.dataset.playId !== playToken || wallVideo.dataset.ready === "1") return;
-    failClip(card, "stall-timeout");
-  }, 20000);
-  const slots = card.slots || [SLOT];
-  const primary = String(slots[0] || SLOT);
   wallVideo.classList.remove("is-ready");
   if (card.mode === "span") {
-    const count = Math.max(1, slots.length);
-    const index = Math.max(0, slots.map(String).indexOf(String(SLOT)));
+    const count = Math.max(1, card.slots?.length || 1);
+    const index = Math.max(0, (card.slots || [SLOT]).map(String).indexOf(String(SLOT)));
     wallVideo.classList.add("span");
     wallVideo.style.width = `${count * 100}%`;
     wallVideo.style.transform = `translateX(-${(index * 100) / count}%)`;
@@ -1211,69 +1283,14 @@ function showVideo(card, onReady) {
   wallVideo.muted = true;
   wallVideo.defaultMuted = true;
   wallVideo.playsInline = true;
-  if (card.mode !== "card" && card.startedAt) {
-    const seek = () => alignVideo(card.startedAt);
-    syncTimer = setInterval(seek, 2000);
-  }
-  const reveal = () => {
-    if (wallVideo.dataset.playId !== playToken) return;
-    clearLoadTimer();
-    wallVideo.dataset.ready = "1";
-    videoPanel.classList.remove("is-staging");
-    wallVideo.classList.add("is-ready");
-    setMode("video");
-    releaseHold();
-    if (fallback) fallback.hidden = true;
-    armStall(card);
-    resumePlayback();
-    if (onReady) onReady();
-  };
-  const afterSeek = () => {
-    if (wallVideo.readyState >= 3) reveal();
-    else {
-      wallVideo.oncanplay = () => {
-        wallVideo.oncanplay = null;
-        reveal();
-      };
-    }
-  };
-  wallVideo.onloadedmetadata = () => {
-    if (card.mode !== "card") {
-      if (card.startedAt) alignVideo(card.startedAt);
-      afterSeek();
-      return;
-    }
-    const target = seekTargetFor(card);
-    if (!(target > 0.25) || Math.abs((wallVideo.currentTime || 0) - target) < 0.3) {
-      afterSeek();
-      return;
-    }
-    wallVideo.onseeked = () => {
-      wallVideo.onseeked = null;
-      afterSeek();
-    };
-    try {
-      wallVideo.currentTime = target;
-    } catch {
-      afterSeek();
-    }
-    resumePlayback();
-  };
-  wallVideo.onended = () => {
-    clearStall();
-    if (card.loop && card.mode !== "card") return;
-    if (card.mode && card.mode !== "card") {
-      if (String(SLOT) !== primary) return;
-      sendSocket({ type: "media-next", videoId: card.id });
-      return;
-    }
-    onClipEnded(card);
-  };
   wallVideo.preload = "auto";
-  wallVideo.muted = true;
-  wallVideo.defaultMuted = true;
-  wallVideo.playsInline = true;
-  wallVideo.src = card.url;
+  wallVideo.dataset.playId = playToken;
+  wallVideo.dataset.mediaUrl = card.url;
+  wallVideo.dataset.blobUrl = entry.blobUrl;
+  wallVideo.dataset.ready = "0";
+  armClip(card, { playToken, onReady });
+  wallVideo.src = entry.blobUrl;
+  swapping = false;
 }
 
 function warmAsset(url) {
@@ -1308,13 +1325,14 @@ function preloadUpcoming() {
   });
   const next = plan?.[SLOT] || plan?.[String(SLOT)];
   if (next?.type === "logo") warmAsset(logos[next.key]);
+  const keep = new Set();
+  if (wallVideo.dataset.mediaUrl) keep.add(wallVideo.dataset.mediaUrl);
+  if (next?.type === "video" && next.url && !next.empty) {
+    keep.add(next.url);
+    loadClipBlob(next.url).then((entry) => noteBlob(next, entry)).catch(() => {});
+  }
+  retainClipBlobs(keep);
 }
-
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible") return;
-  if (screen.dataset.mode !== "video" || !wallVideo.isConnected) return;
-  resumePlayback();
-});
 
 function shareLines() {
   const share = payload?.share;
@@ -1902,7 +1920,7 @@ function paintMotion(dt) {
     motionCanvas.style.height = `${height}px`;
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (SHOT || !window.PinballMotion || payload?.motion === "off") {
+  if (SHOT || !window.PinballMotion) {
     ctx.clearRect(0, 0, width, height);
     motionField = null;
     return;

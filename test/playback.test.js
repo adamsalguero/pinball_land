@@ -2,21 +2,16 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { stallAction, poolRecovery, STALL_SKIP_MS } = require("../public/playback");
+const { blobWatchdog, STALL_SKIP_MS } = require("../public/playback");
 
-test("waiting and suspend are not a skip, and a stall waits 20s while visible", () => {
+test("a frozen picture replays the blob once, then moves to the next clip", () => {
   assert.equal(STALL_SKIP_MS, 20000);
-  assert.equal(stallAction({ quietMs: 3000, visible: true, paused: false }), "wait");
-  assert.equal(stallAction({ quietMs: 6000, visible: true, nudged: false }), "nudge");
-  assert.equal(stallAction({ quietMs: 12000, visible: true, nudged: true }), "wait");
-  assert.equal(stallAction({ quietMs: 20000, visible: true, nudged: true }), "skip");
-  assert.equal(stallAction({ quietMs: 60000, visible: false, nudged: true }), "hold");
-  assert.equal(stallAction({ quietMs: 1000, visible: true, paused: true }), "play");
-  assert.equal(stallAction({ quietMs: 20000, visible: true, paused: true, nudged: true }), "skip");
-  assert.equal(stallAction({ ended: true, quietMs: 30000 }), "ended");
-  assert.equal(poolRecovery(1), "swap");
-  assert.equal(poolRecovery(2), "reset");
-  assert.equal(poolRecovery(3), "reload");
+  assert.equal(blobWatchdog({ quietMs: 3000, paused: false }), "wait");
+  assert.equal(blobWatchdog({ quietMs: 19000, paused: false, failures: 0 }), "wait");
+  assert.equal(blobWatchdog({ quietMs: 20000, paused: true, failures: 0 }), "wait");
+  assert.equal(blobWatchdog({ quietMs: 20000, ended: true }), "ended");
+  assert.equal(blobWatchdog({ quietMs: 20000, paused: false, failures: 0 }), "replay");
+  assert.equal(blobWatchdog({ quietMs: 20000, paused: false, failures: 1 }), "next");
 });
 
 test("wall scripts do not reuse the same top-level name", () => {
@@ -37,27 +32,37 @@ test("wall scripts do not reuse the same top-level name", () => {
   }
 });
 
-test("the wall player resumes occluded video and only one element stays loaded", () => {
+test("the wall player uses one blob per screen and does not nudge a waiting element", () => {
   const display = fs.readFileSync(path.join(__dirname, "..", "public", "display.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "public", "display.html"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "public", "display.css"), "utf8");
-  assert.match(display, /visibilitychange/);
-  assert.match(display, /resumePlayback/);
+  const control = fs.readFileSync(path.join(__dirname, "..", "public", "control.html"), "utf8");
   assert.doesNotMatch(display, /logoPhaseKey/);
   assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "playlist.js"), "utf8"), /logoPhaseKey/);
   assert.match(display, /preloadUpcoming/);
-  assert.match(display, /stallAction/);
+  assert.match(display, /blobWatchdog/);
+  assert.match(display, /createObjectURL/);
+  assert.match(display, /blob-loaded/);
+  assert.match(display, /play-start/);
+  assert.match(display, /event === "progress"/);
+  assert.doesNotMatch(display, /visibilitychange/);
+  assert.doesNotMatch(display, /nudgePlayback/);
+  assert.doesNotMatch(display, /currentTime = time \+ 0\.04/);
   assert.doesNotMatch(display, /is-leaving/);
   assert.match(display, /wallVideo\.remove\(\)/);
   assert.match(display, /preload = "none"/);
-  assert.match(display, /preload = "metadata"/);
+  assert.match(display, /preload = "auto"/);
+  assert.doesNotMatch(display, /preload = "metadata"/);
   assert.match(display, /releaseVideoElement/);
   assert.match(display, /replaceWallVideo/);
-  assert.match(display, /poolRecovery/);
   assert.match(display, /type: "media-failure"/);
   assert.match(display, /type: "media-next"/);
   assert.doesNotMatch(display, /\/api\/media\/failure/);
   assert.doesNotMatch(display, /\/api\/media\/next/);
+  assert.match(control, /id="tvs-toggle"/);
+  assert.doesNotMatch(control, /Allow admin from internet/);
+  assert.doesNotMatch(control, /id="motion-toggle"/);
+  assert.doesNotMatch(control, /id="join-qr"/);
   assert.match(display, /function serverTick/);
   assert.match(display, /stageWallVideo/);
   assert.match(display, /holdFrame/);

@@ -38,7 +38,7 @@ async function startServer(extra = {}) {
   const configPath = path.join(dir, "config.json");
   const configStore = createConfigStore(configPath);
   let now = extra.now || Date.UTC(2026, 9, 18, 16, 0, 0);
-  const { app } = createApp({
+  const { app, guestApp } = createApp({
     store,
     configStore,
     publicDir: path.join(root, "public"),
@@ -58,6 +58,8 @@ async function startServer(extra = {}) {
   return {
     server,
     origin: `http://127.0.0.1:${port}`,
+    guestApp,
+    port,
     dir,
     configPath,
     guestDir: path.join(dir, "guest-photos"),
@@ -171,7 +173,7 @@ test("public access uses the funnel URL in the QR and falls back when it is off"
     const token = guestToken(secret, guestDay(started.now()));
     assert.equal(on.data.guest.publicUrl, `https://pinball.example.ts.net/?k=${token}`);
     const hidden = await json(started.origin, "/api/state", { headers: { "x-forwarded-for": "1.1.1.1" } });
-    assert.equal(hidden.data.guest.publicUrl, undefined);
+    assert.equal(hidden.res.status, 404);
   } finally {
     started.server.close();
   }
@@ -292,38 +294,34 @@ test("pinboard off leaves rotation and rejects a pinboard slot", async () => {
   }
 });
 
-test("internet admin needs a long PIN, remembers the device, and blocks cookie posts without CSRF", async () => {
+test("a tunnel gets 404 for admin and a LAN cookie post still needs CSRF", async () => {
   const started = await startServer();
   const remote = { "x-forwarded-for": "8.8.8.8" };
   try {
-    const short = await json(started.origin, "/api/login", {
-      method: "POST",
-      headers: remote,
-      body: { pin: "2224" },
-    });
-    assert.equal(short.res.status, 403);
-    assert.match(short.data.error, /6 or more/);
     const changed = await json(started.origin, "/api/pin", {
       method: "PUT",
       headers: { "x-pin": "2224" },
       body: { pin: "123456" },
     });
     assert.equal(changed.res.status, 200);
-    const login = await fetch(`${started.origin}/api/login`, {
+    const tunneled = await json(started.origin, "/api/login", {
       method: "POST",
-      headers: { "content-type": "application/json", ...remote },
-      body: JSON.stringify({ pin: "123456", name: "Adam phone" }),
+      headers: remote,
+      body: { pin: "123456" },
     });
-    const session = await login.json();
-    assert.equal(login.status, 200);
-    const lines = login.headers.getSetCookie();
-    assert.ok(cookiePair(lines, "pl_device"));
-    assert.ok(cookiePair(lines, "pl_csrf"));
-    const trusted = await json(started.origin, "/api/state", {
-      headers: { ...remote, "x-device-token": session.token },
+    assert.equal(tunneled.res.status, 404);
+    const admin = await fetch(`${started.origin}/admin`, { headers: { "cf-ray": "test", "cf-connecting-ip": "8.8.8.8" } });
+    assert.equal(admin.status, 404);
+    const display = await fetch(`${started.origin}/display/1`, { headers: { "tailscale-funnel-request": "true" } });
+    assert.equal(display.status, 404);
+    const cdn = await fetch(`${started.origin}/api/state`, { headers: { "cdn-loop": "cloudflare; loops=1" } });
+    assert.equal(cdn.status, 404);
+    const forwarded = await fetch(`${started.origin}/api/plugs/power`, {
+      method: "POST",
+      headers: { "content-type": "application/json", forwarded: "for=8.8.8.8" },
+      body: JSON.stringify({ on: true }),
     });
-    assert.equal(trusted.data.adminAccess.internet, true);
-    assert.ok(trusted.data.presentations);
+    assert.equal(forwarded.status, 404);
 
     const lan = await fetch(`${started.origin}/api/login`, {
       method: "POST",
@@ -353,10 +351,45 @@ test("internet admin needs a long PIN, remembers the device, and blocks cookie p
   }
 });
 
+function statusOf(port, path, headers) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ hostname: "127.0.0.1", port, path, method: "GET", headers }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("a public host and the guest port hide admin, state, and displays", async () => {
+  const started = await startServer();
+  const guest = http.createServer(started.guestApp);
+  await new Promise((resolve) => guest.listen(0, "127.0.0.1", resolve));
+  const guestPort = guest.address().port;
+  try {
+    assert.equal(await statusOf(started.port, "/admin", { host: "wall.tailnet.ts.net" }), 404);
+    assert.equal(await statusOf(started.port, "/api/state", { host: "random-name.trycloudflare.com" }), 404);
+    assert.equal(await statusOf(started.port, "/display/2", { host: "8.8.8.8" }), 404);
+    assert.equal(await statusOf(started.port, "/admin", { host: `127.0.0.1:${started.port}` }), 200);
+    assert.equal(await statusOf(started.port, "/display/1", { host: "pinball-pc" }), 200);
+    assert.equal(await statusOf(guestPort, "/admin", { host: "127.0.0.1" }), 404);
+    assert.equal(await statusOf(guestPort, "/api/state", { host: "127.0.0.1" }), 404);
+    assert.equal(await statusOf(guestPort, "/display/1", { host: "127.0.0.1" }), 404);
+    assert.equal(await statusOf(guestPort, "/", { host: "127.0.0.1" }), 403);
+    const guestHome = await fetch(`http://127.0.0.1:${guestPort}/api/guest`);
+    assert.equal(guestHome.status, 403);
+  } finally {
+    guest.close();
+    started.server.close();
+  }
+});
+
 test("enable-public-access script installs Tailscale and keeps Funnel in the background", async () => {
   const text = await fs.readFile(path.join(__dirname, "..", "scripts", "enable-public-access.ps1"), "utf8");
   assert.match(text, /winget/);
   assert.match(text, /tailscale-setup-latest-amd64\.msi/);
   assert.match(text, /tailscale up/);
   assert.match(text, /funnel --bg/);
+  assert.match(text, /\$Port = 3010/);
 });

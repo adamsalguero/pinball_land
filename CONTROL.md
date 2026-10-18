@@ -12,11 +12,11 @@ The QR on the Live Pinboard screen points here. If phones are on cellular, set a
 
 ## Pinball Land Admin
 
-Open `http://<kiosk>:3000/admin` on the venue WiFi. The default PIN is `2224`. Change it under Settings. It is a convenience gate, not a lock. Admin actions from the public internet are refused, including when a guest tunnel is pointed at this server.
+Open `http://<kiosk>:3000/admin` on the venue WiFi. The default PIN is `2224`. Change it under Settings. It is a convenience gate, not a lock. Admin pages and admin APIs answer only on the venue WiFi or on this PC. A Tailscale Funnel or Cloudflare tunnel request gets 404 for admin, the displays, plugs, and `/api/state`. The public URL is the guest app only, on port 3010.
 
-Entering the PIN once creates a long-lived device token. The browser stores it in an httpOnly cookie and in localStorage, so a Home Screen app opens without asking again. Settings lists every signed-in device and can revoke one, or sign out all of them. Signing out all devices also rotates the install link.
+Entering the PIN once creates a long-lived device token. The browser stores it in an httpOnly cookie and in localStorage, so a Home Screen app opens without asking again.
 
-The install link is ` /admin/join?token=... `, shown as a QR in Settings. Opening it on an iPad grants admin with no PIN. Do not share that QR outside the venue.
+The top bar has **Guest app**, **TVs On/Off**, and **Lock**. **TVs On/Off** switches every assigned Kasa plug together and confirms in a short message. Transitions stay on. There is no separate transitions control.
 
 Reset the PIN from an admin device, from the kiosk tray (**Reset PIN to default**), with `npm run reset-pin` on the kiosk PC, or by deleting the `pin` key in the data-dir `config.json`. The default comes back as `2224`. The running server reads that file on the next login.
 

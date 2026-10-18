@@ -174,7 +174,7 @@ function renderPicker() {
 }
 
 async function loadScores() {
-  const res = await fetch("/api/state");
+  const res = await fetch("/api/guest");
   const data = await res.json();
   applyTheme(data.state?.theme);
   boards = (data.state?.leaderboards || []).filter((board) => board.kind === "machine");
@@ -251,7 +251,7 @@ function applyGuestAccess(data) {
 
 async function watchTheme() {
   try {
-    const res = await fetch("/api/state");
+    const res = await fetch("/api/guest");
     const data = await res.json();
     applyGuestAccess(data);
     applyTheme(data.state?.theme);

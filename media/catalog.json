@@ -1,7 +1,7 @@
 {
   "version": 2,
   "verified": "2026-10-17",
-  "notes": "Direct URLs were checked with HTTP HEAD and a short playback probe. Halloween may be black and white. Christmas entries are color and family-friendly. Santa's Surprise (1947, santas-surprise-1947) is blocklisted and must not be added back. Nothing here is committed as a video file.",
+  "notes": "Direct URLs were checked with HTTP HEAD and a short playback probe. Halloween may be black and white. Christmas entries are color and family-friendly. Santa's Surprise (1947, santas-surprise-1947) and Good Will to Men (1955, good-will-to-men-1955) are blocklisted and must not be added back. Remaining starters are The Skeleton Dance (1929), Swing You Sinners! (1930), and Christmas Comes But Once a Year (1936). Nothing here is committed as a video file.",
   "items": [
     {
       "id": "skeleton-dance-1929",
@@ -47,21 +47,6 @@
       "width": 480,
       "height": 360,
       "bytes": 20491508
-    },
-    {
-      "id": "good-will-to-men-1955",
-      "title": "Good Will to Men",
-      "holiday": "christmas",
-      "allAges": true,
-      "color": true,
-      "year": 1955,
-      "license": "Public domain. MGM cartoon, U.S. publication 1955. Color.",
-      "sourceUrl": "https://archive.org/details/good-will-to-men-1955_202412",
-      "streamUrl": "https://archive.org/download/good-will-to-men-1955_202412/Good%20Will%20to%20Men%20%281955%29.realesr-animevideov3.2160p.ia.mp4",
-      "durationSec": 511,
-      "width": 854,
-      "height": 480,
-      "bytes": 48645533
     }
   ]
 }

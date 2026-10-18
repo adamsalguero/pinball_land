@@ -21,8 +21,7 @@ function resolveByteRange(header, size, maxBytes = MAX_RANGE_BYTES) {
   const max = Math.max(1, Number(maxBytes) || MAX_RANGE_BYTES);
   if (!header) {
     if (total === 0) return { status: 200, start: 0, end: -1, length: 0 };
-    if (total <= max) return { status: 200, start: 0, end: total - 1, length: total };
-    return { status: 206, start: 0, end: max - 1, length: max, capped: true };
+    return { status: 200, start: 0, end: total - 1, length: total };
   }
   const match = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim());
   if (!match || (match[1] === "" && match[2] === "")) return { status: 416 };

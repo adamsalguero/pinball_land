@@ -6,7 +6,7 @@ const { normalizeMotion } = require("../src/config");
 test("transitions are subtle or off, and particles move on their own canvas field", () => {
   assert.equal(normalizeMotion("full"), "subtle");
   assert.equal(normalizeMotion("dark"), "subtle");
-  assert.equal(normalizeMotion("off"), "off");
+  assert.equal(normalizeMotion("off"), "subtle");
   assert.equal(normalizeMotion(undefined), "subtle");
 
   const { worldPoint, screenPoint, spiderSilk, WORLD_W, SLICE_W } = require("../public/motion");

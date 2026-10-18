@@ -180,20 +180,18 @@ test("guest upload needs no PIN, admin actions need a device token", async () =>
   }
 });
 
-test("internet clients need the wall QR and cannot run admin with the venue PIN", async () => {
+test("internet clients need the wall QR and cannot see admin, state, or displays", async () => {
   const { server, origin } = await startServer();
   const remote = { "x-forwarded-for": "8.8.8.8" };
   try {
     const state = await json(origin, "/api/state", { headers: remote });
-    assert.equal(state.res.status, 200);
-    assert.ok(state.data.state.leaderboards);
-    assert.equal(state.data.presentations, undefined);
-    assert.equal(state.data.plugs, undefined);
-    assert.equal(state.data.airplay, undefined);
+    assert.equal(state.res.status, 404);
+    const display = await fetch(`${origin}/display/1`, { headers: remote });
+    assert.equal(display.status, 404);
     const blocked = await json(origin, "/api/off", { method: "POST", headers: { ...remote, "x-pin": "2224" } });
-    assert.equal(blocked.res.status, 403);
+    assert.equal(blocked.res.status, 404);
     const login = await json(origin, "/api/login", { method: "POST", headers: remote, body: { pin: "2224" } });
-    assert.equal(login.res.status, 403);
+    assert.equal(login.res.status, 404);
     const jpeg = await sharp({
       create: { width: 400, height: 300, channels: 3, background: "#2d4c32" },
     }).jpeg().toBuffer();
@@ -296,12 +294,13 @@ test("watchdog waits for late monitors and reloads crashed windows", () => {
 
 test("catalog and youtube inputs are explicit", () => {
   const items = loadCatalog(path.join(__dirname, "..", "media", "catalog.json"));
-  assert.ok(items.length >= 4);
+  assert.ok(items.length >= 3);
   assert.ok(items.every((item) => item.streamUrl.startsWith("https://")));
   assert.ok(items.filter((item) => item.holiday === "christmas").every((item) => item.color === true));
   assert.equal(items.find((item) => item.id === "christmas-comes-1936").holiday, "christmas");
   assert.equal(items.some((item) => item.id === "a-christmas-carol-1910"), false);
   assert.equal(items.some((item) => item.id === "santas-surprise-1947"), false);
+  assert.equal(items.some((item) => item.id === "good-will-to-men-1955"), false);
   const video = parseYoutubeInput("https://www.youtube.com/watch?v=abcdefghijk");
   assert.deepEqual(video, { kind: "video", id: "abcdefghijk" });
   const list = parseYoutubeInput("https://www.youtube.com/playlist?list=PLabcdefghijklmnop");

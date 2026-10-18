@@ -44,8 +44,10 @@ test("video catalog entries are well-formed, unique, and Christmas is color", ()
   assert.ok(christmas.length >= 1);
   assert.ok(christmas.every((card) => card.color === true));
   assert.equal(raw.items.some((item) => item.id === "santas-surprise-1947"), false);
+  assert.equal(raw.items.some((item) => item.id === "good-will-to-men-1955"), false);
   assert.equal(removedStarterId("santas-surprise-1947"), true);
-  assert.equal(removedStarterId("starter:santas-surprise-1947"), true);
+  assert.equal(removedStarterId("good-will-to-men-1955"), true);
+  assert.equal(removedStarterId("starter:good-will-to-men-1955"), true);
   const blocked = path.join(os.tmpdir(), `pinball-catalog-${Date.now()}.json`);
   fs.writeFileSync(blocked, JSON.stringify({
     items: [
@@ -71,11 +73,14 @@ test("video catalog entries are well-formed, unique, and Christmas is color", ()
   }).some((card) => card.id.includes("santas-surprise")), false);
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "pinball-santa-"));
   const cached = path.join(cacheDir, "santas-surprise-1947.mp4");
+  const goodWill = path.join(cacheDir, "good-will-to-men-1955.mp4");
   fs.writeFileSync(cached, "remove me");
   fs.writeFileSync(path.join(cacheDir, "santas-surprise-1947"), "remove me");
+  fs.writeFileSync(goodWill, "remove me");
   const gone = purgeRemovedStarters(cacheDir);
   assert.equal(fs.existsSync(cached), false);
-  assert.equal(gone.length, 2);
+  assert.equal(fs.existsSync(goodWill), false);
+  assert.equal(gone.length, 3);
   const slogans = normalizeSlogans(undefined);
   assert.equal(slogans.pinnacle, "");
   assert.equal(slogans.halloween, "Happy Halloween!");
