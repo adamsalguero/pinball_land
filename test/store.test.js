@@ -593,7 +593,26 @@ test("approving a guest score updates the matching player", async () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].score, 2500);
   assert.equal(rows[0].proofFile, "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee.jpg");
+  assert.equal(rows[0].showOnWall, true);
   assert.equal(rows[0].createdAt, 9000);
+  const secret = await store.submitScore({
+    boardId,
+    name: "New Player",
+    score: 40,
+    proofFile: "cccccccc-cccc-4ccc-8ddd-eeeeeeeeeeee.jpg",
+    ip: "10.0.0.23",
+    now: 12_000,
+  });
+  await store.reviewScore(secret.id, "approved", { showPhoto: false });
+  const hidden = store.getState().leaderboards[0].rows.find((row) => row.name === "New Player");
+  assert.equal(hidden.proofFile, "cccccccc-cccc-4ccc-8ddd-eeeeeeeeeeee.jpg");
+  assert.equal(hidden.showOnWall, false);
+  await store.updateRow(boardId, hidden.id, { showOnWall: true });
+  assert.equal(store.getState().leaderboards[0].rows.find((row) => row.id === hidden.id).showOnWall, true);
+  await store.updateRow(boardId, hidden.id, { removeProof: true });
+  const removed = store.getState().leaderboards[0].rows.find((row) => row.id === hidden.id);
+  assert.equal(removed.proofFile, null);
+  assert.equal(removed.showOnWall, false);
 });
 
 test("guest scores wait for approval and are rate limited", async () => {

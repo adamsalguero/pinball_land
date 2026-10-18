@@ -4,6 +4,11 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, screen, session, desktopCap
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-background-media-suspend");
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const path = require("path");
@@ -69,6 +74,7 @@ function openWaitingWindows() {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
+        backgroundThrottling: false,
       },
     });
     win.setMenuBarVisibility(false);

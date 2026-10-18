@@ -34,14 +34,24 @@ function hash32(text) {
   return h >>> 0;
 }
 
-function videoStartSec(id, tick, durationSec) {
+function videoStartSec(id, salt, durationSec) {
   const duration = Number(durationSec) || 0;
-  if (duration < 45) return 0;
-  const intro = Math.min(40, Math.max(15, Math.floor(duration * 0.07)));
-  const endPad = Math.min(30, Math.max(12, Math.floor(duration * 0.06)));
-  const span = Math.floor(duration - intro - endPad);
-  if (span < 20) return intro;
-  return intro + (hash32(`${id}:${tick}`) % span);
+  if (!(duration > 1)) return 0;
+  const unit = (hash32(`${id}:${salt}`) % 10001) / 10000;
+  const fraction = 0.4 + unit * 0.2;
+  const start = duration * fraction;
+  const capped = Math.min(start, Math.max(0, duration - 0.5));
+  return Math.round(capped * 100) / 100;
+}
+
+function logoPhaseKey(key, startedAt, intervalSec, now = Date.now(), min = 10) {
+  const ms = clampInterval(intervalSec, min) * 1000;
+  const origin = Number(startedAt);
+  const start = Number.isFinite(origin) ? origin : now;
+  const into = Math.max(0, now - start) % ms;
+  const base = key === "pinball-land" ? "pinball-land" : "pinnacle";
+  if (into < ms / 2) return base;
+  return base === "pinnacle" ? "pinball-land" : "pinnacle";
 }
 
 function rotationKey(card) {
@@ -66,21 +76,75 @@ function manualCard(content, leaderboardId, playlist) {
   return null;
 }
 
-function pickPinnedVideo(playlist, cursor) {
-  const videos = (playlist || []).filter((card) => card && card.type === "video" && card.url && !card.empty);
-  if (!videos.length) {
-    return { type: "video", id: "pending", url: "", title: "Video", empty: true, mode: "card", loop: false };
-  }
-  const open = videos.filter((card) => !card.blocked);
-  const pool = open.length ? open : videos;
-  const index = Math.abs(Math.trunc(Number(cursor) || 0)) % pool.length;
-  return { ...pool[index], mode: "card", loop: false, blocked: false };
+function emptyVideo() {
+  return { type: "video", id: "pending", url: "", title: "Video", empty: true, mode: "card", loop: false };
+}
+
+function openVideos(playlist) {
+  return (playlist || []).filter((card) => card && card.type === "video" && card.url && !card.empty);
+}
+
+function clipCard(card, salt) {
+  if (!card) return card;
+  const startSec = card.stream ? 0 : videoStartSec(card.id, salt, card.durationSec);
+  return {
+    ...card,
+    mode: card.mode || "card",
+    loop: false,
+    blocked: false,
+    startSec,
+    playId: `${card.id}:${salt}`,
+  };
+}
+
+function pickDistinctVideo(videos, salt, used) {
+  const pool = (videos || []).filter((card) => card && card.url && !card.empty && !used.has(rotationKey(card)));
+  if (!pool.length) return null;
+  return pool[hash32(String(salt)) % pool.length];
+}
+
+function pickPinnedVideo(playlist, salt, used = new Set()) {
+  const videos = openVideos(playlist);
+  if (!videos.length) return emptyVideo();
+  const chosen = pickDistinctVideo(videos, salt, used);
+  if (!chosen) return null;
+  return clipCard(chosen, salt);
 }
 
 function withVideoStart(card, tick) {
   if (!card || card.type !== "video" || card.empty) return card;
-  if (card.stream) return { ...card, startSec: 0 };
-  return { ...card, startSec: videoStartSec(card.id, tick, card.durationSec) };
+  if (card.stream) return { ...card, startSec: 0, playId: card.playId || `${card.id}:${tick}` };
+  return clipCard(card, tick);
+}
+
+function nonVideoReplacement(playlist, used) {
+  const cards = Array.isArray(playlist) ? playlist : [];
+  const nonLogo = cards.filter((card) => card && card.type !== "video" && card.type !== "logo");
+  for (const card of nonLogo) {
+    const key = rotationKey(card);
+    if (key && !used.has(key)) return card;
+  }
+  for (const card of cards) {
+    if (!card || card.type !== "logo") continue;
+    const key = rotationKey(card);
+    if (key && !used.has(key)) return card;
+  }
+  return nonLogo[0] || { type: "clock", id: "clock" };
+}
+
+function replacementFor(plan, slot, playlist, options = {}) {
+  const failed = options.failedIds instanceof Set ? options.failedIds : new Set(options.failedIds || []);
+  const used = new Set();
+  for (const [other, card] of Object.entries(plan || {})) {
+    if (String(other) === String(slot) || !card) continue;
+    const key = rotationKey(card);
+    if (key) used.add(key);
+  }
+  const videos = openVideos(playlist).filter((card) => !failed.has(card.id));
+  const salt = options.salt || `${slot}:retry`;
+  const chosen = pickDistinctVideo(videos, salt, used);
+  if (chosen) return clipCard(chosen, salt);
+  return nonVideoReplacement(playlist, used);
 }
 
 function planRotation(playlist, options = {}) {
@@ -96,12 +160,30 @@ function planRotation(playlist, options = {}) {
     const content = layout[slot]?.content;
     if (content && content !== "rotation") {
       if (content === "video") {
-        const card = prepare(pickPinnedVideo(list, options.videoCursor), slot);
-        const key = rotationKey(card);
-        if (key && !card.empty) used.add(key);
-        slots[slot] = card && !card.empty
-          ? { ...card, startSec: 0, playId: Math.abs(Math.trunc(Number(options.videoCursor) || 0)) }
-          : card;
+        const videos = openVideos(list);
+        const memory = options.videoMemory?.[slot];
+        const gen = memory?.gen || 0;
+        const salt = `${slot}:${gen}`;
+        let chosen = null;
+        if (memory?.id) {
+          const saved = videos.find((card) => card.id === memory.id);
+          if (saved && !used.has(rotationKey(saved))) chosen = clipCard(saved, salt);
+        }
+        if (!chosen && videos.length) {
+          const fresh = pickDistinctVideo(videos, `${salt}:${videos.map((card) => card.id).join(",")}`, used);
+          if (fresh) chosen = clipCard(fresh, salt);
+        }
+        if (chosen) {
+          const key = rotationKey(chosen);
+          if (key) used.add(key);
+          slots[slot] = prepare(chosen, slot);
+        } else if (!videos.length) {
+          slots[slot] = prepare(emptyVideo(), slot);
+        } else {
+          slots[slot] = prepare(nonVideoReplacement(list, used), slot);
+          const key = rotationKey(slots[slot]);
+          if (key) used.add(key);
+        }
         continue;
       }
       const card = prepare(manualCard(content, layout[slot].leaderboardId, list), slot);
@@ -138,8 +220,12 @@ const rotationApi = {
   cardForSlot,
   hash32,
   videoStartSec,
+  logoPhaseKey,
   rotationKey,
   planRotation,
+  pickDistinctVideo,
+  replacementFor,
+  openVideos,
 };
 
 if (typeof module !== "undefined" && module.exports) module.exports = rotationApi;

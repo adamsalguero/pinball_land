@@ -58,7 +58,7 @@ function createField(theme, seed = 1) {
   const particles = [];
   if (theme === "halloween") {
     const kinds = ["pumpkin", "spider", "candy", "bat"];
-    for (let i = 0; i < 24; i += 1) particles.push(makeParticle(rng, kinds[i % kinds.length]));
+    for (let i = 0; i < 16; i += 1) particles.push(makeParticle(rng, kinds[i % kinds.length]));
   } else if (theme === "christmas") {
     for (let i = 0; i < 42; i += 1) particles.push(makeParticle(rng, i % 8 === 0 ? "ornament" : "snow"));
   } else {

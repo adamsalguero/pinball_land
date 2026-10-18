@@ -142,7 +142,8 @@ function concretizeCard(card, slotIndex, startedAt, now) {
     return { ...card, id: amenityAt(startedAt, slotIndex, now), cycle: false };
   }
   if (card.type === "logo" && card.cycle) {
-    return { ...card, key: logoAt(startedAt, slotIndex, now), cycle: false };
+    const base = LOGO_ORDER[(Number(slotIndex) || 0) % LOGO_ORDER.length];
+    return { ...card, key: base, cycle: false };
   }
   return card;
 }
@@ -186,4 +187,5 @@ module.exports = {
   videoStartSec,
   rotationKey,
   planRotation,
+  replacementFor: rotationApi.replacementFor,
 };

@@ -12,8 +12,10 @@ const {
   planRotation,
   rotationKey,
   videoStartSec,
+  replacementFor,
   AMENITY_DWELL_SEC,
 } = require("../src/playlist");
+const { logoPhaseKey } = require("../public/rotation");
 
 test("amenity cards are arcade, oasis, and events — never pool", () => {
   assert.deepEqual(AMENITY_IDS, ["arcade", "oasis", "events"]);
@@ -95,8 +97,8 @@ test("playlist stagger keeps neighboring TVs on different cards", () => {
     assert.notEqual(rotationKey(plan["2"]), "pinboard");
   }
   const start = videoStartSec("starter:skeleton-dance-1929", 3, 331);
-  assert.ok(start > 10);
-  assert.ok(start < 300);
+  assert.ok(start >= 331 * 0.4);
+  assert.ok(start <= 331 * 0.6);
 });
 
 test("currentTick advances by interval and disabled boards drop out", () => {
@@ -194,6 +196,7 @@ test("leaderboard and pinboard subtypes count as one card, and video mode plays 
     assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
     assert.equal(plan["1"].type, "video");
     assert.equal(plan["1"].url, "/media/cache/skeleton-dance-1929");
+    assert.ok(plan["1"].startSec >= 331 * 0.4 && plan["1"].startSec <= 331 * 0.6);
     assert.equal(keys.filter((key) => key === "leaderboard").length <= 1, true);
     assert.equal(keys.filter((key) => key === "pinboard").length <= 1, true);
   }
@@ -275,7 +278,7 @@ test("videos keep being scheduled across two hours of stalls and a pin stays vid
     });
     assert.equal(plan["1"].type, "video", `pin left video at step ${step}`);
     assert.ok(plan["1"].url, `pin had no clip at step ${step}`);
-    assert.equal(plan["1"].startSec, 0);
+    assert.ok(plan["1"].startSec >= 180 * 0.4 && plan["1"].startSec <= 180 * 0.6);
     for (const slot of ["2", "3"]) {
       if (plan[slot]?.type === "video") {
         rotationVideos += 1;
@@ -316,4 +319,93 @@ test("videos keep being scheduled across two hours of stalls and a pin stays vid
     if (plan["2"]?.type === "video" || plan["3"]?.type === "video") returned = true;
   }
   assert.equal(returned, true);
+});
+
+test("pinned screens keep one clip and never share it", () => {
+  const videos = ["a", "b", "c", "d", "e"].map((id) => ({
+    type: "video", id, url: `/media/cache/${id}`, durationSec: 400,
+  }));
+  const playlist = [
+    { type: "logo", key: "pinnacle" },
+    { type: "logo", key: "pinball-land" },
+    { type: "clock", id: "clock" },
+    ...videos,
+  ];
+  const layout = {
+    1: { content: "video", enabled: true },
+    2: { content: "video", enabled: true },
+    3: { content: "video", enabled: true },
+  };
+  const memory = { 1: { gen: 0, id: "" }, 2: { gen: 0, id: "" }, 3: { gen: 0, id: "" } };
+  const first = planRotation(playlist, { startedAt: 0, intervalSec: 30, screenCount: 3, layout, now: 0, videoMemory: memory });
+  for (const slot of ["1", "2", "3"]) {
+    memory[slot] = { gen: 0, id: first[slot].id };
+    assert.equal(first[slot].type, "video");
+    assert.ok(first[slot].startSec >= 160 && first[slot].startSec <= 240);
+  }
+  const ids = ["1", "2", "3"].map((slot) => first[slot].id);
+  assert.equal(new Set(ids).size, 3);
+  const later = planRotation(playlist, { startedAt: 0, intervalSec: 30, screenCount: 3, layout, now: 45000, videoMemory: memory });
+  assert.deepEqual(["1", "2", "3"].map((slot) => later[slot].id), ids);
+  memory["1"] = { gen: 1, id: "" };
+  const advanced = planRotation(playlist, { startedAt: 0, intervalSec: 30, screenCount: 3, layout, now: 45000, videoMemory: memory });
+  assert.notEqual(advanced["1"].id, first["1"].id);
+  assert.equal(advanced["2"].id, first["2"].id);
+  assert.equal(advanced["3"].id, first["3"].id);
+  const keys = ["1", "2", "3"].map((slot) => rotationKey(advanced[slot]));
+  assert.equal(new Set(keys).size, 3);
+});
+
+test("rotation changes every screen on the interval, not between ticks", () => {
+  const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] });
+  const layout = {
+    1: { content: "rotation", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  const startedAt = 5_000_000;
+  const keys = (now) => {
+    const plan = planRotation(playlist, { startedAt, intervalSec: 30, screenCount: 3, layout, now });
+    return ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
+  };
+  const early = keys(startedAt + 1000);
+  assert.deepEqual(keys(startedAt + 29000), early);
+  const next = keys(startedAt + 30000);
+  assert.notDeepEqual(next, early);
+  assert.equal(new Set(next).size, 3);
+  assert.deepEqual(keys(startedAt + 30000 + 500), next);
+});
+
+test("a logo card flips at the halfway point of its dwell", () => {
+  const startedAt = 10_000;
+  assert.equal(logoPhaseKey("pinnacle", startedAt, 30, startedAt + 1000), "pinnacle");
+  assert.equal(logoPhaseKey("pinnacle", startedAt, 30, startedAt + 14999), "pinnacle");
+  assert.equal(logoPhaseKey("pinnacle", startedAt, 30, startedAt + 15000), "pinball-land");
+  assert.equal(logoPhaseKey("pinball-land", startedAt, 30, startedAt + 1000), "pinball-land");
+  assert.equal(logoPhaseKey("pinball-land", startedAt, 30, startedAt + 15000), "pinnacle");
+  assert.equal(logoPhaseKey("pinnacle", startedAt, 30, startedAt + 30000), "pinnacle");
+  const left = logoPhaseKey("pinnacle", startedAt, 30, startedAt + 20000);
+  const right = logoPhaseKey("pinball-land", startedAt, 30, startedAt + 20000);
+  assert.notEqual(left, right);
+});
+
+test("a failed video is replaced without duplicating a logo", () => {
+  const playlist = [
+    { type: "logo", key: "pinnacle" },
+    { type: "logo", key: "pinball-land" },
+    { type: "amenity", id: "amenities" },
+    { type: "clock", id: "clock" },
+    { type: "video", id: "only", url: "/media/cache/only", durationSec: 120 },
+  ];
+  const plan = {
+    1: { type: "video", id: "only", url: "/media/cache/only" },
+    2: { type: "logo", key: "pinnacle" },
+    3: { type: "logo", key: "pinball-land" },
+  };
+  const next = replacementFor(plan, "1", playlist, { failedIds: ["only"], salt: "1:give-up" });
+  assert.notEqual(next.type, "video");
+  const keys = [rotationKey(next), rotationKey(plan["2"]), rotationKey(plan["3"])];
+  assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
+  assert.notEqual(rotationKey(next), "logo:pinnacle");
+  assert.notEqual(rotationKey(next), "logo:pinball-land");
 });

@@ -205,6 +205,7 @@ function normalizeRow(row) {
     name: String(row.name || "").trim(),
     score: parseScore(row.score),
     proofFile,
+    showOnWall: proofFile ? row.showOnWall !== false : false,
     createdAt: Number(row.createdAt) > 0 ? Number(row.createdAt) : null,
   };
 }
@@ -635,7 +636,7 @@ class Store {
     return this.commit();
   }
 
-  async updateRow(boardId, rowId, { name, score }) {
+  async updateRow(boardId, rowId, { name, score, showOnWall, removeProof } = {}) {
     const board = this.findBoard(boardId);
     if (!board) {
       throw Object.assign(new Error("Unknown leaderboard"), { status: 404 });
@@ -648,6 +649,12 @@ class Store {
       row.name = String(name || "").trim();
     }
     if (score !== undefined) row.score = parseScore(score);
+    if (removeProof) {
+      row.proofFile = null;
+      row.showOnWall = false;
+    } else if (showOnWall !== undefined && row.proofFile) {
+      row.showOnWall = showOnWall !== false;
+    }
     board.rows = sortRows(board.rows);
     return this.commit();
   }
@@ -774,7 +781,7 @@ class Store {
     return submission;
   }
 
-  async reviewScore(submissionId, status) {
+  async reviewScore(submissionId, status, options = {}) {
     const item = this.state.scoreSubmissions.find((row) => row.id === submissionId);
     if (!item) throw Object.assign(new Error("Unknown submission"), { status: 404 });
     if (item.status !== "pending") {
@@ -789,15 +796,18 @@ class Store {
       if (!board) throw Object.assign(new Error("That machine is no longer on a board"), { status: 404 });
       const key = playerKey(item.name);
       const existing = board.rows.find((row) => playerKey(row.name) === key);
+      const showPhoto = options.showPhoto !== false;
       if (existing) {
         if (item.score > existing.score) existing.score = item.score;
         if (item.proofFile) existing.proofFile = item.proofFile;
+        existing.showOnWall = Boolean(existing.proofFile) && showPhoto;
         existing.createdAt = item.createdAt || Date.now();
       } else {
         board.rows.push(normalizeRow({
           name: item.name,
           score: item.score,
           proofFile: item.proofFile,
+          showOnWall: showPhoto,
           createdAt: item.createdAt,
         }));
       }
