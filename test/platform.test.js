@@ -71,6 +71,20 @@ test("admin can permanently delete a guest photo", async () => {
   }
 });
 
+test("admin login page does not reveal the default PIN", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const admin = await fetch(`${origin}/admin`);
+    const html = await admin.text();
+    assert.equal(admin.status, 200);
+    assert.match(html, /id="pin-input"/);
+    assert.doesNotMatch(html, /2224/);
+    assert.doesNotMatch(html, /default pin/i);
+  } finally {
+    server.close();
+  }
+});
+
 test("guest app is public and admin app is separate", async () => {
   const { server, origin } = await startServer();
   try {
@@ -82,7 +96,7 @@ test("guest app is public and admin app is separate", async () => {
     assert.match(guestText, /manifest.webmanifest/);
     assert.doesNotMatch(guestText, /Kiosk control/);
     assert.match(adminText, /Pinball Land Admin/);
-    assert.match(adminText, /2224/);
+    assert.doesNotMatch(adminText, /2224/);
     assert.match(adminText, /admin.webmanifest/);
   } finally {
     server.close();

@@ -43,7 +43,7 @@ On the iPhone or iPad, join the venue WiFi. In Safari:
 1. Open the **Guest** address (`http://<pc>:3000/`). Share, **Add to Home Screen**. The name is Pinball Land. Guests use this. There is no PIN.
 2. Open the **Admin** address (`http://<pc>:3000/admin`). Share, **Add to Home Screen**. The name is Pinball Land Admin. Enter `2224` once. That iPad stays signed in.
 
-Change the PIN under Admin, Settings. If it is forgotten: Admin, **Reset PIN to 2224**, or on the PC run `npm run reset-pin`, or use the kiosk tray item **Reset PIN to default**.
+Change the PIN under Admin, Settings. If it is forgotten: Admin, **Reset PIN to default**, or on the PC run `npm run reset-pin`, or use the kiosk tray item **Reset PIN to default**. The default is `2224`.
 
 ## After it is running
 

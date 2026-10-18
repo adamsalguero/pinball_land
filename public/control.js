@@ -1566,7 +1566,7 @@ document.getElementById("pin-form").addEventListener("submit", async (event) => 
 });
 document.getElementById("reset-pin").addEventListener("click", async () => {
   await api("/api/pin/reset", { method: "POST" });
-  toast("PIN reset to 2224");
+  toast("PIN reset to the default");
 });
 document.getElementById("revoke-all").addEventListener("click", async () => {
   await api("/api/devices/revoke-all", { method: "POST" });
