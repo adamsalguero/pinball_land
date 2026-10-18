@@ -50,3 +50,30 @@ test("transitions are subtle or off, and particles move on their own canvas fiel
   assert.ok(plain.particles.length <= 12);
   assert.ok(plain.particles.every((particle) => particle.kind === "mote"));
 });
+
+test("spider knees rise outward and the lower segment drops", () => {
+  const { drawSpider } = require("../public/motion");
+  const size = 40;
+  const legs = [];
+  const ctx = {
+    beginPath() {},
+    moveTo(x, y) { this.points = [{ x, y }]; },
+    lineTo(x, y) { this.points.push({ x, y }); },
+    stroke() {
+      if (this.points && this.points.length === 3) legs.push(this.points);
+    },
+    arc() {},
+    fill() {},
+  };
+  drawSpider(ctx, size, 0);
+  assert.equal(ctx.lineCap, "round");
+  assert.equal(ctx.lineJoin, "round");
+  assert.equal(legs.length, 8);
+  for (const [hip, knee, foot] of legs) {
+    const side = Math.sign(knee.x);
+    assert.ok(side * (knee.x - hip.x) > size * 0.12);
+    assert.ok(hip.y - knee.y > size * 0.12);
+    assert.ok(foot.y - knee.y > size * 0.28);
+    assert.ok(foot.y > hip.y + size * 0.1);
+  }
+});

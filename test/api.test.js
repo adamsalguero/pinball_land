@@ -72,6 +72,7 @@ test("serves display, control, SVG logos, and oasis photo", async () => {
     assert.doesNotMatch(logoText, /<rect\b/i);
     assert.match(logoText, /#F4EFE4/);
     assert.match(logoText, /#81338B/);
+    assert.match(logoText, /id="subtitle"[^>]*>\s*<path\b[^>]*fill="#C79BD0"/);
     assert.doesNotMatch(logoText, /#504E50/);
     assert.match(photo.headers.get("content-type") || "", /image\/(png|jpeg)/);
   } finally {

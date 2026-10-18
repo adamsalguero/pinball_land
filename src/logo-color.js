@@ -197,6 +197,11 @@ function recolorEntertainment(svg) {
 function prepareLogoSvg(svg) {
   let text = String(svg || "");
   text = text.replace(/<rect\b[^>]*\bfill="#(?:fff|ffffff|f8f8f5|e5e2da|e8e4dc)"[^>]*\/?>/gi, "");
+  // FINANCIAL SERVICES sits on the dark panel. Lighten that path before the mountain recolor.
+  text = text.replace(
+    /(<g\b[^>]*\bid="subtitle"[^>]*>\s*<path\b[^>]*\bfill="#)[0-9A-Fa-f]{3,8}/,
+    "$1C79BD0"
+  );
   text = text.replaceAll("#62006E", "#81338B");
   if (text.includes('id="charcoal"')) return recolorEntertainment(text);
   return text.replaceAll("#504E50", "#F4EFE4");

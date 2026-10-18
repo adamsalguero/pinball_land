@@ -185,17 +185,20 @@ function drawSpider(ctx, size, phase) {
   ctx.lineJoin = "round";
   ctx.strokeStyle = "#141414";
   ctx.lineWidth = Math.max(1.35, size * 0.04);
+  const reach = [0.30, 0.38, 0.36, 0.28];
+  const lift = [0.22, 0.32, 0.30, 0.20];
+  const drop = [0.26, 0.34, 0.36, 0.28];
   for (let i = 0; i < 8; i += 1) {
     const side = i < 4 ? -1 : 1;
     const index = i % 4;
     const spread = [-0.95, -0.32, 0.32, 0.95][index];
     const wiggle = Math.sin(pose * 2 + index * 0.8 + (side > 0 ? 0.6 : 0)) * size * 0.028;
-    const hipX = side * body * 0.7;
-    const hipY = spread * body * 0.42;
-    const kneeX = side * size * (0.33 + index * 0.012);
-    const kneeY = hipY - size * 0.15 + wiggle;
-    const footX = side * size * (0.4 + index * 0.018);
-    const footY = hipY + size * 0.09 + wiggle * 0.3;
+    const hipX = side * body * 0.62;
+    const hipY = spread * body * 0.38;
+    const kneeX = side * size * reach[index];
+    const kneeY = hipY - size * lift[index] + wiggle;
+    const footX = kneeX + side * size * 0.035;
+    const footY = hipY + size * drop[index] + wiggle * 0.25;
     ctx.beginPath();
     ctx.moveTo(hipX, hipY);
     ctx.lineTo(kneeX, kneeY);
