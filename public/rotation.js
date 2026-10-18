@@ -62,11 +62,19 @@ function manualCard(content, leaderboardId, playlist) {
   if (content === "leaderboard") return { type: "leaderboard", id: leaderboardId || null };
   if (content === "pinboard") return { type: "pinboard", id: "pinboard", span: false };
   if (content === "clock") return { type: "clock", id: "clock" };
-  if (content === "video") {
-    const video = (playlist || []).find((card) => card.type === "video" && card.url && !card.empty);
-    return video ? { ...video, mode: "card", loop: video.loop !== false } : null;
-  }
+  if (content === "video") return pickPinnedVideo(playlist, 0);
   return null;
+}
+
+function pickPinnedVideo(playlist, cursor) {
+  const videos = (playlist || []).filter((card) => card && card.type === "video" && card.url && !card.empty);
+  if (!videos.length) {
+    return { type: "video", id: "pending", url: "", title: "Video", empty: true, mode: "card", loop: false };
+  }
+  const open = videos.filter((card) => !card.blocked);
+  const pool = open.length ? open : videos;
+  const index = Math.abs(Math.trunc(Number(cursor) || 0)) % pool.length;
+  return { ...pool[index], mode: "card", loop: false, blocked: false };
 }
 
 function withVideoStart(card, tick) {
@@ -87,6 +95,15 @@ function planRotation(playlist, options = {}) {
   for (const slot of ["1", "2", "3"]) {
     const content = layout[slot]?.content;
     if (content && content !== "rotation") {
+      if (content === "video") {
+        const card = prepare(pickPinnedVideo(list, options.videoCursor), slot);
+        const key = rotationKey(card);
+        if (key && !card.empty) used.add(key);
+        slots[slot] = card && !card.empty
+          ? { ...card, startSec: 0, playId: Math.abs(Math.trunc(Number(options.videoCursor) || 0)) }
+          : card;
+        continue;
+      }
       const card = prepare(manualCard(content, layout[slot].leaderboardId, list), slot);
       const key = rotationKey(card);
       if (key) used.add(key);
@@ -102,6 +119,7 @@ function planRotation(playlist, options = {}) {
     let chosen = null;
     for (let step = 0; step < n; step += 1) {
       const candidate = prepare(cardForSlot(list, tick, slotIndex + step), slot);
+      if (candidate?.type === "video" && candidate.blocked) continue;
       const key = rotationKey(candidate);
       if (!key || used.has(key)) continue;
       chosen = candidate;

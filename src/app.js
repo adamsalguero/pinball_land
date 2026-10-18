@@ -22,6 +22,7 @@ const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards } = require("./catalog");
 const { bundledFile } = require("./bundled");
 const { createClipCache } = require("./clip-cache");
+const { prepareLogoSvg } = require("./logo-color");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
 const { isInside, defaultDataDir, dataLayout } = require("./paths");
 const { launchDetachedUpdate, launchRegisterTasks, readGitCommit, readUpdateStatusSync } = require("./self-update");
@@ -133,6 +134,7 @@ function createApp({
   guestPhotosDir = null,
   catalogPath = null,
   now,
+  clock = null,
   dataDir = null,
   appRoot = path.join(__dirname, ".."),
   clipCache = false,
@@ -153,7 +155,17 @@ function createApp({
     now,
   });
   let restartToken = 0;
-  const blockedVideos = new Set();
+  const clockNow = typeof clock === "function" ? clock : () => Date.now();
+  const VIDEO_BLOCK_MS = 10 * 60 * 1000;
+  const blockedVideos = new Map();
+  let videoCursor = 0;
+
+  function videoIsBlocked(id, nowMs) {
+    const until = blockedVideos.get(id) || 0;
+    if (until > nowMs) return true;
+    if (until) blockedVideos.delete(id);
+    return false;
+  }
   const motionSync = {
     seed: 0x50494e,
     epoch: Date.now(),
@@ -309,7 +321,11 @@ function createApp({
         isReady: (id) => clips.isReady(id),
       }),
       youtube: config.youtube?.[state.theme] || [],
-    }).filter((card) => !(card.type === "video" && blockedVideos.has(card.id)));
+    }).map((card) => (
+      card.type === "video" && videoIsBlocked(card.id, clockNow())
+        ? { ...card, blocked: true }
+        : card
+    ));
     const timing = effectiveRotation(state);
     const rotationPlan = planRotation(playlist, {
       startedAt: state.rotation.startedAt,
@@ -317,7 +333,8 @@ function createApp({
       minInterval: timing.minInterval,
       screenCount: displays.count,
       layout,
-      now: Date.now(),
+      now: clockNow(),
+      videoCursor,
     });
     return {
       state: {
@@ -362,7 +379,9 @@ function createApp({
       motion: config.motion,
       slogans: config.slogans,
       motionSync,
-      serverNow: Date.now(),
+      rotationTiming: timing,
+      videoCursor,
+      serverNow: clockNow(),
       version: pkg.version,
       youtube: config.youtube,
       guest: {
@@ -916,7 +935,14 @@ function createApp({
     if (!LOGO_KEYS.includes(req.params.key)) {
       return res.status(404).send("Unknown logo");
     }
-    sendMedia(res, resolveLogos(logosDir), req.params.key, "Logo");
+    const resolved = resolveLogos(logosDir)[req.params.key];
+    if (!resolved?.filePath) return res.status(404).send("Logo file not found");
+    res.setHeader("Cache-Control", "no-store");
+    if (String(resolved.filePath).endsWith(".svg")) {
+      res.type("image/svg+xml");
+      return res.send(prepareLogoSvg(fs.readFileSync(resolved.filePath, "utf8")));
+    }
+    return res.sendFile(resolved.filePath);
   });
 
   app.get("/photos/:key", (req, res) => {
@@ -1157,16 +1183,20 @@ function createApp({
     const root = dataDir || path.dirname(store.filePath);
     const dir = path.join(root, "logs");
     fs.mkdirSync(dir, { recursive: true });
+    const nowMs = clockNow();
+    const blocking = event === "failed" || event === "error" || event === "stall-timeout";
+    const blockedUntil = blocking && id ? new Date(nowMs + VIDEO_BLOCK_MS).toISOString() : "";
     fs.appendFileSync(
       path.join(dir, "video.log"),
-      `${new Date().toISOString()} event=${event} id=${id} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}\n`,
+      `${new Date(nowMs).toISOString()} event=${event} id=${id} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src}${blockedUntil ? ` blockedUntil=${blockedUntil}` : ""}\n`,
     );
-    const blocking = event === "failed" || event === "error" || event === "stall-timeout";
-    if (blocking && id && !blockedVideos.has(id)) {
-      blockedVideos.add(id);
-      broadcast();
+    if (event === "ended" && id) videoCursor += 1;
+    if (blocking && id) {
+      blockedVideos.set(id, nowMs + VIDEO_BLOCK_MS);
+      videoCursor += 1;
     }
-    sendJson(res, 200, { ok: true });
+    if ((event === "ended" || blocking) && id) broadcast();
+    sendJson(res, 200, { ok: true, blockedUntil: blockedUntil || null });
   });
 
   app.get("/api/media/cache", lanRequired, (req, res) => {

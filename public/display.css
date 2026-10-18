@@ -112,13 +112,8 @@ body,
   width: min(88vw, 1400px);
   height: min(78vh, 780px);
   object-fit: contain;
-  background: var(--beige, #f8f8f5);
-  border-radius: 28px;
-  padding: 4vh 5vw;
-}
-
-[data-theme="halloween"] .logo-panel img {
-  background: #f8f8f5;
+  background: transparent;
+  padding: 0;
 }
 
 .logo-fallback {
@@ -219,6 +214,31 @@ body,
   line-height: 1.5;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.amenity-types.is-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55em 0.55em;
+  align-items: center;
+  text-transform: none;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.amenity-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.28em 0.72em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+  text-transform: none;
 }
 
 .board-panel.has-art {

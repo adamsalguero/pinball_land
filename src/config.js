@@ -76,11 +76,16 @@ function httpBaseUrl(value) {
   }
 }
 
+const LEGACY_SLOGANS = {
+  halloween: "Happy Halloween",
+  christmas: "Merry Christmas",
+};
+
 function defaultSlogans() {
   return {
     pinnacle: "",
-    halloween: "Happy Halloween",
-    christmas: "Merry Christmas",
+    halloween: "Happy Halloween!",
+    christmas: "Merry Christmas!",
   };
 }
 
@@ -90,7 +95,9 @@ function normalizeSlogans(raw) {
   if (!raw || typeof raw !== "object") return slogans;
   for (const key of Object.keys(slogans)) {
     if (incoming[key] === undefined) continue;
-    slogans[key] = String(incoming[key] || "").trim().slice(0, 80);
+    const value = String(incoming[key] ?? "").trim().slice(0, 80);
+    if (LEGACY_SLOGANS[key] && value === LEGACY_SLOGANS[key]) continue;
+    slogans[key] = value;
   }
   return slogans;
 }

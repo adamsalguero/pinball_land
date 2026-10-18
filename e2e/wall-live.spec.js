@@ -233,12 +233,14 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
       const qrHits = qr ? cards.filter((card) => intersects(card.getBoundingClientRect(), qr)).length : 0;
       const photos = cards.map((card) => card.querySelector("img")?.naturalWidth || 0);
       const imgWidths = cards.map((card) => card.querySelector("img")?.getBoundingClientRect().width || 0);
-      const tilt = Math.abs(parseFloat(cards[0]?.style.getPropertyValue("--tilt")) || 0);
+      const tilts = cards.map((card) => parseFloat(card.style.getPropertyValue("--tilt")) || 0);
+      const tilt = Math.abs(tilts[0] || 0);
       return {
         view,
         count: cards.length,
         outside,
         tilt,
+        tilts,
         caption: cards.map((card) => card.innerText || "").join("\n"),
         clipped: captions.filter((item) => item.clipped).length,
         covered: captions.filter((item) => item.covered).length,
@@ -253,6 +255,14 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
     expect(report.outside, `pins ${count} ${JSON.stringify(report.outside)}`).toEqual([]);
     expect(report.tilt).toBeGreaterThanOrEqual(1);
     expect(report.tilt).toBeLessThanOrEqual(3);
+    for (const tilt of report.tilts) {
+      expect(Math.abs(tilt), `pins ${count} tilt`).toBeGreaterThanOrEqual(1);
+      expect(Math.abs(tilt), `pins ${count} tilt`).toBeLessThanOrEqual(3);
+    }
+    if (cap >= 8) {
+      expect(new Set(report.tilts.map((tilt) => Math.sign(tilt))).size, `pins ${count} directions`).toBe(2);
+      expect(new Set(report.tilts.map((tilt) => Math.abs(tilt).toFixed(2))).size, `pins ${count} amounts`).toBeGreaterThan(2);
+    }
     if (count <= 12) expect(report.caption).toContain("Adam Salguero");
     expect(report.caption).toContain("·");
     expect(report.caption).not.toContain("…");
@@ -273,7 +283,7 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
 test("clock uses the halloween slogan", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/display/1?preview=clock&theme=halloween&shot=1");
-  await expect(page.locator("#clock-event")).toHaveText("Happy Halloween");
+  await expect(page.locator("#clock-event")).toHaveText("Happy Halloween!");
   await expect(page.locator("#clock")).not.toContainText("Tonight");
   await page.screenshot({ path: "e2e/artifacts/clock-halloween.png" });
 });

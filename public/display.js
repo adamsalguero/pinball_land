@@ -254,6 +254,26 @@ logoImage.addEventListener("error", () => {
   logoFallback.hidden = false;
 });
 
+function paintEventTypes(text) {
+  const items = String(text || "").split("|").map((item) => item.trim()).filter(Boolean);
+  amenityTypes.replaceChildren();
+  amenityTypes.removeAttribute("data-fit");
+  delete amenityTypes.dataset.full;
+  if (!items.length) {
+    amenityTypes.classList.remove("is-chips");
+    amenityTypes.hidden = true;
+    return;
+  }
+  amenityTypes.classList.add("is-chips");
+  amenityTypes.hidden = false;
+  items.forEach((item) => {
+    const chip = document.createElement("span");
+    chip.className = "amenity-chip";
+    chip.textContent = item;
+    amenityTypes.append(chip);
+  });
+}
+
 function showAmenity(amenity, photos) {
   setMode("amenity");
   stopVideo();
@@ -261,11 +281,16 @@ function showAmenity(amenity, photos) {
   teardownPresent();
   setFit(amenityHeadline, FIXTURE ? `${amenity?.headline || "Amenities"} ${LONG_TEXT}` : (amenity?.headline || ""));
   setFit(amenityBody, FIXTURE ? LONG_TEXT : (amenity?.body || ""));
-  const types = FIXTURE ? LONG_TEXT : (amenity?.eventTypes || "");
-  if (types) {
+  if (FIXTURE) {
+    amenityTypes.classList.remove("is-chips");
     amenityTypes.hidden = false;
-    setFit(amenityTypes, types);
+    amenityTypes.replaceChildren();
+    setFit(amenityTypes, LONG_TEXT);
+  } else if (amenity?.eventTypes) {
+    paintEventTypes(amenity.eventTypes);
   } else {
+    amenityTypes.classList.remove("is-chips");
+    amenityTypes.replaceChildren();
     amenityTypes.hidden = true;
     setFit(amenityTypes, "");
   }
@@ -543,6 +568,11 @@ function resolveCard() {
   }
   if (payload.rotationPlan) {
     const planned = payload.rotationPlan[SLOT] || payload.rotationPlan[String(SLOT)] || null;
+    const pinned = payload.layout?.[SLOT]?.content === "video";
+    if (pinned || !localVideo || localVideo.tick !== serverTick() || !planned || planned.type !== "video" || planned.id !== localVideo.baseId) {
+      localVideo = null;
+    }
+    if (localVideo) return { ...localVideo.card, span: false };
     if (planned) return { ...planned, span: false };
     return { type: "off" };
   }
@@ -575,7 +605,7 @@ function cardKey(card) {
   if (card.type === "amenity") return `amenity:${card.id}`;
   if (card.type === "leaderboard") return `board:${card.id}`;
   if (card.type === "video") {
-    return `video:${card.id}:${card.mode}:${card.startSec || ""}:${card.startedAt || ""}:${(card.slots || []).join(",")}`;
+    return `video:${card.id}:${card.mode}:${card.startSec || ""}:${card.playId ?? ""}:${card.startedAt || ""}:${(card.slots || []).join(",")}`;
   }
   if (card.type === "pinboard" || card.type === "collage") {
     const ids = (payload?.guest?.photos || []).map((photo) => photo.id).join(",");
@@ -707,8 +737,26 @@ function seekIntoCard(card) {
 }
 
 let stallTimer = null;
-let reportedVideoId = "";
 const reportedEvents = new Set();
+let localVideo = null;
+
+function serverTick() {
+  const timing = payload?.rotationTiming || {};
+  const min = Number(timing.minInterval) || 10;
+  const floor = Math.min(30, Math.max(1, min));
+  const requested = Number(timing.intervalSec) || Number(payload?.state?.rotation?.intervalSec) || 30;
+  const sec = Math.min(120, Math.max(floor, requested));
+  const startedAt = Number(payload?.state?.rotation?.startedAt) || 0;
+  const now = Date.now() - clockSkew;
+  return Math.floor(Math.max(0, now - startedAt) / (sec * 1000));
+}
+
+function nextRotationVideo(currentId) {
+  const videos = (payload?.playlist || []).filter((card) => card.type === "video" && card.url && !card.empty && !card.blocked);
+  if (!videos.length) return null;
+  const index = videos.findIndex((card) => card.id === currentId);
+  return videos[(index + 1) % videos.length];
+}
 
 function clearStall() {
   if (stallTimer) clearInterval(stallTimer);
@@ -728,12 +776,8 @@ function reportVideo(card, eventName, block = false) {
   const event = String(eventName || "event");
   const blocking = block || event === "failed" || event === "error";
   const seen = `${id}:${event}`;
-  if (!blocking && reportedEvents.has(seen)) return;
-  reportedEvents.add(seen);
-  if (blocking) {
-    if (!id || id === reportedVideoId) return;
-    reportedVideoId = id;
-  }
+  if (event !== "ended" && !blocking && reportedEvents.has(seen)) return;
+  if (event !== "ended") reportedEvents.add(seen);
   const err = wallVideo.error;
   fetch("/api/media/failure", {
     method: "POST",
@@ -770,7 +814,7 @@ function armStall(card) {
   wallVideo.onabort = () => reportVideo(card, "abort");
   wallVideo.onemptied = () => reportVideo(card, "emptied");
   stallTimer = setInterval(() => {
-    if (wallVideo.ended && card.loop) return;
+    if (wallVideo.ended) return;
     const quiet = Date.now() - lastMove;
     const waiting = Date.now() - started;
     if (quiet < 8000 || waiting < 8000) return;
@@ -790,7 +834,7 @@ function showVideo(card) {
     stopWallVideo();
     wallVideo.hidden = true;
     if (fallback) fallback.hidden = true;
-    if (card?.id && card.id !== "preview" && card.id !== "empty") reportVideo(card, "failed");
+    if (!card?.empty && card?.id && card.id !== "preview") reportVideo(card, "failed");
     return;
   }
   wallVideo.hidden = false;
@@ -826,16 +870,39 @@ function showVideo(card) {
   if (wallVideo.getAttribute("src") !== card.url) {
     delete wallVideo.dataset.sought;
     wallVideo.src = card.url;
+  } else if (card.mode === "card") {
+    delete wallVideo.dataset.sought;
+    if ((Number(card.startSec) || 0) <= 0.5 && (wallVideo.ended || wallVideo.currentTime > 0.5)) {
+      try { wallVideo.currentTime = 0; } catch { /* play() restarts an ended clip */ }
+    }
+    seekIntoCard(card);
   }
-  else if (card.mode === "card") seekIntoCard(card);
   wallVideo.onended = () => {
-    if (card.mode === "card" || card.loop) return;
-    if (String(SLOT) !== primary) return;
-    fetch("/api/media/next", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ videoId: card.id }),
-    }).catch(() => {});
+    clearStall();
+    if (card.loop) return;
+    if (card.mode !== "card") {
+      if (String(SLOT) !== primary) return;
+      fetch("/api/media/next", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ videoId: card.id }),
+      }).catch(() => {});
+      return;
+    }
+    if (payload?.layout?.[SLOT]?.content === "video") {
+      reportVideo(card, "ended");
+      return;
+    }
+    const next = nextRotationVideo(card.id);
+    if (!next) return;
+    const advanced = { ...next, mode: "card", loop: false, startSec: 0, blocked: false, playId: `local-${Date.now()}` };
+    localVideo = {
+      tick: serverTick(),
+      baseId: card.id,
+      card: advanced,
+    };
+    showVideo(advanced);
+    lastKey = cardKey(advanced);
   };
   const startPlayback = () => {
     wallVideo.play().catch(() => {
@@ -1033,8 +1100,8 @@ function themeSlogan() {
   const theme = queryTheme() || payload?.state?.theme || "pinnacle";
   const slogans = payload?.slogans || {};
   if (Object.prototype.hasOwnProperty.call(slogans, theme)) return String(slogans[theme] || "");
-  if (theme === "halloween") return "Happy Halloween";
-  if (theme === "christmas") return "Merry Christmas";
+  if (theme === "halloween") return "Happy Halloween!";
+  if (theme === "christmas") return "Merry Christmas!";
   return "";
 }
 
@@ -1052,6 +1119,11 @@ function pinHash(text, salt) {
   let h = 2166136261 ^ (Number(salt) || 0);
   const value = String(text || "");
   for (let i = 0; i < value.length; i += 1) h = Math.imul(h ^ value.charCodeAt(i), 16777619);
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x7feb352d);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x846ca68b);
+  h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
 }
 
@@ -1086,9 +1158,11 @@ function overlapRatio(a, b) {
   return area / denom;
 }
 
-function pinTilt(seed) {
-  const sign = seed < 0.5 ? -1 : 1;
-  return sign * (1 + ((seed * 17) % 1) * 2);
+function pinTilt(id) {
+  const dir = pinHash(id, 11);
+  const amount = pinHash(id, 29);
+  const sign = dir < 0.5 ? -1 : 1;
+  return sign * (1 + amount * 2);
 }
 
 function cardParts(cx, cy, cardW, cardH, tilt) {
@@ -1135,7 +1209,7 @@ function pinCardHeight(cardW) {
 function tryPinGrid(photos, cols, rows, cardW, width, height, qr) {
   const cardH = pinCardHeight(cardW);
   const specs = photos.map((photo) => {
-    const tilt = pinTilt(pinHash(photo.id, 11));
+    const tilt = pinTilt(photo.id);
     return {
       photo,
       tilt,
@@ -1235,7 +1309,7 @@ function scatterPins(photos, width, height, qr) {
       photo,
       cx: 16 + cardW * (col + 0.55),
       cy: 16 + cardH * (row + 0.55),
-      tilt: pinTilt(pinHash(photo.id, 3)),
+      tilt: pinTilt(photo.id),
       cardW,
       cardH,
       z: 10 + index,
@@ -1394,7 +1468,18 @@ function paintMotion(dt) {
   }
   const epoch = Number(sync.epoch) || 0;
   const elapsed = Math.max(0, (Date.now() - clockSkew - epoch) / 1000);
-  window.PinballMotion.drawField(ctx, motionField, width, height, { slot: slotIndex(), elapsed });
+  const avoid = [];
+  if (screen.dataset.mode === "amenity") {
+    const copy = document.querySelector(".amenity-copy");
+    if (copy) {
+      const box = copy.getBoundingClientRect();
+      const pad = 16;
+      if (box.width > 8 && box.height > 8) {
+        avoid.push({ x: box.left - pad, y: box.top - pad, w: box.width + pad * 2, h: box.height + pad * 2 });
+      }
+    }
+  }
+  window.PinballMotion.drawField(ctx, motionField, width, height, { slot: slotIndex(), elapsed, avoid });
 }
 
 function motionFrame(ts) {
