@@ -40,7 +40,8 @@ test("the wall player resumes occluded video and only one element stays loaded",
   const css = fs.readFileSync(path.join(__dirname, "..", "public", "display.css"), "utf8");
   assert.match(display, /visibilitychange/);
   assert.match(display, /resumePlayback/);
-  assert.match(display, /logoPhaseKey/);
+  assert.doesNotMatch(display, /logoPhaseKey/);
+  assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "playlist.js"), "utf8"), /logoPhaseKey/);
   assert.match(display, /preloadUpcoming/);
   assert.match(display, /stallAction/);
   assert.doesNotMatch(display, /is-leaving/);

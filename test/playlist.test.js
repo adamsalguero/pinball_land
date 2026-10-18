@@ -369,11 +369,49 @@ test("rotation changes every screen on the interval, not between ticks", () => {
     return ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
   };
   const early = keys(startedAt + 1000);
-  assert.deepEqual(keys(startedAt + 29000), early);
+  assert.deepEqual(keys(startedAt + 14000), early);
+  const flipped = keys(startedAt + 16000);
+  assert.deepEqual(keys(startedAt + 29000), flipped);
+  assert.notDeepEqual(flipped, early);
   const next = keys(startedAt + 30000);
-  assert.notDeepEqual(next, early);
+  assert.notDeepEqual(next, flipped);
   assert.equal(new Set(next).size, 3);
   assert.deepEqual(keys(startedAt + 30000 + 500), next);
+});
+
+test("logo screens swap together at halfway and never share a logo", () => {
+  const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
+    starters: [{ type: "video", id: "skeleton-dance-1929", url: "/media/cache/skeleton-dance-1929", durationSec: 331 }],
+  });
+  const layout = {
+    1: { content: "rotation", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  const startedAt = 8_000_000;
+  const keysAt = (now) => {
+    const plan = planRotation(playlist, {
+      startedAt,
+      intervalSec: 1,
+      minInterval: 1,
+      screenCount: 3,
+      layout,
+      now,
+    });
+    return ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
+  };
+  for (let sec = 0; sec < 12; sec += 1) {
+    for (const into of [100, 400, 600, 900]) {
+      const keys = keysAt(startedAt + sec * 1000 + into);
+      assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
+    }
+  }
+  const first = keysAt(startedAt + 200);
+  const second = keysAt(startedAt + 700);
+  assert.notDeepEqual(first, second);
+  const logos = (keys) => keys.filter((key) => key.startsWith("logo:"));
+  assert.notDeepEqual(logos(first), logos(second));
+  assert.equal(new Set(logos(second)).size, logos(second).length);
 });
 
 test("a logo card flips at the halfway point of its dwell", () => {

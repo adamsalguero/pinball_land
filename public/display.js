@@ -660,16 +660,9 @@ function decorate(card) {
   if (card.type === "amenity" && (card.cycle || card.id === "amenities")) {
     return { ...card, type: "amenity", id: cyclePick(AMENITY_ORDER, AMENITY_DWELL_MS, slotIndex()) };
   }
-  if (card.type === "logo" && !params.get("preview")) {
-    const base = card.key === "pinball-land" || card.key === "pinnacle"
-      ? card.key
-      : (slotIndex() % 2 === 0 ? "pinnacle" : "pinball-land");
-    const timing = payload?.rotationTiming || {};
-    const interval = timing.intervalSec || payload?.state?.rotation?.intervalSec || 30;
-    const phase = window.PinballRotation?.logoPhaseKey
-      ? window.PinballRotation.logoPhaseKey(base, payload?.state?.rotation?.startedAt, interval, Date.now() - clockSkew, timing.minInterval || 10)
-      : base;
-    return { ...card, key: phase, cycle: false };
+  if (card.type === "logo" && !card.key) {
+    const key = slotIndex() % 2 === 0 ? "pinnacle" : "pinball-land";
+    return { ...card, key, cycle: false };
   }
   return card;
 }
