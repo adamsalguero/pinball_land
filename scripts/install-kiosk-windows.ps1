@@ -28,6 +28,7 @@ $taskName = "PinballLandKiosk"
 $serverTask = "PinballLandServer"
 $httpRule = "Pinball Land HTTP"
 $shareRule = "Pinball Land share"
+$plugRule = "Pinball Land plug discovery"
 $httpPort = 3000
 $sharePort = 3443
 
@@ -224,6 +225,20 @@ function Add-KioskFirewallRule {
   Write-Host "Firewall rule '$Name' allows TCP $Port on private networks."
 }
 
+function Add-KioskPlugDiscoveryRule {
+  $node = Resolve-NodeExe
+  & netsh.exe advfirewall firewall delete rule "name=$plugRule" | Out-Null
+  if (-not $node) {
+    Write-Warning "node.exe was not found, so '$plugRule' was not added."
+    return
+  }
+  $added = & netsh.exe advfirewall firewall add rule "name=$plugRule" dir=in action=allow program="$node" protocol=UDP profile=private,public enable=yes | Out-String
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not add firewall rule '$plugRule' for node.exe inbound UDP (netsh exit $LASTEXITCODE). $added"
+  }
+  Write-Host "Firewall rule '$plugRule' allows node.exe inbound UDP on Private and Public networks."
+}
+
 function Set-KioskAutoLogon {
   param([Parameter(Mandatory = $true)][string]$User)
   # Blank-password auto-logon needs the password value to exist (even when empty).
@@ -379,6 +394,9 @@ function Write-KioskVerifySummary {
   $shareOk = Test-KioskFirewallRule -Name $shareRule -Port $sharePort
   Add-Row "Firewall $httpPort" $(if ($httpOk) { "OK" } else { "FAIL" }) $httpRule
   Add-Row "Firewall $sharePort" $(if ($shareOk) { "OK" } else { "FAIL" }) $shareRule
+  $plugOutput = & netsh.exe advfirewall firewall show rule "name=$plugRule" | Out-String
+  $plugOk = $plugOutput -match "Rule Name:\s+Pinball Land plug discovery" -and $plugOutput -match "Protocol:\s+UDP" -and $plugOutput -match "Action:\s+Allow" -and $plugOutput -match "Profiles:\s+.*\bPrivate\b" -and $plugOutput -match "Profiles:\s+.*\bPublic\b" -and $plugOutput -notmatch "Enabled:\s+No"
+  Add-Row "Firewall plug discovery" $(if ($plugOk) { "OK" } else { "FAIL" }) $plugRule
 
   $sleep = Get-AcPowerIndex -Subgroup SUB_SLEEP -Setting STANDBYIDLE
   $monitor = Get-AcPowerIndex -Subgroup SUB_VIDEO -Setting VIDEOIDLE
@@ -531,6 +549,11 @@ foreach ($rule in @(
   } catch {
     Write-Warning "Firewall rule was not added: $($_.Exception.Message)"
   }
+}
+try {
+  Add-KioskPlugDiscoveryRule
+} catch {
+  Write-Warning "Plug discovery firewall rule was not added: $($_.Exception.Message)"
 }
 
 if ($AutoLogonUser -and $DryRun) {

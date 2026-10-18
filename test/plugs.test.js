@@ -1,6 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { PlugService, isOpen, parseClock } = require("../src/plugs");
+const { PlugService, isOpen, parseClock, LOGIN_NOTICE } = require("../src/plugs");
+const { plugAuthError } = require("../src/klap");
 
 function fakeDevice({ host, alias, model, deviceId, on }) {
   return {
@@ -101,4 +102,39 @@ test("schedule turns assigned plugs on at open and off at close", async () => {
   setNow(new Date(2026, 9, 13, 22, 0, 0));
   await service.tick();
   assert.equal(tv.on, false);
+});
+
+test("TP-Link login stays on the server and a KLAP plug can be added by IP", async () => {
+  const { service } = harness([]);
+  service.client.probe = async (host, account) => {
+    if (account.password !== "venue-secret") throw plugAuthError();
+    return {
+      id: "8006-hs103",
+      name: "Adam TV",
+      host,
+      model: "HS103",
+      mac: "ACA7F1D940DC",
+      protocol: "klap",
+      needsLogin: false,
+      on: false,
+    };
+  };
+  const saved = await service.setAccount({ username: "adam@example.com", password: "venue-secret" });
+  assert.equal(saved.account.configured, true);
+  assert.equal(saved.account.username, "a•••@example.com");
+  assert.equal(JSON.stringify(saved).includes("venue-secret"), false);
+  assert.equal(JSON.stringify(service.config()).includes("venue-secret"), true);
+  const added = await service.addHost("192.168.1.159");
+  assert.equal(added.devices[0].name, "Adam TV");
+  assert.equal(added.devices[0].protocol, "klap");
+  assert.equal(added.notice, "");
+  await service.setAccount({ clear: true });
+  service.client.probe = async () => {
+    throw plugAuthError();
+  };
+  const needs = await service.addHost("192.168.1.160");
+  assert.equal(needs.notice, LOGIN_NOTICE);
+  assert.equal(needs.devices.some((device) => device.needsLogin), true);
+  assert.equal(JSON.stringify(needs).includes("stack"), false);
+  await assert.rejects(() => service.addHost("not-an-ip"), /IPv4 address/);
 });

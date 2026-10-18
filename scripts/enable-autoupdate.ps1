@@ -3,7 +3,8 @@
 .SYNOPSIS
   One-shot registration for a Beelink that already has Pinball Land installed.
 .DESCRIPTION
-  Does not reinstall Node, npm packages, firewall rules, or venue data.
+  Does not reinstall Node, npm packages, or venue data.
+  Adds the node.exe inbound UDP firewall rule Kasa plug discovery needs on Private and Public networks.
   Registers the boot and nightly update tasks. Pass -RustDeskPassword (or -RustDesk and
   answer the prompt) to install the latest RustDesk as a Windows service.
   -DryRun registers the tasks and does not download RustDesk or prompt.
@@ -43,6 +44,23 @@ if ($wantRust -and $DryRun) {
     throw "RustDesk needs a permanent password. Pass -RustDeskPassword or set RUSTDESK_PASSWORD for this run."
   }
   & (Join-Path $PSScriptRoot "install-remote-support.ps1") -Tool rustdesk -RustDeskPassword $RustDeskPassword
+}
+
+if (-not $DryRun) {
+  $plugRule = "Pinball Land plug discovery"
+  $nodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
+  $nodeExe = if ($nodeCmd) { $nodeCmd.Source } else { $null }
+  if (-not $nodeExe) {
+    Write-Warning "node.exe was not found, so '$plugRule' was not added."
+  } else {
+    & netsh.exe advfirewall firewall delete rule "name=$plugRule" | Out-Null
+    $added = & netsh.exe advfirewall firewall add rule "name=$plugRule" dir=in action=allow program="$nodeExe" protocol=UDP profile=private,public enable=yes | Out-String
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "Could not add firewall rule '$plugRule' for node.exe inbound UDP. $added"
+    } else {
+      Write-Host "Firewall rule '$plugRule' allows node.exe inbound UDP on Private and Public networks."
+    }
+  }
 }
 
 Write-Host ""

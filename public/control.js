@@ -810,6 +810,8 @@ function renderAirplay() {
 function renderPlugs() {
   const root = document.getElementById("plugs-root");
   if (!root) return;
+  const focused = document.activeElement;
+  if (focused && root.contains(focused) && ["plug-email", "plug-password", "plug-ip"].includes(focused.id)) return;
   root.replaceChildren();
   const plugs = current.plugs || { assignments: {}, devices: [], schedule: {} };
   const tools = document.createElement("div");
@@ -819,8 +821,13 @@ function renderPlugs() {
   discover.className = "btn";
   discover.textContent = "Find plugs";
   discover.addEventListener("click", async () => {
-    applyPayload(await api("/api/plugs/discover", { method: "POST" }));
-    toast(current.plugs.devices.length ? `Found ${current.plugs.devices.length}` : "No plugs answered");
+    try {
+      applyPayload(await api("/api/plugs/discover", { method: "POST" }));
+      const count = current.plugs?.devices?.length || 0;
+      toast(count ? `Found ${count}` : "No plugs answered. Add the plug by its IP address if it is on this network.");
+    } catch (err) {
+      toast(err.message || "The plug did not answer.");
+    }
   });
   const allOn = document.createElement("button");
   allOn.type = "button";
@@ -840,6 +847,79 @@ function renderPlugs() {
   });
   tools.append(discover, allOn, allOff);
   root.append(tools);
+  if (plugs.notice) {
+    const notice = document.createElement("p");
+    notice.className = "muted";
+    notice.id = "plug-notice";
+    notice.textContent = plugs.notice;
+    root.append(notice);
+  }
+  const account = plugs.account || {};
+  const login = document.createElement("form");
+  login.className = "stack";
+  login.id = "plug-account-form";
+  const email = document.createElement("input");
+  email.id = "plug-email";
+  email.type = "email";
+  email.autocomplete = "username";
+  email.placeholder = account.configured ? `Saved (${account.username || "TP-Link email"})` : "Kasa app email";
+  email.ariaLabel = "TP-Link email";
+  const password = document.createElement("input");
+  password.id = "plug-password";
+  password.type = "password";
+  password.autocomplete = "current-password";
+  password.placeholder = account.configured ? "Password saved" : "Kasa app password";
+  password.ariaLabel = "TP-Link password";
+  const saveLogin = document.createElement("button");
+  saveLogin.className = "btn";
+  saveLogin.type = "submit";
+  saveLogin.textContent = "Save TP-Link login";
+  const clearLogin = document.createElement("button");
+  clearLogin.className = "btn";
+  clearLogin.type = "button";
+  clearLogin.textContent = "Clear TP-Link login";
+  clearLogin.addEventListener("click", async () => {
+    applyPayload(await api("/api/plugs/account", { method: "PUT", body: { clear: true } }));
+    toast("TP-Link login cleared");
+  });
+  login.append(email, password, saveLogin, clearLogin);
+  login.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      applyPayload(await api("/api/plugs/account", {
+        method: "PUT",
+        body: { username: email.value.trim(), password: password.value },
+      }));
+      password.value = "";
+      toast("TP-Link login saved");
+    } catch (err) {
+      toast(err.message || "Could not save the TP-Link login");
+    }
+  });
+  root.append(login);
+  const addForm = document.createElement("form");
+  addForm.className = "add-row";
+  addForm.id = "plug-add-form";
+  const ip = document.createElement("input");
+  ip.id = "plug-ip";
+  ip.placeholder = "Add plug by IP, for example 192.168.1.159";
+  ip.ariaLabel = "Plug IP address";
+  const add = document.createElement("button");
+  add.className = "btn";
+  add.type = "submit";
+  add.textContent = "Add plug";
+  addForm.append(ip, add);
+  addForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      applyPayload(await api("/api/plugs/add", { method: "POST", body: { host: ip.value.trim() } }));
+      ip.value = "";
+      toast(current.plugs?.notice || "Plug added");
+    } catch (err) {
+      toast(err.message || "The plug did not answer.");
+    }
+  });
+  root.append(addForm);
 
   for (const slot of ["1", "2", "3"]) {
     const card = document.createElement("div");
@@ -858,7 +938,8 @@ function renderPlugs() {
     for (const item of plugs.devices || []) {
       const option = document.createElement("option");
       option.value = item.id;
-      option.textContent = item.model ? `${item.name} (${item.model})` : item.name;
+      const loginNote = item.needsLogin ? ", needs TP-Link login" : "";
+      option.textContent = item.model ? `${item.name} (${item.model}${loginNote})` : `${item.name}${loginNote}`;
       if (item.id === assigned) option.selected = true;
       select.append(option);
     }

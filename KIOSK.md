@@ -146,13 +146,21 @@ Saved in `config.json` under `displays` (and `presentation.idleMinutes`). If Win
 
 ## 6. TV power (Kasa plugs)
 
-The control page **Smart plugs** section uses `tplink-smarthome-api` on the local network. It does not use a TP-Link cloud account.
+The control page **Smart plugs** section talks to Kasa outlets on the local network. Older plugs use the legacy protocol on UDP/TCP port 9999. Newer firmware (HS103 hardware 5.0, software 1.1.x, and similar) closes port 9999 and speaks TP-Link KLAP over `http://<plug>/app` on port 80. The server tries KLAP first for a new plug, then the legacy port.
 
 1. Plug each **TV** into its own Kasa plug. **Never put the wall PC on a smart plug.** If that plug turns off, the kiosk dies and nothing can turn it back on from the iPad.
 2. On each BenQ, OSD → **System** (or **Setup**) → **Switch on state** = **On**. The panel then powers on when the plug restores AC. Without that, the plug can be “on” while the TV stays in standby.
-3. On the iPad, tap **Find plugs**, then assign one plug to display 1, 2, and 3. Each plug can only belong to one screen.
-4. **On** / **Off** under a screen switches that plug and shows On, Off, or — if the plug has not answered yet. **All on** / **All off** hit every assigned plug.
-5. Optional schedule, for example on at `10:00` and off at `22:00`. The PC clock is the clock that matters. An overnight window (on `22:00`, off `02:00`) is allowed. The schedule applies the current open/closed state, then again when the window changes.
+3. On the iPad, tap **Find plugs**, then assign one plug to display 1, 2, and 3. Each plug can only belong to one screen. Discovery broadcasts on every real IPv4 subnet (for example `192.168.1.255`) and on `255.255.255.255`. It skips `169.254.*` adapters such as an extra Wi-Fi or Bluetooth interface.
+4. If Find plugs lists nothing, use **Add plug** with the plug’s IP address (for example `192.168.1.159`).
+5. A plug that was set up in the Kasa app needs that same TP-Link email and password. Enter them under **Save TP-Link login**. The password stays on the PC. The browser only sees a masked email and whether a password is saved. A plug that was never added to a TP-Link account can answer with the factory blank login, and the default `kasa@tp-link.net` / `kasaSetup` pair is tried as well. If the plug still needs the account, Settings says so in plain language. The wall does not show the error.
+6. **On** / **Off** under a screen switches that plug and shows On, Off, or — if the plug has not answered yet. **TVs On** / **TVs Off** hit every assigned plug.
+7. Optional schedule, for example on at `10:00` and off at `22:00`. The PC clock is the clock that matters. An overnight window (on `22:00`, off `02:00`) is allowed. The schedule applies the current open/closed state, then again when the window changes.
+
+Windows Firewall on a **Public** network (the usual home classification) drops the UDP replies unless node.exe is allowed inbound. The installer and `scripts\enable-autoupdate.ps1` add a rule named **Pinball Land plug discovery** for inbound UDP on Private and Public profiles. Re-run either script on a PC that was installed before this rule existed:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1
+```
 
 Home testing has no plugs. The buttons talk to whatever is on the LAN; the automated tests use a fake client and do not scan the network.
 
