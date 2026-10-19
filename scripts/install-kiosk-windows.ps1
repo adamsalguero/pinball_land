@@ -314,6 +314,43 @@ function Test-TaskWaitsForUpdate {
   return $true
 }
 
+function Get-PrimaryScalePercent {
+  $dpi = $null
+  try {
+    $applied = Get-ItemProperty -Path "HKCU:\Control Panel\Desktop\WindowMetrics" -Name AppliedDPI -ErrorAction SilentlyContinue
+    if ($applied.AppliedDPI) { $dpi = [int]$applied.AppliedDPI }
+  } catch {
+    $dpi = $null
+  }
+  if (-not $dpi -or $dpi -le 0) {
+    try {
+      if (-not ("PinballPrimaryDpi" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PinballPrimaryDpi {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hwnd);
+  [DllImport("gdi32.dll")] public static extern int GetDeviceCaps(IntPtr hdc, int index);
+  [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+}
+'@
+      }
+      [PinballPrimaryDpi]::SetProcessDPIAware() | Out-Null
+      $dc = [PinballPrimaryDpi]::GetDC([IntPtr]::Zero)
+      if ($dc -ne [IntPtr]::Zero) {
+        $read = [PinballPrimaryDpi]::GetDeviceCaps($dc, 88)
+        [void][PinballPrimaryDpi]::ReleaseDC([IntPtr]::Zero, $dc)
+        if ($read -gt 0) { $dpi = [int]$read }
+      }
+    } catch {
+      $dpi = $null
+    }
+  }
+  if (-not $dpi -or $dpi -le 0) { return $null }
+  return [int][Math]::Round(($dpi / 96.0) * 100)
+}
+
 function Write-KioskVerifySummary {
   param(
     [string]$AutoLogonUser,
@@ -435,6 +472,15 @@ function Write-KioskVerifySummary {
   $saver = Read-KioskRegValue -Path "HKCU:\Control Panel\Desktop" -Name "ScreenSaveActive"
   $hoursStart = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursStart"
   $hoursEnd = Read-KioskRegValue -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" -Name "ActiveHoursEnd"
+  $scale = Get-PrimaryScalePercent
+  if ($null -eq $scale) {
+    Add-Row "Display scaling" "WARN" "unreadable"
+  } elseif ($scale -eq 100) {
+    Add-Row "Display scaling" "OK" "100%"
+  } else {
+    Add-Row "Display scaling" "WARN" "$scale% on the primary monitor. Wall windows still cover the TV. 100% matches the layout."
+  }
+
   Add-Row "Toast notifications" $(if ($toast -eq 0) { "OK" } else { "WARN" }) $(if ($null -eq $toast) { "not set" } else { "ToastEnabled=$toast" })
   Add-Row "Screensaver" $(if ("$saver" -eq "0") { "OK" } else { "WARN" }) $(if ($null -eq $saver) { "not set" } else { "ScreenSaveActive=$saver" })
   $hoursOk = ($hoursStart -eq 9 -and $hoursEnd -eq 23)

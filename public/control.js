@@ -583,7 +583,14 @@ function renderMonitorOrder(monitorWrap) {
     const label = document.createElement("p");
     label.className = "muted";
     const bounds = monitor.bounds || {};
-    label.textContent = `Monitor ${index + 1}: ${bounds.width || "?"}×${bounds.height || "?"} at (${bounds.x || 0}, ${bounds.y || 0})`;
+    const scale = Number(monitor.scaleFactor) > 0 ? Number(monitor.scaleFactor) : 1;
+    const width = Math.round((Number(bounds.width) || 0) * scale);
+    const height = Math.round((Number(bounds.height) || 0) * scale);
+    const x = Math.round((Number(bounds.x) || 0) * scale);
+    const y = Math.round((Number(bounds.y) || 0) * scale);
+    const percent = Math.round(scale * 100);
+    const size = width && height ? `${width}×${height}` : "?×?";
+    label.textContent = `Monitor ${index + 1}: ${size} (${percent}%) at (${x}, ${y})`;
     const buttons = document.createElement("div");
     buttons.className = "icon-row";
     const up = document.createElement("button");

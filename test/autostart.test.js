@@ -23,6 +23,9 @@ test("installers register boot tasks only when kiosk autostart is requested", ()
   assert.match(installer, /Confirm-KioskAutostart -Kiosk:\$Kiosk -DryRun:\$DryRun/);
   assert.match(installer, /if \(\$registerAutostart\) \{[\s\S]*register-update-tasks\.ps1/);
   assert.match(installer, /\[switch\]\$RequireTasks/);
+  assert.match(installer, /Display scaling/);
+  assert.match(installer, /GetDeviceCaps\(\$dc, 88\)/);
+  assert.match(installer, /100% matches the layout/);
   assert.match(installer, /\$kiosk = Get-ScheduledTask/);
   assert.match(beelink, /\[switch\]\$Kiosk/);
   assert.match(beelink, /\$configure\.Kiosk = \$true/);

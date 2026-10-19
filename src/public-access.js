@@ -31,6 +31,14 @@ function parseCloudflareLine(line) {
   return match ? match[0] : "";
 }
 
+function parseFunnelApprovalUrl(text) {
+  const matches = String(text || "").match(/https:\/\/[^\s]+/g) || [];
+  const cleaned = matches.map((url) => url.replace(/[),.;]+$/, ""));
+  const approval = cleaned.find((url) => /login\.tailscale\.com/i.test(url));
+  if (approval) return approval;
+  return cleaned.find((url) => !/\.ts\.net/i.test(url)) || "";
+}
+
 function runCommand(command, args, timeoutMs = 4000) {
   return new Promise((resolve) => {
     let out = "";
@@ -64,10 +72,14 @@ async function detectTailscale(runner = runCommand) {
   const funnel = await runner("tailscale", ["funnel", "status", "--json"]);
   let dns = "";
   let on = false;
+  let installed = false;
   try {
+    const data = JSON.parse(String(status || ""));
+    installed = Boolean(data && typeof data === "object" && (data.BackendState || data.Self || data.Version));
     dns = parseTailscaleStatus(status);
   } catch {
     dns = "";
+    installed = false;
   }
   try {
     on = parseFunnelStatus(funnel);
@@ -75,7 +87,19 @@ async function detectTailscale(runner = runCommand) {
     on = false;
   }
   const url = publicUrlFrom(dns, on);
-  return { url, source: url ? "tailscale" : "" };
+  let approvalUrl = "";
+  if (installed && dns && !url) {
+    const text = await runner("tailscale", ["funnel", "status"]);
+    approvalUrl = parseFunnelApprovalUrl(text);
+  }
+  return {
+    url,
+    source: url ? "tailscale" : "",
+    installed,
+    loggedIn: Boolean(dns),
+    funnel: Boolean(url),
+    approvalUrl,
+  };
 }
 
 function startQuickTunnel({ bin, port, onUrl, onError, spawnImpl = spawn } = {}) {
@@ -120,6 +144,7 @@ module.exports = {
   parseFunnelStatus,
   publicUrlFrom,
   parseCloudflareLine,
+  parseFunnelApprovalUrl,
   detectTailscale,
   startQuickTunnel,
   runCommand,
