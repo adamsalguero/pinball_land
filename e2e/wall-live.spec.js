@@ -92,7 +92,7 @@ test("sprite sheet draws a spider and a bat", async ({ page }) => {
 test("leaderboard podium fits full names at 1080p", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/display/1?preview=board&fixture=long&art=1&theme=halloween&shot=1");
-  await expect(page.getByText("First")).toBeVisible();
+  await expect(page.getByText("First", { exact: true })).toBeVisible();
   await page.evaluate(async () => {
     if (document.fonts?.ready) await document.fonts.ready;
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -317,6 +317,11 @@ test("camera hides the raw file inputs and opens a photo lightbox", async ({ pag
 });
 
 test("pinnacle has no cartoon button, and an empty board can be pinned", async ({ page, request }) => {
+  const theme = await request.put("/api/theme", {
+    headers: { "x-pin": "2224" },
+    data: { theme: "pinnacle" },
+  });
+  expect(theme.ok()).toBeTruthy();
   await page.goto("/admin");
   await page.locator("#pin-input").fill("2224");
   await page.getByRole("button", { name: "Unlock" }).click();
