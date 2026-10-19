@@ -79,7 +79,7 @@ async function runPoolSoak() {
   const swapMs = Number(process.env.PINBALL_POOL_SWAP_MS || 45000);
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pinball-pool-"));
   const media = path.join(dir, "media");
-  const library = path.join(media, "library");
+  const library = path.join(media, "halloween");
   await fsp.mkdir(library, { recursive: true });
   const items = [];
   for (let i = 0; i < 5; i += 1) {
@@ -91,7 +91,8 @@ async function runPoolSoak() {
       id,
       title: `Clip ${i + 1}`,
       file: `${id}.mp4`,
-      folder: "library",
+      folder: "halloween",
+      tags: ["halloween"],
       tags: [],
       allAges: true,
       inRotation: true,
@@ -126,6 +127,12 @@ async function runPoolSoak() {
   let browser = null;
   try {
     const pin = { "x-pin": "2224", "content-type": "application/json" };
+    const themed = await fetch(`${healthOrigin}/api/theme`, {
+      method: "PUT",
+      headers: pin,
+      body: JSON.stringify({ theme: "halloween" }),
+    });
+    if (!themed.ok) throw new Error(`theme ${themed.status}`);
     const pinned = await fetch(`${healthOrigin}/api/displays`, {
       method: "PUT",
       headers: pin,
@@ -212,6 +219,11 @@ async function runPoolSoak() {
         });
         const track = tracks[slot];
         const grace = Date.now() - started < 30000 || Date.now() < track.graceUntil;
+        if (sample.mode !== "video") {
+          track.moved = Date.now();
+          track.last = 0;
+          continue;
+        }
         if (sample.mode === "video" && sample.src && sample.time > (track.last || 0) + 0.3) {
           track.moved = Date.now();
         }

@@ -116,7 +116,7 @@ async function runBlobSoak() {
   const profile = path.join(dir, "chrome-profile");
   const debugPort = 9342;
   const children = [];
-  let browser = null;
+  const browsers = [];
   try {
     const pin = { "x-pin": "2224", "content-type": "application/json" };
     const rotated = await fetch(`${healthOrigin}/api/rotation`, {
@@ -138,33 +138,26 @@ async function runBlobSoak() {
     const positions = [[0, 0], [80, 60], [160, 120]];
     const slots = [1, 2, 3];
     note(`chrome ${browserPath}`);
-    const first = spawn(browserPath, [
-      `--user-data-dir=${profile}`,
-      `--remote-debugging-port=${debugPort}`,
-      `--app=${origins[1]}/display/1`,
-      `--window-position=${positions[0][0]},${positions[0][1]}`,
-      "--window-size=1100,700",
-      ...FLAGS,
-    ], { stdio: "ignore" });
-    children.push(first);
-    await waitFor(`http://127.0.0.1:${debugPort}/json/version`);
-    for (const slot of [2, 3]) {
+    const ports = { 1: debugPort, 2: debugPort + 1, 3: debugPort + 2 };
+    for (const slot of slots) {
       const [x, y] = positions[slot - 1];
       children.push(spawn(browserPath, [
-        `--user-data-dir=${profile}`,
+        `--user-data-dir=${path.join(dir, "chrome", `display${slot}`)}`,
+        `--remote-debugging-port=${ports[slot]}`,
         `--app=${origins[slot]}/display/${slot}`,
         `--window-position=${x},${y}`,
         "--window-size=1100,700",
         ...FLAGS,
-      ], { stdio: "ignore" }));
+      ], { stdio: "ignore", detached: true }));
     }
-    await sleep(1500);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);
     const bySlot = {};
     for (const slot of slots) {
+      await waitFor(`http://127.0.0.1:${ports[slot]}/json/version`);
+      const connected = await chromium.connectOverCDP(`http://127.0.0.1:${ports[slot]}`);
+      browsers.push(connected);
       let page = null;
       for (let attempt = 0; attempt < 20 && !page; attempt += 1) {
-        page = browser.contexts().flatMap((context) => context.pages()).find((item) => item.url().includes(`/display/${slot}`));
+        page = connected.contexts().flatMap((context) => context.pages()).find((item) => item.url().includes(`/display/${slot}`));
         if (!page) await sleep(250);
       }
       if (!page) {
@@ -277,7 +270,7 @@ async function runBlobSoak() {
     note(`done ms=${durationMs} lines=${wanted.length} clips=${[...seen].join(" ")}`);
     return { ms: durationMs, lines: wanted.length, clips: [...seen] };
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    for (const connected of browsers) await connected.close().catch(() => {});
     for (const child of children) killChild(child);
     await Promise.all(bound.servers.map((server) => new Promise((resolve) => server.close(resolve))));
   }

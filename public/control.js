@@ -27,7 +27,6 @@ const CONTENT_GROUPS = [
       { id: "amenities", label: "Amenities" },
       { id: "leaderboard", label: "Leaderboards" },
       { id: "pinboard", label: "Live Pinboard/Photos" },
-      { id: "video", label: "Video" },
       { id: "clock", label: "Clock" },
     ],
   },
@@ -429,7 +428,6 @@ const DISPLAY_CONTENT = [
   { id: "amenities", label: "Amenities" },
   { id: "leaderboard", label: "Leaderboard" },
   { id: "pinboard", label: "Pinboard" },
-  { id: "video", label: "Video" },
   { id: "clock", label: "Clock" },
 ];
 
@@ -1241,6 +1239,16 @@ function render() {
   renderAccess();
   renderTvs();
   fillSlogans();
+  renderDecor();
+}
+
+function renderDecor() {
+  const button = document.getElementById("decor-toggle");
+  if (!button) return;
+  const reduced = current.motion === "reduced";
+  button.textContent = reduced ? "Decorations reduced" : "Reduce decorations";
+  button.classList.toggle("active", reduced);
+  button.setAttribute("aria-pressed", reduced ? "true" : "false");
 }
 
 function fillSlogans() {
@@ -1725,6 +1733,11 @@ document.getElementById("pin-form").addEventListener("submit", async (event) => 
 document.getElementById("reset-pin").addEventListener("click", async () => {
   await api("/api/pin/reset", { method: "POST" });
   toast("PIN reset to the default");
+});
+document.getElementById("decor-toggle")?.addEventListener("click", async () => {
+  const next = current.motion === "reduced" ? "subtle" : "reduced";
+  applyPayload(await api("/api/motion", { method: "PUT", body: { motion: next } }));
+  toast(next === "reduced" ? "Decorations reduced" : "Decorations on");
 });
 document.getElementById("slogan-form").addEventListener("submit", async (event) => {
   event.preventDefault();

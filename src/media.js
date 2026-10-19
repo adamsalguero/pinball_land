@@ -66,10 +66,10 @@ function normalizeItem(raw) {
 function includeInRotation(video, { theme, allAges = true } = {}) {
   if (!video) return false;
   if (allAges && video.allAges === false) return false;
+  if (theme !== "halloween" && theme !== "christmas") return false;
   const tags = video.tags || [];
-  if (theme === "halloween" && (video.folder === "halloween" || tags.includes("halloween"))) return true;
-  if (theme === "christmas" && (video.folder === "christmas" || tags.includes("christmas"))) return true;
-  return Boolean(video.inRotation);
+  if (theme === "halloween") return video.folder === "halloween" || tags.includes("halloween");
+  return video.folder === "christmas" || tags.includes("christmas");
 }
 
 class MediaLibrary {

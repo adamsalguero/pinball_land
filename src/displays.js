@@ -1,5 +1,5 @@
 const SLOT_IDS = ["1", "2", "3"];
-const DISPLAY_CONTENTS = ["rotation", "logos", "amenities", "leaderboard", "pinboard", "video", "clock"];
+const DISPLAY_CONTENTS = ["rotation", "logos", "amenities", "leaderboard", "pinboard", "clock"];
 const BLACK_DISPLAY = new Set(["off", "black", "dark"]);
 const LEGACY_DISPLAY = {
   pinnacle: "logos",
@@ -13,7 +13,7 @@ const LEGACY_DISPLAY = {
 
 function canonicalDisplayContent(content) {
   const value = String(content || "");
-  if (BLACK_DISPLAY.has(value)) return "rotation";
+  if (BLACK_DISPLAY.has(value) || value === "video") return "rotation";
   const mapped = LEGACY_DISPLAY[value] || value;
   return DISPLAY_CONTENTS.includes(mapped) ? mapped : null;
 }

@@ -22,6 +22,7 @@ const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
 const { starterThemes } = require("./season");
 const { noteStall } = require("./playback-flags");
+const { relaunchWallChrome } = require("./wall-chrome");
 const { bundledFile } = require("./bundled");
 const { createClipCache } = require("./clip-cache");
 const { prepareLogoSvg } = require("./logo-color");
@@ -441,7 +442,7 @@ function createApp({
         })),
       },
       playback: publicPlayback(),
-      motion: "subtle",
+      motion: config.motion === "reduced" ? "reduced" : "subtle",
       slogans: config.slogans,
       motionSync,
       rotationTiming: timing,
@@ -1075,9 +1076,18 @@ function createApp({
     }
   });
 
+  function forgetVideoPins() {
+    for (const slot of ["1", "2", "3"]) {
+      videoMemory[slot] = { gen: (videoMemory[slot]?.gen || 0) + 1, id: "" };
+    }
+    for (const key of Object.keys(slotFallback)) delete slotFallback[key];
+  }
+
   app.put("/api/theme", requirePin, async (req, res, next) => {
     try {
       await store.setTheme(req.body?.theme);
+      forgetVideoPins();
+      broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
       next(err);
@@ -1557,6 +1567,20 @@ function createApp({
     if (decodePersist) return;
     decodePersist = localStore.update({ media: { softwareDecode: true } }).then(() => {
       appendVideoLog(`${new Date(clockNow()).toISOString()} event=software-decode reason=repeated-stalls`);
+      restartToken += 1;
+      broadcast();
+      if (process.env.NODE_TEST_CONTEXT || process.env.PINBALL_KIOSK === "1") return null;
+      const root = dataDir || defaultDataDir();
+      return relaunchWallChrome({
+        dataDir: root,
+        softwareDecode: true,
+        port: currentConfig().port,
+      }).then((result) => {
+        if (result?.relaunched) {
+          appendVideoLog(`${new Date(clockNow()).toISOString()} event=wall-relaunch reason=software-decode windows=${result.relaunched}`);
+        }
+        return result;
+      });
     }).catch((err) => {
       decodePersist = null;
       console.error(err);
@@ -1580,13 +1604,18 @@ function createApp({
     const gpu = String(body?.gpu || "").replace(/[\r\n"]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
     const dropped = Number.isFinite(Number(body?.dropped)) ? String(Math.round(Number(body.dropped))) : "";
     const total = Number.isFinite(Number(body?.total)) ? String(Math.round(Number(body.total))) : "";
+    const videos = Number.isFinite(Number(body?.videos)) ? String(Math.round(Number(body.videos))) : "";
+    const fps = Number.isFinite(Number(body?.fps)) ? String(Math.round(Number(body.fps))) : "";
+    const longCount = Number.isFinite(Number(body?.longTasks)) ? String(Math.round(Number(body.longTasks))) : "";
+    const longMs = Number.isFinite(Number(body?.longMs)) ? String(Math.round(Number(body.longMs))) : "";
+    const card = String(body?.card || "").replace(/[^\w-]/g, "").slice(0, 24);
     const nowMs = clockNow();
     const noisy = event === "waiting" || event === "suspend" || event === "stalled" || event === "abort" || event === "emptied";
     const dedupeKey = `${slot}:${id}:${event}`;
     if (!noisy || !seenVideoLog.has(dedupeKey)) {
       if (noisy) seenVideoLog.add(dedupeKey);
       appendVideoLog(
-        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src} bytes=${bytes} ms=${ms} offset=${offset} screen=${screen} gpu="${gpu}" dropped=${dropped} total=${total}`,
+        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src} bytes=${bytes} ms=${ms} offset=${offset} screen=${screen} gpu="${gpu}" dropped=${dropped} total=${total} videos=${videos} fps=${fps} long=${longCount} longMs=${longMs} card=${card}`,
       );
     }
     rememberStall(event);

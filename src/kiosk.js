@@ -10,7 +10,7 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.commandLine.appendSwitch("disable-background-media-suspend");
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo");
 const fs = require("fs");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 const path = require("path");
 const { loadConfig, writeDefaultPin } = require("./config");
 const { DEFAULT_PIN } = require("./devices");
@@ -18,6 +18,7 @@ const { startServer } = require("./server");
 const { mapDisplaysToSlots, windowLayoutKey } = require("./displays");
 const { placementDecision, expectedMonitorCount, monitorSignature } = require("./watchdog");
 const { defaultDataDir, dataLayout } = require("./paths");
+const { launchDisplays } = require("./wall-chrome");
 const { buildPlacementScript } = require("./airplay");
 
 try {
@@ -106,6 +107,31 @@ function displayUrl(slot) {
   return `http://127.0.0.1:${port}/display/${slot}`;
 }
 
+function chromeFacade(row) {
+  let visible = true;
+  let destroyed = false;
+  return {
+    isDestroyed: () => destroyed,
+    isVisible: () => visible && !destroyed,
+    hide() { visible = false; },
+    show() { visible = true; },
+    setFullScreen() {},
+    close() {
+      destroyed = true;
+      if (!row.pid) return;
+      try {
+        if (process.platform === "win32") {
+          execFileSync("taskkill", ["/F", "/T", "/PID", String(row.pid)], { stdio: "ignore", windowsHide: true });
+        } else {
+          process.kill(-row.pid, "SIGKILL");
+        }
+      } catch {
+        try { process.kill(row.pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+    },
+  };
+}
+
 function openDisplayWindows() {
   closeWindows();
   const mapped = mapDisplaysToSlots(screen.getAllDisplays(), displaysConfig || {});
@@ -119,6 +145,30 @@ function openDisplayWindows() {
     return;
   }
   console.log(`Opening kiosk window(s) for display ${mapped.windows.map((item) => item.slot).join(", ")}.`);
+  let softwareDecode = false;
+  try {
+    softwareDecode = loadConfig(dataLayout(defaultDataDir()).config).media?.softwareDecode === true;
+  } catch {
+    softwareDecode = false;
+  }
+  try {
+    const launched = launchDisplays({
+      dataDir: defaultDataDir(),
+      softwareDecode,
+      kiosk: true,
+      displays: mapped.windows.map((item) => ({
+        slot: item.slot,
+        url: displayUrl(item.slot),
+        bounds: item.bounds,
+      })),
+    });
+    if (launched.length) {
+      for (const row of launched) windows.set(row.slot, chromeFacade(row));
+      return;
+    }
+  } catch (err) {
+    console.error(`Chrome per display failed (${err.message}). Falling back to Electron windows.`);
+  }
   for (const item of mapped.windows) {
     const { x, y, width, height } = item.bounds;
     const win = new BrowserWindow({

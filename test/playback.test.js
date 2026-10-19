@@ -73,7 +73,10 @@ test("the wall player uses one blob per screen and does not nudge a waiting elem
   assert.match(display, /function serverTick/);
   assert.match(display, /stageWallVideo/);
   assert.match(display, /holdFrame/);
-  assert.match(html, /preload="none"/);
+  assert.doesNotMatch(html, /<video/i);
+  assert.match(display, /themeAllowsVideo/);
+  assert.match(display, /src = ""/);
+  assert.match(display, /querySelectorAll\("video"\)/);
   assert.match(html, /id="video-hold"/);
   assert.match(css, /is-staging/);
   assert.match(css, /is-fading-out/);
@@ -111,6 +114,10 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
   assert.match(doc, /disable-gpu-video-decode/);
   assert.match(doc, /disable-accelerated-video-decode/);
   const control = fs.readFileSync(path.join(__dirname, "..", "public", "control.js"), "utf8");
+  assert.match(control, /decor-toggle/);
+  assert.match(fs.readFileSync(path.join(__dirname, "..", "public", "control.html"), "utf8"), /id="decor-toggle"/);
+  assert.doesNotMatch(control, /label: "Video"/);
+  assert.match(control, /label: "Auto"/);
   assert.match(control, /Show photo on wall/);
   assert.match(control, /Remove photo/);
   assert.match(control, /Approve, keep photo private \(verification only\)/);

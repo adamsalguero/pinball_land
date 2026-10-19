@@ -47,7 +47,10 @@ test("holiday clips join rotation only for that theme, and all-ages can hide one
   assert.equal(includeInRotation(library.get(snow.id), { theme: "pinnacle", allAges: true }), false);
 
   await library.update(snow.id, { inRotation: true, tags: "snow, family" });
-  assert.equal(includeInRotation(library.get(snow.id), { theme: "pinnacle", allAges: true }), true);
+  assert.equal(includeInRotation(library.get(snow.id), { theme: "pinnacle", allAges: true }), false);
+  assert.equal(includeInRotation(library.get(snow.id), { theme: "christmas", allAges: true }), true);
+  const regular = buildPlaylist({ theme: "pinnacle", rotation: { items: {} }, leaderboards: [] }, { videos, allAges: true });
+  assert.equal(regular.some((card) => card.type === "video"), false);
   await assert.rejects(() => library.add({ filename: "notes.txt", mime: "text/plain", folder: "library" }), /mp4/);
 });
 

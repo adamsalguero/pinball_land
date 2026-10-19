@@ -9,8 +9,12 @@ $flags = @(
   "--disable-renderer-backgrounding",
   "--disable-background-timer-throttling",
   "--disable-background-media-suspend",
-  "--disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo"
+  "--disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo",
+  "--kiosk",
+  "--no-first-run",
+  "--no-default-browser-check"
 )
+$softwareDecode = $false
 try {
   $healthUrl = "http://127.0.0.1:$Port/api/health"
   $raw = $null
@@ -24,6 +28,7 @@ try {
   }
   $health = $raw | ConvertFrom-Json
   if ($health.softwareVideoDecode -eq $true) {
+    $softwareDecode = $true
     $flags += "--disable-gpu-video-decode"
     $flags += "--disable-accelerated-video-decode"
   }
@@ -51,8 +56,8 @@ function Test-Health([string]$Url) {
   }
 }
 
-# One Chrome profile shares a 6-connection HTTP/1.1 pool per host. Each display
-# gets its own host so the pools cannot starve each other.
+# Each display is its own Chrome process and profile, so one window's compositor
+# cannot stall the others. Origins stay split so the HTTP/1.1 pools stay separate.
 $third = "http://[::1]:$Port"
 if (-not (Test-Health "$third/api/health")) {
   $alt = "http://127.0.0.1:$($Port + 1)"
@@ -64,18 +69,69 @@ $bases = @(
   $third
 )
 
-$positions = @(
-  @(0, 0),
-  @(80, 60),
-  @(160, 120)
-)
+$dataRoot = $env:PINBALL_DATA_DIR
+if (-not $dataRoot) { $dataRoot = Join-Path $env:ProgramData "PinballLand" }
+$chromeRoot = Join-Path $dataRoot "chrome"
+New-Item -ItemType Directory -Force -Path $chromeRoot | Out-Null
+$pidFile = Join-Path $chromeRoot "pids.json"
+
+function Stop-OwnedChrome {
+  if (-not (Test-Path $pidFile)) { return }
+  try { $saved = Get-Content $pidFile -Raw | ConvertFrom-Json } catch { return }
+  foreach ($row in @($saved.slots)) {
+    if (-not $row.pid) { continue }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($row.pid)" -ErrorAction SilentlyContinue
+    if (-not $proc) { continue }
+    $line = [string]$proc.CommandLine
+    if ($line -notmatch "chrome\\display[123]") { continue }
+    & taskkill.exe /F /T /PID $row.pid | Out-Null
+  }
+}
+
+Stop-OwnedChrome
+
+$positions = @()
+try {
+  Add-Type -AssemblyName System.Windows.Forms
+  $screens = @([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X }, { $_.Bounds.Y })
+  foreach ($screen in $screens) {
+    $positions += ,@($screen.Bounds.X, $screen.Bounds.Y, $screen.Bounds.Width, $screen.Bounds.Height)
+  }
+} catch {
+  $positions = @()
+}
+while ($positions.Count -lt 3) {
+  $index = $positions.Count
+  $positions += ,@((80 * $index), (60 * $index), 1280, 720)
+}
+
+$savedSlots = @()
 foreach ($slot in 1, 2, 3) {
   $pos = $positions[$slot - 1]
   $base = $bases[$slot - 1]
+  $profile = Join-Path $chromeRoot "display$slot"
+  New-Item -ItemType Directory -Force -Path $profile | Out-Null
   $args = @(
+    "--user-data-dir=$profile",
     "--app=$base/display/$slot",
     "--window-position=$($pos[0]),$($pos[1])",
-    "--window-size=1280,720"
+    "--window-size=$($pos[2]),$($pos[3])"
   ) + $flags
-  Start-Process -FilePath $chrome -ArgumentList $args
+  $proc = Start-Process -FilePath $chrome -ArgumentList $args -PassThru
+  $savedSlots += [ordered]@{
+    slot = $slot
+    pid = $proc.Id
+    url = "$base/display/$slot"
+    x = $pos[0]
+    y = $pos[1]
+    width = $pos[2]
+    height = $pos[3]
+  }
 }
+
+$record = [ordered]@{
+  root = $chromeRoot
+  softwareDecode = $softwareDecode
+  slots = $savedSlots
+}
+$record | ConvertTo-Json -Depth 4 | Set-Content -Path $pidFile -Encoding utf8
