@@ -16,7 +16,7 @@ const { loadConfig, writeDefaultPin } = require("./config");
 const { DEFAULT_PIN } = require("./devices");
 const { startServer } = require("./server");
 const { mapDisplaysToSlots, windowLayoutKey } = require("./displays");
-const { placementDecision, expectedMonitorCount, monitorSignature } = require("./watchdog");
+const { placementDecision, expectedMonitorCount, monitorSignature, MONITOR_WAIT_MS } = require("./watchdog");
 const { defaultDataDir, dataLayout } = require("./paths");
 const { launchDisplays } = require("./wall-chrome");
 const { buildPlacementScript } = require("./airplay");
@@ -45,6 +45,11 @@ let slotOrigins = null;
 let layoutKey = "";
 let lastMonitors = "";
 let displaysConfig = null;
+let monitorWaitStarted = 0;
+let monitorsSettled = false;
+let announcedWait = false;
+let forceReopen = false;
+let openedOnce = false;
 let serverReady = false;
 let waiting = false;
 let waitingSignature = "";
@@ -132,19 +137,47 @@ function chromeFacade(row) {
   };
 }
 
-function openDisplayWindows() {
-  closeWindows();
+function openSlotsNow() {
+  const slots = [];
+  for (const [slot, win] of windows) {
+    if (String(slot).startsWith("wait-")) continue;
+    if (win && !win.isDestroyed()) slots.push(slot);
+  }
+  return slots;
+}
+
+function closeUnmapped(mapped) {
+  const live = new Set((mapped?.windows || []).map((item) => String(item.slot)));
+  for (const [slot, win] of [...windows.entries()]) {
+    if (String(slot).startsWith("wait-")) continue;
+    if (live.has(String(slot))) continue;
+    try {
+      win.close();
+    } catch {
+      // already gone
+    }
+    if (windows.get(slot) === win) windows.delete(slot);
+  }
+}
+
+function openDisplayWindows({ onlySlots = null } = {}) {
   const mapped = mapDisplaysToSlots(screen.getAllDisplays(), displaysConfig || {});
-  if (mapped.skipped.length) {
+  const wanted = onlySlots
+    ? mapped.windows.filter((item) => onlySlots.map(String).includes(String(item.slot)))
+    : mapped.windows;
+  if (!onlySlots) closeWindows();
+  if (!onlySlots && mapped.skipped.length) {
     console.warn(
       `Configured display(s) ${mapped.skipped.join(", ")} have no physical monitor. Skipping those windows.`
     );
   }
-  if (!mapped.windows.length) {
-    console.warn("No kiosk windows to open. Check Displays in the control app and the connected monitors.");
+  if (!wanted.length) {
+    if (!onlySlots) {
+      console.warn("No kiosk windows to open. Check Displays in the control app and the connected monitors.");
+    }
     return;
   }
-  console.log(`Opening kiosk window(s) for display ${mapped.windows.map((item) => item.slot).join(", ")}.`);
+  console.log(`Opening kiosk window(s) for display ${wanted.map((item) => item.slot).join(", ")}.`);
   let softwareDecode = false;
   try {
     softwareDecode = loadConfig(dataLayout(defaultDataDir()).config).media?.softwareDecode === true;
@@ -156,20 +189,27 @@ function openDisplayWindows() {
       dataDir: defaultDataDir(),
       softwareDecode,
       kiosk: true,
-      displays: mapped.windows.map((item) => ({
+      killExisting: !onlySlots,
+      displays: wanted.map((item) => ({
         slot: item.slot,
         url: displayUrl(item.slot),
         bounds: item.bounds,
       })),
     });
     if (launched.length) {
-      for (const row of launched) windows.set(row.slot, chromeFacade(row));
+      for (const row of launched) {
+        const current = windows.get(row.slot);
+        if (current && !current.isDestroyed()) continue;
+        windows.set(row.slot, chromeFacade(row));
+      }
       return;
     }
   } catch (err) {
     console.error(`Chrome per display failed (${err.message}). Falling back to Electron windows.`);
   }
-  for (const item of mapped.windows) {
+  for (const item of wanted) {
+    const current = windows.get(item.slot);
+    if (current && !current.isDestroyed()) continue;
     const { x, y, width, height } = item.bounds;
     const win = new BrowserWindow({
       x,
@@ -310,29 +350,61 @@ async function refreshKiosk() {
   if (!res.ok) return;
   const data = await res.json();
   displaysConfig = data.displays;
-  const physical = screen
-    .getAllDisplays()
-    .map((display) => `${display.id}:${display.bounds?.x}:${display.bounds?.y}:${display.bounds?.width}:${display.bounds?.height}`)
-    .join("|");
-  const seen = screen.getAllDisplays().length;
+  const physicalDisplays = screen.getAllDisplays();
+  const seen = physicalDisplays.length;
   const expected = expectedMonitorCount(data.displays);
-  const monitorsNow = monitorSignature(screen.getAllDisplays());
+  const monitorsNow = monitorSignature(physicalDisplays);
+  if (!monitorsSettled && seen < expected && !monitorWaitStarted) monitorWaitStarted = Date.now();
+  const elapsedMs = monitorWaitStarted ? Date.now() - monitorWaitStarted : 0;
+  const mapped = mapDisplaysToSlots(physicalDisplays, displaysConfig || {});
+  const previousCount = lastMonitors ? lastMonitors.split("|").filter(Boolean).length : 0;
+  if (lastMonitors && seen < previousCount) closeUnmapped(mapped);
   const decision = placementDecision({
     seen,
     expected,
     signature: monitorsNow,
     previousSignature: lastMonitors,
-    windowCount: windows.size,
+    openSlots: openSlotsNow(),
+    wantedSlots: mapped.windows.map((item) => item.slot),
+    elapsedMs,
+    settled: monitorsSettled,
+    timeoutMs: MONITOR_WAIT_MS,
+    openedOnce,
   });
+  if (decision.settle) monitorsSettled = true;
   if (decision.waiting) {
-    console.warn(`Waiting for ${expected} monitor(s); ${seen} connected. TVs on Kasa plugs can wake after the PC.`);
+    if (!announcedWait) {
+      console.warn(`Waiting up to 2 minutes for ${expected} monitor(s); ${seen} connected. TVs on Kasa plugs can wake after the PC.`);
+      announcedWait = true;
+    }
+  } else if (announcedWait) {
+    announcedWait = false;
+    const opened = mapped.windows.map((item) => item.slot).join(", ") || "none";
+    console.warn(`Monitor wait finished with ${seen} of ${expected} connected. Staying open on display ${opened}.`);
   }
-  const signature = `${windowLayoutKey(data.displays, data.kiosk?.restartToken)}|${physical}`;
-  if (signature !== layoutKey || decision.reopen) {
-    layoutKey = signature;
+  const layoutSig = windowLayoutKey(data.displays, data.kiosk?.restartToken);
+  const layoutChanged = Boolean(layoutKey) && layoutSig !== layoutKey;
+  if (forceReopen || layoutChanged) {
+    forceReopen = false;
+    layoutKey = layoutSig;
     lastMonitors = monitorsNow;
     openDisplayWindows();
+  } else if (decision.openMissing.length) {
+    if (mapped.skipped.length) {
+      console.warn(
+        `Configured display(s) ${mapped.skipped.join(", ")} have no physical monitor. Skipping those windows.`
+      );
+    }
+    layoutKey = layoutSig;
+    lastMonitors = monitorsNow;
+    openDisplayWindows({ onlySlots: decision.openMissing });
+  } else if (!layoutKey) {
+    layoutKey = layoutSig;
+    lastMonitors = monitorsNow;
+  } else {
+    lastMonitors = monitorsNow;
   }
+  openedOnce = true;
   await placeAirplay(data);
   await reportMonitors();
 }
@@ -448,12 +520,10 @@ async function boot() {
   installOperatorTray();
   installCaptureHandler();
   screen.on("display-added", () => {
-    layoutKey = "";
     waitingSignature = "";
     scheduleRefresh();
   });
   screen.on("display-removed", () => {
-    layoutKey = "";
     waitingSignature = "";
     scheduleRefresh();
   });
@@ -465,7 +535,7 @@ async function boot() {
 
 app.on("second-instance", () => {
   if (!port) return;
-  layoutKey = "";
+  forceReopen = true;
   scheduleRefresh();
 });
 
@@ -487,7 +557,7 @@ app.on("window-all-closed", () => {
 app.on("child-process-gone", (_event, details) => {
   if (details?.type !== "GPU") return;
   console.warn("GPU process ended. Reopening the wall.");
-  layoutKey = "";
+  forceReopen = true;
   scheduleRefresh();
 });
 

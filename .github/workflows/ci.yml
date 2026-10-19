@@ -54,10 +54,10 @@ jobs:
       - run: npm run electron-smoke
       - name: Installer dry run
         shell: pwsh
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-beelink.ps1 -DryRun
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-beelink.ps1 -DryRun -Kiosk
       - name: Enable autoupdate dry run
         shell: pwsh
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -DryRun
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -DryRun -Kiosk
       - name: Ensure Chrome
         shell: pwsh
         run: |

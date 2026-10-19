@@ -11,7 +11,8 @@ const { migrateData, dataLayout } = require("../src/paths");
 const { parseYoutubeInput, embedSrc } = require("../src/youtube");
 const { loadCatalog } = require("../src/catalog");
 const { classifyImage } = require("../src/resolution");
-const { placementDecision, expectedMonitorCount, retryDelay } = require("../src/watchdog");
+const { placementDecision, expectedMonitorCount, retryDelay, MONITOR_WAIT_MS } = require("../src/watchdog");
+const { mapDisplaysToSlots } = require("../src/displays");
 const { selectRelease, planApply, planRollback, inQuietWindow, swapInstall, rollbackInstall } = require("../src/updater");
 
 async function startServer() {
@@ -284,12 +285,95 @@ test("updater swaps versions and rolls back without touching data", async () => 
 
 test("watchdog waits for late monitors and reloads crashed windows", () => {
   assert.equal(expectedMonitorCount({ count: 3, screens: { 1: { enabled: true }, 2: { enabled: false }, 3: { enabled: true } } }), 2);
-  const waiting = placementDecision({ seen: 1, expected: 3, signature: "a", previousSignature: "a", windowCount: 1 });
+  const waiting = placementDecision({
+    seen: 1,
+    expected: 3,
+    signature: "a",
+    previousSignature: "a",
+    windowCount: 1,
+    openedOnce: true,
+    openSlots: [1],
+    wantedSlots: [1],
+  });
   assert.equal(waiting.ready, false);
-  assert.equal(waiting.reopen, true);
-  const crashed = placementDecision({ seen: 3, expected: 3, signature: "a", previousSignature: "a", windowCount: 3, crashed: ["2"] });
+  assert.equal(waiting.waiting, true);
+  assert.equal(waiting.reopen, false);
+  assert.deepEqual(waiting.openMissing, []);
+  const crashed = placementDecision({ seen: 3, expected: 3, signature: "a", previousSignature: "a", windowCount: 3, crashed: ["2"], openedOnce: true });
   assert.deepEqual(crashed.reload, ["2"]);
+  assert.equal(crashed.reopen, false);
   assert.ok(retryDelay(4) >= retryDelay(1));
+});
+
+test("two of three monitors wait once, then stay open, and a later monitor opens only the missing window", () => {
+  const monitors = [
+    { id: "left", bounds: { x: 0, y: 0, width: 1920, height: 1080 } },
+    { id: "right", bounds: { x: 1920, y: 0, width: 1920, height: 1080 } },
+  ];
+  const mapped = mapDisplaysToSlots(monitors, { count: 3 });
+  assert.deepEqual(mapped.windows.map((item) => item.slot), [1, 2]);
+  assert.deepEqual(mapped.skipped, [3]);
+
+  const first = placementDecision({
+    seen: 2,
+    expected: 3,
+    signature: "left|right",
+    previousSignature: "",
+    openedOnce: false,
+    openSlots: [],
+    wantedSlots: mapped.windows.map((item) => item.slot),
+    elapsedMs: 0,
+  });
+  assert.equal(first.waiting, true);
+  assert.equal(first.reopen, false);
+  assert.deepEqual(first.openMissing, [1, 2]);
+
+  const again = placementDecision({
+    seen: 2,
+    expected: 3,
+    signature: "left|right",
+    previousSignature: "left|right",
+    openedOnce: true,
+    openSlots: [1, 2],
+    wantedSlots: [1, 2],
+    elapsedMs: 5000,
+  });
+  assert.equal(again.waiting, true);
+  assert.equal(again.reopen, false);
+  assert.deepEqual(again.openMissing, []);
+
+  const timedOut = placementDecision({
+    seen: 2,
+    expected: 3,
+    signature: "left|right",
+    previousSignature: "left|right",
+    openedOnce: true,
+    openSlots: [1, 2],
+    wantedSlots: [1, 2],
+    elapsedMs: MONITOR_WAIT_MS,
+    timeoutMs: MONITOR_WAIT_MS,
+  });
+  assert.equal(MONITOR_WAIT_MS, 120000);
+  assert.equal(timedOut.waiting, false);
+  assert.equal(timedOut.settle, true);
+  assert.equal(timedOut.reopen, false);
+  assert.deepEqual(timedOut.openMissing, []);
+
+  const added = placementDecision({
+    seen: 3,
+    expected: 3,
+    signature: "left|right|center",
+    previousSignature: "left|right",
+    openedOnce: true,
+    settled: true,
+    openSlots: [1, 2],
+    wantedSlots: [1, 2, 3],
+    elapsedMs: MONITOR_WAIT_MS + 5000,
+  });
+  assert.equal(added.waiting, false);
+  assert.equal(added.reopen, false);
+  assert.deepEqual(added.openMissing, [3]);
+  assert.deepEqual(added.reload, []);
 });
 
 test("catalog and youtube inputs are explicit", () => {

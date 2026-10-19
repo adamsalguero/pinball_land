@@ -5,13 +5,18 @@
 .DESCRIPTION
   Does not reinstall Node, npm packages, or venue data.
   Adds the node.exe inbound UDP firewall rule Kasa plug discovery needs on Private and Public networks.
-  Registers the boot and nightly update tasks. Pass -RustDeskPassword (or -RustDesk and
-  answer the prompt) to install the latest RustDesk as a Windows service.
-  -DryRun registers the tasks and does not download RustDesk or prompt.
+  Registers the boot and nightly update tasks only with -Kiosk, or when an interactive
+  console answers yes. Dev and test PCs should leave -Kiosk off.
+  Pass -RustDeskPassword (or -RustDesk and answer the prompt) to install the latest RustDesk
+  as a Windows service. -DryRun does not download RustDesk or prompt, and it registers
+  boot tasks only when -Kiosk is also set.
+.PARAMETER Kiosk
+  Register PinballLandServer, PinballLandKiosk, PinballLandUpdateBoot, and PinballLandUpdateNightly.
 #>
 param(
   [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
   [switch]$DryRun,
+  [switch]$Kiosk,
   [switch]$RustDesk,
   [string]$RustDeskPassword
 )
@@ -19,7 +24,14 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $RepoRoot
 
-& (Join-Path $PSScriptRoot "register-update-tasks.ps1") -RepoRoot $RepoRoot
+. (Join-Path $PSScriptRoot "confirm-kiosk-autostart.ps1")
+$registerAutostart = Confirm-KioskAutostart -Kiosk:$Kiosk -DryRun:$DryRun
+if ($registerAutostart) {
+  & (Join-Path $PSScriptRoot "register-update-tasks.ps1") -RepoRoot $RepoRoot
+} else {
+  Write-Host "Boot tasks were not registered. Dev and test PCs stay manual."
+  Write-Host "On the venue PC, pass -Kiosk or run scripts\enable-autostart.ps1."
+}
 
 $wantRust = $false
 if ($RustDesk) { $wantRust = $true }
@@ -64,8 +76,12 @@ if (-not $DryRun) {
 }
 
 Write-Host ""
-Write-Host "Automatic updates are registered."
-Write-Host "At sign-in the PC checks GitHub main before the server starts. Nightly default is 3:17 AM local (config.json updates.nightlyAt)."
-Write-Host "A failed update rolls back. Scores, photos, and settings in ProgramData are not deleted."
-Write-Host "Restart so the wall comes back fullscreen:"
-Write-Host "  shutdown /r /t 0"
+if ($registerAutostart) {
+  Write-Host "Automatic updates are registered."
+  Write-Host "At sign-in the PC checks GitHub main before the server starts. Nightly default is 3:17 AM local (config.json updates.nightlyAt)."
+  Write-Host "A failed update rolls back. Scores, photos, and settings in ProgramData are not deleted."
+  Write-Host "Restart so the wall comes back fullscreen:"
+  Write-Host "  shutdown /r /t 0"
+} else {
+  Write-Host "Automatic updates were not registered, so this PC will not start the wall at sign-in."
+}

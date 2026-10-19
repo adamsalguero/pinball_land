@@ -64,13 +64,22 @@ No Assigned Access / Windows Kiosk Mode is required.
    Settings → System → Power → Screen and sleep → **Never** on AC. Also: Settings → System → Display → Screen timeout **Never**.
 5. Auto-logon to a local account (kiosk user is fine): `Win+R` → `netplwiz` → uncheck **Users must enter a user name and password to use this computer** → apply → enter that account’s password.
 6. Pause automatic **update restarts** (events are evenings): Settings → Windows Update → Advanced → **Pause updates**, or Active hours covering venue nights. Surprise reboot mid-party is worse than a pending update.
-7. Register logon auto-start (re-runnable):
+7. Register logon auto-start on the **venue** PC (re-runnable). A dev or test PC should not do this:
 
    ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\install-kiosk-windows.ps1
+   powershell -ExecutionPolicy Bypass -File scripts\install-kiosk-windows.ps1 -Kiosk
    ```
 
-   This creates Task Scheduler jobs for the server, the wall, and the automatic update. Uninstall:
+   `-Kiosk` creates Task Scheduler jobs for the server, the wall, and the automatic update: **PinballLandServer**, **PinballLandKiosk**, **PinballLandUpdateBoot**, and **PinballLandUpdateNightly**. Without `-Kiosk`, an interactive window asks `Start at sign-in? [y/N]`. The default is no, so pressing Enter does not register those tasks.
+
+   Turn the same four tasks on or off later. Both scripts need Administrator and self-elevate (they show a UAC prompt):
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\enable-autostart.ps1
+   powershell -ExecutionPolicy Bypass -File scripts\disable-autostart.ps1
+   ```
+
+   `enable-autostart.ps1` registers the four tasks. `disable-autostart.ps1` unregisters them. If a task cannot be removed, it is disabled. Uninstall the rest of the machine setup (firewall, power, auto-logon) with:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\uninstall-kiosk-windows.ps1
@@ -91,7 +100,7 @@ No Assigned Access / Windows Kiosk Mode is required.
    cd C:\pinball-land
    git pull
    npm.cmd ci
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -RustDeskPassword "your-permanent-password"
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -Kiosk -RustDeskPassword "your-permanent-password"
    shutdown /r /t 0
    ```
 
@@ -108,14 +117,20 @@ Cursor is hidden on display windows. Control is not opened on the wall.
 
 ## 4. Home PC (Windows, no auto-boot)
 
-Home testing does **not** need BIOS auto-power, Task Scheduler, or `npm run kiosk`.
+Home testing does **not** need BIOS auto-power, Task Scheduler, or `npm run kiosk`. If the wall starts by itself, the boot tasks were registered on this PC. Remove them:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\disable-autostart.ps1
+```
+
+That unregisters **PinballLandServer**, **PinballLandKiosk**, **PinballLandUpdateBoot**, and **PinballLandUpdateNightly**. It needs Administrator and self-elevates. Do not pass `-Kiosk` to the installer on a home or test PC.
 
 ```bat
 npm install
 npm start
 ```
 
-Open the three displays with `scripts\open-wall-chrome.ps1` after `npm start`. Control from `/admin` or a phone on the same WiFi. Optional: `npm run kiosk` if you want to try auto-fullscreen on the monitors you have. With fewer monitors than **Displays** says are active, the kiosk skips the missing ones and prints that in the terminal.
+Open the three displays with `scripts\open-wall-chrome.ps1` after `npm start`. Control from `/admin` or a phone on the same WiFi. Optional: `npm run kiosk` if you want to try auto-fullscreen on the monitors you have. With fewer monitors than **Displays** says are active, the kiosk waits up to two minutes for the missing TV (a Kasa plug can wake after the PC). It opens the windows that already have a monitor and leaves them open. It does not close and reopen them on the next check. A display with no monitor is skipped, not tiled on top of another screen. When that monitor is connected later, only the missing window opens.
 
 Chrome allows six HTTP/1.1 connections per host, and every window in one profile shares that pool and one GPU process. Each display is its own Chrome instance, with its own `--user-data-dir` under `C:\ProgramData\PinballLand\chrome\display1`, `display2`, and `display3` (or `PINBALL_DATA_DIR\chrome`). The wall still opens each screen on its own origin: `http://localhost:3000/display/1`, `http://127.0.0.1:3000/display/2`, and `http://[::1]:3000/display/3`. Admin stays on `http://localhost:3000/admin` (or the LAN address printed at startup). WebSockets follow the page host, so each display talks to the server it loaded from. If IPv6 loopback does not come up, the server listens on `http://127.0.0.1:3001` for screen 3 and the script uses that instead. Relaunching the script kills only those profiles (the recorded PIDs whose command line contains `chrome\display1`, `display2`, or `display3`). It does not close any other Chrome window.
 
@@ -144,7 +159,7 @@ On the control page, **Displays**:
 - **Monitor order** — after `npm run kiosk` is running, the iPad lists the monitors Windows reported. Up/Down overrides left-to-right. **Reset to left-to-right** clears that override.
 - **Restart kiosk windows** — closes and reopens the TV windows. Count, enable, and order also apply on their own within a few seconds. Content changes show up immediately and do not reopen the windows.
 
-Saved in `config.json` under `displays` (and `presentation.idleMinutes`). If Windows has fewer monitors than the count, those slots are skipped and the terminal says so. Extra monitors past the count are ignored.
+Saved in `config.json` under `displays` (and `presentation.idleMinutes`). If Windows has fewer monitors than the count, the kiosk waits up to two minutes, then skips the slots that still have no monitor and says so once. Those windows stay up. Extra monitors past the count are ignored. Plugging in a missing monitor later opens only that window.
 
 ---
 
@@ -165,6 +180,8 @@ Windows Firewall on a **Public** network (the usual home classification) drops t
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1
 ```
+
+That command adds the firewall rule. It does not register boot tasks unless you pass `-Kiosk` or answer yes to `Start at sign-in? [y/N]`.
 
 Home testing has no plugs. The buttons talk to whatever is on the LAN; the automated tests use a fake client and do not scan the network.
 
@@ -210,9 +227,9 @@ Funnel and the Cloudflare fallback point at the guest-only port **3010**, not at
 
 - BIOS **Restore on AC Power** (or Auto Power On) = On. See section 1.
 - Windows auto-logon is set with `netplwiz`.
-- `powershell -File scripts\install-kiosk-windows.ps1` registers the Node server at logon and the Electron kiosk 20 seconds later, restarts them after a crash, turns off sleep and the screensaver, and sets Windows Update active hours (9:00–23:00) so the PC does not reboot during open hours. The one-command path is [QUICKSTART.md](QUICKSTART.md).
-- Check the tasks with `powershell -File scripts\install-kiosk-windows.ps1 -Verify`.
-- The kiosk keeps replacing windows until every enabled display has a monitor. TVs on Kasa plugs can finish booting after the PC.
+- `powershell -File scripts\install-kiosk-windows.ps1 -Kiosk` registers the Node server at logon and the Electron kiosk, turns off sleep and the screensaver, and sets Windows Update active hours (9:00–23:00) so the PC does not reboot during open hours. The one-command path is [QUICKSTART.md](QUICKSTART.md). Dev and test PCs use `scripts\disable-autostart.ps1` instead of `-Kiosk`.
+- Check the tasks with `powershell -File scripts\install-kiosk-windows.ps1 -Verify -Kiosk`.
+- The kiosk waits up to two minutes for a late TV, then stays open on the monitors that are connected. It does not keep replacing windows. When a monitor appears later, only the missing window opens.
 - Reset a forgotten admin PIN from the kiosk tray (**Reset PIN to default**) or with `npm run reset-pin`. Default is `2224`.
 
 ## Appendix: Ubuntu 24.04 (optional, not supported)

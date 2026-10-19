@@ -149,12 +149,14 @@ test("mock plug toggle and video section", async ({ page, request }) => {
   await page.getByLabel("Plug IP address").fill("not-an-ip");
   await page.getByRole("button", { name: "Add plug" }).click();
   await expect(page.locator("#toast")).toHaveText(/IPv4 address/);
+  await page.getByLabel("Plug IP address").blur();
   await page.getByRole("button", { name: "Find plugs" }).click();
   const plug = page.getByLabel("Plug for display 1");
   await expect(plug.locator("option")).toHaveCount(2);
   await plug.selectOption("mock-1");
   await expect(page.getByRole("button", { name: "On" }).first()).toBeEnabled();
   await page.getByRole("button", { name: "TVs On" }).click();
+  await expect(page.locator("#toast")).toHaveText("Plugs on", { timeout: 15000 });
   await expect(page.getByText("· On")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Videos", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "YouTube" })).toBeVisible();

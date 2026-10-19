@@ -5,13 +5,17 @@
 .DESCRIPTION
   Sets the network profile to Private, opens TCP 3000 and 3443 on that profile, and turns off
   AC sleep, monitor timeout, and hibernate. Pass -AutoLogonUser Admin for a passwordless account.
-  Registers boot and nightly self-update tasks. Pass -RustDesk or -RustDeskPassword to install
-  the latest RustDesk as a service. -DryRun skips Node install, npm ci, AutoAdminLogon, RustDesk,
-  and starting the server. It still registers the update tasks.
+  Pass -Kiosk to register the server, the wall, and the boot and nightly update tasks.
+  Without -Kiosk an interactive console asks first, and the default answer is no.
+  Pass -RustDesk or -RustDeskPassword to install the latest RustDesk as a service.
+  -DryRun skips Node install, npm ci, AutoAdminLogon, RustDesk, and starting the server.
+  It registers boot tasks only when -Kiosk is also set.
 .PARAMETER AutoLogonUser
   Local passwordless account to sign in automatically, for example Admin.
 .PARAMETER DryRun
   Run the Windows setup and print the verify summary without installing packages or starting the server.
+.PARAMETER Kiosk
+  Register PinballLandServer, PinballLandKiosk, PinballLandUpdateBoot, and PinballLandUpdateNightly.
 .PARAMETER RustDesk
   Install RustDesk from the latest GitHub x86_64 release. Prompts for a password when -RustDeskPassword is omitted.
 .PARAMETER RustDeskPassword
@@ -20,6 +24,7 @@
 param(
   [string]$AutoLogonUser,
   [switch]$DryRun,
+  [switch]$Kiosk,
   [switch]$RustDesk,
   [string]$RustDeskPassword
 )
@@ -60,6 +65,7 @@ $configure = @{
   NoSummary = $true
 }
 if ($DryRun) { $configure.DryRun = $true }
+if ($Kiosk) { $configure.Kiosk = $true }
 if ($AutoLogonUser) { $configure.AutoLogonUser = $AutoLogonUser }
 & $kioskScript @configure
 
@@ -110,6 +116,7 @@ $verifyArgs = @(
   "-Verify"
 )
 if ($DryRun) { $verifyArgs += "-DryRun" }
+if ($Kiosk) { $verifyArgs += "-Kiosk" }
 if ($AutoLogonUser) { $verifyArgs += @("-AutoLogonUser", $AutoLogonUser) }
 & powershell.exe @verifyArgs
 $verifyCode = $LASTEXITCODE
