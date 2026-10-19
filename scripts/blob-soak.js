@@ -61,10 +61,12 @@ async function waitFor(url, attempts = 40) {
 function killChild(child) {
   if (!child || !child.pid) return;
   if (process.platform === "win32") {
-    spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
-    return;
+    const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
+    if (typeof killer.unref === "function") killer.unref();
+  } else {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
   }
-  try { child.kill("SIGKILL"); } catch { /* already gone */ }
+  if (typeof child.unref === "function") child.unref();
 }
 
 async function runBlobSoak() {
@@ -285,7 +287,7 @@ module.exports = { runBlobSoak };
 
 if (require.main === module) {
   runBlobSoak().then((result) => {
-    console.log(JSON.stringify(result));
+    process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
   }).catch((err) => {
     console.error(err);
     process.exit(1);
