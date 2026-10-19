@@ -457,11 +457,11 @@ test("one holiday clip is never copied, and a season with none stays on non-vide
   }
 });
 
-test("a clip stays on one screen when the dwell advances", () => {
+test("a holiday clip walks left, center, right and stays for the whole dwell", () => {
   const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
     starters: [
-      { type: "video", id: "starter:skeleton-dance-1929", url: "/media/cache/skeleton-dance-1929", durationSec: 331 },
-      { type: "video", id: "starter:christmas-comes-1936", url: "/media/cache/christmas-comes-1936", durationSec: 498 },
+      { type: "video", id: "starter:skeleton-dance-1929", url: "/media/cache/skeleton-dance-1929", durationSec: 331, holiday: "halloween" },
+      { type: "video", id: "starter:christmas-comes-1936", url: "/media/cache/christmas-comes-1936", durationSec: 498, holiday: "christmas" },
     ],
   });
   const layout = {
@@ -476,17 +476,22 @@ test("a clip stays on one screen when the dwell advances", () => {
     layout,
     now: tick * 30000,
   });
-  for (let tick = 0; tick < 18; tick += 1) {
+  const order = ["1", "2", "3"];
+  for (let tick = 0; tick < 9; tick += 1) {
     const plan = at(tick);
-    const next = at(tick + 1);
     const urls = ["1", "2", "3"].map((slot) => (plan[slot]?.type === "video" ? plan[slot].url : "")).filter(Boolean);
-    assert.equal(new Set(urls).size, urls.length, JSON.stringify(urls));
-    for (const slot of ["1", "2", "3"]) {
-      const url = plan[slot]?.type === "video" ? plan[slot].url : "";
-      if (!url) continue;
-      const elsewhere = ["1", "2", "3"].filter((other) => other !== slot && next[other]?.type === "video" && next[other].url === url);
-      assert.deepEqual(elsewhere, [], `${url} slid off slot ${slot} on tick ${tick}`);
-    }
+    assert.equal(urls.length, 1, JSON.stringify(urls));
+    const owner = order[tick % 3];
+    assert.equal(plan[owner].type, "video");
+    assert.match(plan[owner].url, /skeleton-dance-1929|christmas-comes-1936/);
+    const mid = planRotation(playlist, {
+      startedAt: 0,
+      intervalSec: 30,
+      screenCount: 3,
+      layout,
+      now: tick * 30000 + 15000,
+    });
+    assert.equal(mid[owner].playId, plan[owner].playId);
   }
 });
 
