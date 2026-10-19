@@ -457,6 +457,39 @@ test("one holiday clip is never copied, and a season with none stays on non-vide
   }
 });
 
+test("a clip stays on one screen when the dwell advances", () => {
+  const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
+    starters: [
+      { type: "video", id: "starter:skeleton-dance-1929", url: "/media/cache/skeleton-dance-1929", durationSec: 331 },
+      { type: "video", id: "starter:christmas-comes-1936", url: "/media/cache/christmas-comes-1936", durationSec: 498 },
+    ],
+  });
+  const layout = {
+    1: { content: "rotation", enabled: true },
+    2: { content: "rotation", enabled: true },
+    3: { content: "rotation", enabled: true },
+  };
+  const at = (tick) => planRotation(playlist, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout,
+    now: tick * 30000,
+  });
+  for (let tick = 0; tick < 18; tick += 1) {
+    const plan = at(tick);
+    const next = at(tick + 1);
+    const urls = ["1", "2", "3"].map((slot) => (plan[slot]?.type === "video" ? plan[slot].url : "")).filter(Boolean);
+    assert.equal(new Set(urls).size, urls.length, JSON.stringify(urls));
+    for (const slot of ["1", "2", "3"]) {
+      const url = plan[slot]?.type === "video" ? plan[slot].url : "";
+      if (!url) continue;
+      const elsewhere = ["1", "2", "3"].filter((other) => other !== slot && next[other]?.type === "video" && next[other].url === url);
+      assert.deepEqual(elsewhere, [], `${url} slid off slot ${slot} on tick ${tick}`);
+    }
+  }
+});
+
 test("two cards with the same file never share a screen", () => {
   const playlist = buildPlaylist({ rotation: normalizeRotation({}), leaderboards: [] }, {
     starters: [

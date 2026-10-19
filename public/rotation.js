@@ -202,16 +202,35 @@ function planRotation(playlist, options = {}) {
       slots[slot] = withVideoStart(card, tick);
     }
   }
+  const rotationSlots = [];
   for (let i = 1; i <= 3; i += 1) {
     const slot = String(i);
     if (slots[slot]) continue;
     if (i > screens || layout[slot]?.enabled === false) continue;
-    const n = list.length;
-    const slotIndex = i - 1;
+    rotationSlots.push(slot);
+  }
+  const n = list.length;
+  const inWindow = new Set();
+  for (let offset = 0; offset < rotationSlots.length && n; offset += 1) {
+    inWindow.add((((tick + offset) % n) + n) % n);
+  }
+  // A clip stays on the screen that owns it. The next dwell must not slide it
+  // onto a neighbor while this screen is still showing the old frame.
+  for (const index of inWindow) {
+    const source = list[index];
+    if (!source || source.type !== "video" || !source.url || source.blocked || source.empty) continue;
+    const owner = rotationSlots[index % rotationSlots.length];
+    if (!owner || slots[owner] || clipTaken(used, source)) continue;
+    const chosen = withVideoStart(prepare(source, owner), tick);
+    reserveClip(used, chosen);
+    slots[owner] = chosen;
+  }
+  rotationSlots.forEach((slot, slotIndex) => {
+    if (slots[slot]) return;
     let chosen = null;
     for (let step = 0; step < n; step += 1) {
       const candidate = prepare(cardForSlot(list, tick, slotIndex + step), slot);
-      if (candidate?.type === "video" && candidate.blocked) continue;
+      if (candidate?.type === "video") continue;
       if (clipTaken(used, candidate)) continue;
       chosen = candidate;
       reserveClip(used, chosen);
@@ -221,8 +240,8 @@ function planRotation(playlist, options = {}) {
       chosen = nonVideoReplacement(list, used);
       reserveClip(used, chosen);
     }
-    slots[slot] = withVideoStart(chosen, tick);
-  }
+    slots[slot] = chosen;
+  });
   return slots;
 }
 
