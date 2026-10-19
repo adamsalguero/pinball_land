@@ -220,6 +220,7 @@ async function runBlobSoak() {
           track.media = "";
           track.checked = false;
           track.last = null;
+          track.began = 0;
           continue;
         }
         if (!sample.src.startsWith("blob:")) {
