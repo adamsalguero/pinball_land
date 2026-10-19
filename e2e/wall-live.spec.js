@@ -296,7 +296,53 @@ test("camera hides the raw file inputs and opens a photo lightbox", async ({ pag
   await expect(page.locator("#choose-file")).toBeHidden();
   await expect(page.locator("#photo-lightbox")).toBeHidden();
   const guestJs = await page.evaluate(async () => (await fetch("/guest.js")).text());
-  expect(guestJs).not.toContain("navigator.share");
+  expect(guestJs).toContain("navigator.share");
+  expect(guestJs).not.toContain("window.location");
+  await page.evaluate(() => {
+    const box = document.getElementById("photo-lightbox");
+    box.dataset.photoUrl = "/photos/arcade";
+    box.dataset.photoName = "arcade.jpg";
+    document.getElementById("photo-lightbox-img").src = "/photos/arcade";
+    box.hidden = false;
+  });
+  await expect(page.locator("#photo-lightbox")).toBeVisible();
+  const close = await page.locator("#photo-lightbox-close").boundingBox();
+  expect(close.x).toBeLessThan(40);
+  const url = page.url();
+  await page.locator("#photo-lightbox-download").click();
+  await expect(page).toHaveURL(url);
+  await expect(page.locator("#photo-lightbox")).toBeVisible();
+  await page.locator("#photo-lightbox-close").click();
+  await expect(page.locator("#photo-lightbox")).toBeHidden();
+});
+
+test("pinnacle has no cartoon button, and an empty board can be pinned", async ({ page, request }) => {
+  await page.goto("/admin");
+  await page.locator("#pin-input").fill("2224");
+  await page.getByRole("button", { name: "Unlock" }).click();
+  await expect(page.locator("#app")).toBeVisible();
+  const left = page.locator(".screen-card").first();
+  await expect(left.getByRole("button", { name: "Video", exact: true })).toHaveCount(0);
+  await expect(left.getByRole("button", { name: "The Skeleton Dance" })).toHaveCount(0);
+  await expect(left.getByRole("button", { name: "Leaderboard" })).toBeDisabled();
+  const added = await request.post("/api/machines", {
+    headers: { "x-pin": "2224", "content-type": "application/json" },
+    data: { name: "Attack From Mars", opdbId: "GTEST-AFM" },
+  });
+  expect(added.ok()).toBeTruthy();
+  await page.reload();
+  await expect(page.locator(".screen-card").first().getByRole("button", { name: "Leaderboard" })).toBeEnabled();
+  await page.locator(".screen-card").first().getByRole("button", { name: "Leaderboard" }).click();
+  await expect(page.locator("#toast")).toHaveText("Layout saved");
+  await page.goto("/display/1?shot=1");
+  await expect(page.locator("#board-title")).toHaveText("Attack From Mars");
+  await expect(page.locator("#board-empty")).toHaveText("Be the first");
+  await expect(page.locator("#board")).not.toContainText("No machine art");
+  await expect(page.locator("#board")).not.toContainText("error");
+  await request.put("/api/displays", {
+    headers: { "x-pin": "2224", "content-type": "application/json" },
+    data: { screens: { 1: { content: "rotation" }, 2: { content: "rotation" }, 3: { content: "rotation" } } },
+  });
 });
 
 async function launchWallChrome() {

@@ -429,8 +429,19 @@ const DISPLAY_CONTENT = [
   { id: "leaderboard", label: "Leaderboard" },
   { id: "pinboard", label: "Pinboard" },
   { id: "clock", label: "Clock" },
-  { id: "video", label: "Video" },
 ];
+
+function themeClipChoices() {
+  const theme = current.state?.theme;
+  if (theme !== "halloween" && theme !== "christmas") return [];
+  const allAges = current.media?.allAges !== false;
+  return (current.media?.catalog || []).filter((item) => {
+    if (!item || item.holiday !== theme) return false;
+    if (item.disabled) return false;
+    if (allAges && item.allAges === false) return false;
+    return item.cached === true && Boolean(item.playUrl);
+  });
+}
 
 function shareUrl() {
   const share = current.share || {};
@@ -469,17 +480,38 @@ function renderDisplays() {
     } else {
       const choices = document.createElement("div");
       choices.className = "choices";
+      const boards = current.state.leaderboards || [];
       for (const option of DISPLAY_CONTENT) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = `btn${layout.content === option.id ? " active" : ""}`;
         button.textContent = option.label;
+        if (option.id === "leaderboard" && !boards.length) button.disabled = true;
         button.addEventListener("click", () => {
-          const patch = { content: option.id };
+          const patch = { content: option.id, clipId: null };
           if (option.id === "leaderboard") {
-            patch.leaderboardId = screenCfg.leaderboardId || selectedBoardId || current.state.leaderboards[0]?.id || null;
+            const known = [screenCfg.leaderboardId, selectedBoardId, boards[0]?.id].find((id) => (
+              boards.some((board) => board.id === id)
+            ));
+            if (!known) return;
+            patch.leaderboardId = known;
           }
-          saveDisplays({ screens: { [slot]: patch } }).then(() => toast("Layout saved"));
+          saveDisplays({ screens: { [slot]: patch } })
+            .then(() => toast("Layout saved"))
+            .catch(() => toast("Could not save the layout."));
+        });
+        choices.append(button);
+      }
+      const pinnedClip = String(screenCfg.clipId || layout.clipId || "").replace(/^starter:/, "");
+      for (const item of themeClipChoices()) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `btn${layout.content === "video" && pinnedClip === item.id ? " active" : ""}`;
+        button.textContent = item.title;
+        button.addEventListener("click", () => {
+          saveDisplays({
+            screens: { [slot]: { content: "video", clipId: item.id } },
+          }).then(() => toast("Layout saved")).catch(() => toast("Could not save the layout."));
         });
         choices.append(button);
       }
@@ -1534,6 +1566,29 @@ function renderArchive() {
 }
 
 
+function appleHandheld() {
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function homeScreen() {
+  return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+async function shareFile(file, title) {
+  if (typeof navigator.share !== "function") return false;
+  if (!appleHandheld() && !homeScreen()) return false;
+  const payload = { files: [file], title: title || "Pinball Land" };
+  if (typeof navigator.canShare === "function" && !navigator.canShare(payload)) return false;
+  try {
+    await navigator.share(payload);
+    return true;
+  } catch (err) {
+    if (err && err.name === "AbortError") return true;
+    return false;
+  }
+}
+
 function openPhotoLightbox(url, filename) {
   let box = document.getElementById("photo-lightbox");
   if (!box) {
@@ -1541,17 +1596,74 @@ function openPhotoLightbox(url, filename) {
     box.id = "photo-lightbox";
     box.className = "lightbox";
     box.hidden = true;
-    box.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close">×</button><img alt=""><a class="btn download">Download</a>';
+    box.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close">×</button><img alt=""><button type="button" class="btn download">Download</button>';
     box.querySelector(".lightbox-close").addEventListener("click", () => { box.hidden = true; });
+    box.querySelector(".download").addEventListener("click", () => {
+      shareOrKeep(box.dataset.photoUrl, box.dataset.photoName);
+    });
     document.body.append(box);
   }
   const img = box.querySelector("img");
-  const link = box.querySelector("a");
   img.src = url;
   img.alt = filename || "Guest photo";
-  link.href = `${url}${url.includes("?") ? "&" : "?"}download=1`;
-  link.download = filename || "photo.jpg";
+  box.dataset.photoUrl = url;
+  box.dataset.photoName = filename || "photo.jpg";
   box.hidden = false;
+}
+
+async function downloadAllPhotos(button) {
+  if (button) button.disabled = true;
+  try {
+    const headers = {};
+    if (deviceToken()) headers["x-device-token"] = deviceToken();
+    const csrf = csrfToken();
+    if (csrf) headers["x-csrf"] = csrf;
+    const res = await fetch("/api/guest-photos/zip", { headers, credentials: "same-origin" });
+    const type = res.headers.get("content-type") || "";
+    if (!res.ok || !type.includes("zip")) {
+      toast("Could not download the photos.");
+      return;
+    }
+    const blob = await res.blob();
+    const file = new File([blob], "pinboard.zip", { type: "application/zip" });
+    if (await shareFile(file, "Pinball Land photos")) return;
+    if (homeScreen()) {
+      toast("Could not download the photos.");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "pinboard.zip";
+    link.rel = "noopener";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  } catch {
+    toast("Could not download the photos.");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function shareOrKeep(url, filename) {
+  const name = filename || "photo.jpg";
+  try {
+    const res = await fetch(url, { credentials: "same-origin" });
+    if (res.ok) {
+      const blob = await res.blob();
+      const file = new File([blob], name, { type: blob.type || "image/jpeg" });
+      if (await shareFile(file, "Pinball Land")) return;
+    }
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
+  }
+  openPhotoLightbox(url, name);
+  if (!homeScreen()) {
+    const opened = window.open(url, "_blank", "noopener");
+    if (opened) return;
+  }
 }
 
 function renderYoutube() {
@@ -1593,10 +1705,11 @@ async function renderPhotos() {
     applyPayload(await api("/api/guest-photos/settings", { method: "PUT", body: { autoApprove: !data.settings?.autoApprove } }));
     renderPhotos();
   });
-  const downloadAll = document.createElement("a");
+  const downloadAll = document.createElement("button");
+  downloadAll.type = "button";
   downloadAll.className = "btn";
-  downloadAll.href = "/api/guest-photos/zip";
   downloadAll.textContent = "Download all";
+  downloadAll.addEventListener("click", () => downloadAllPhotos(downloadAll));
   const pause = document.createElement("button");
   pause.type = "button";
   pause.className = `btn${data.settings?.paused ? " active" : ""}`;

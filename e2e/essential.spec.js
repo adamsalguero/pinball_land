@@ -19,6 +19,12 @@ test("PIN unlock, displays, rotation, leaderboard, theme, present", async ({ pag
     const cached = (body.playlist || []).some((card) => card.type === "video" && String(card.url || "").includes("/media/cache/"));
     return body.state.theme === "halloween" && cached;
   }, { timeout: 150000 }).toBeTruthy();
+  await page.goto("/admin");
+  const left = page.locator(".screen-card").first();
+  await expect(left.getByRole("button", { name: "Video", exact: true })).toHaveCount(0);
+  await expect(left.getByRole("button", { name: "The Skeleton Dance" })).toBeVisible();
+  await left.getByRole("button", { name: "The Skeleton Dance" }).click();
+  await expect(page.locator("#toast")).toHaveText("Layout saved");
   await page.goto("/display/1?shot=1");
   await expect(page.locator("#screen")).toBeVisible();
   await page.goto("/admin");

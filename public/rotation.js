@@ -174,33 +174,45 @@ function planRotation(playlist, options = {}) {
     if (content && content !== "rotation") {
       if (content === "video") {
         const playlistVideos = openVideos(list);
-        const videos = playlistVideos.length ? playlistVideos : openVideos(options.pinVideos);
         const memory = options.videoMemory?.[slot];
         const gen = memory?.gen || 0;
         const salt = `${slot}:${gen}`;
+        const clipId = String(layout[slot]?.clipId || "").replace(/^starter:/, "");
         let chosen = null;
-        if (memory?.id) {
-          const saved = videos.find((card) => card.id === memory.id);
-          if (saved && !used.has(rotationKey(saved))) chosen = clipCard(saved, salt);
-        }
-        if (!chosen && videos.length) {
-          const fresh = pickDistinctVideo(videos, `${salt}:${videos.map((card) => card.id).join(",")}`, used);
-          if (fresh) chosen = clipCard(fresh, salt);
+        if (clipId) {
+          const saved = playlistVideos.find((card) => (
+            card.starterId === clipId || card.id === clipId || card.id === `starter:${clipId}`
+          ));
+          if (saved) chosen = clipCard(saved, salt);
+        } else if (playlistVideos.length) {
+          if (memory?.id) {
+            const saved = playlistVideos.find((card) => card.id === memory.id);
+            if (saved && !used.has(rotationKey(saved))) chosen = clipCard(saved, salt);
+          }
+          if (!chosen) {
+            const fresh = pickDistinctVideo(
+              playlistVideos,
+              `${salt}:${playlistVideos.map((card) => card.id).join(",")}`,
+              used,
+            );
+            if (fresh) chosen = clipCard(fresh, salt);
+          }
+          if (!chosen) {
+            slots[slot] = prepare(nonVideoReplacement(list, used), slot);
+            reserveClip(used, slots[slot]);
+            continue;
+          }
         }
         if (chosen) {
           reserveClip(used, chosen);
           slots[slot] = prepare(chosen, slot);
-        } else if (!videos.length) {
-          slots[slot] = prepare(emptyVideo(), slot);
-        } else {
-          slots[slot] = prepare(nonVideoReplacement(list, used), slot);
-          reserveClip(used, slots[slot]);
+          continue;
         }
-        continue;
+      } else {
+        const card = prepare(manualCard(content, layout[slot].leaderboardId, list), slot);
+        reserveClip(used, card);
+        slots[slot] = withVideoStart(card, tick);
       }
-      const card = prepare(manualCard(content, layout[slot].leaderboardId, list), slot);
-      reserveClip(used, card);
-      slots[slot] = withVideoStart(card, tick);
     }
   }
   const rotationSlots = [];

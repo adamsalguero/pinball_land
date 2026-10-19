@@ -24,6 +24,12 @@ function clampCount(value) {
   return Math.min(3, Math.max(1, n));
 }
 
+function clipIdFor(content, raw) {
+  if (content !== "video") return null;
+  const id = String(raw || "").replace(/^starter:/, "").trim();
+  return /^[a-z0-9-]{3,80}$/.test(id) ? id : null;
+}
+
 function normalizeScreen(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   const content = canonicalDisplayContent(incoming.content) || "rotation";
@@ -32,6 +38,7 @@ function normalizeScreen(raw) {
     enabled: incoming.enabled !== false,
     content,
     leaderboardId,
+    clipId: clipIdFor(content, incoming.clipId),
   };
 }
 
@@ -115,6 +122,7 @@ function layoutForDisplays(input) {
       enabled: Number(slot) <= config.count && own.enabled,
       content: source.content,
       leaderboardId: source.leaderboardId,
+      clipId: source.clipId,
       mirror: config.mirror,
       staggerIndex: config.mirror ? 0 : Number(slot) - 1,
     };

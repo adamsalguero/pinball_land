@@ -20,7 +20,7 @@ const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./me
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
-const { starterThemes, pinSeason } = require("./season");
+const { starterThemes } = require("./season");
 const { noteStall } = require("./playback-flags");
 const { relaunchWallChrome } = require("./wall-chrome");
 const { bundledFile } = require("./bundled");
@@ -369,16 +369,6 @@ function createApp({
       })),
       youtube: config.youtube?.[state.theme] || [],
     });
-    const pinTheme = state.theme === "pinnacle" ? pinSeason(clockNow()) : "";
-    const pinVideos = pinTheme
-      ? starterCards(catalogItems, {
-        theme: pinTheme,
-        allAges: config.media.allAges,
-        urlFor: (id) => `/media/cache/${id}`,
-        disabledIds: config.media.disabledIds,
-        isReady: (id) => clips.isReady(id),
-      })
-      : [];
     const timing = effectiveRotation(state);
     const tick = currentTick(state.rotation.startedAt, timing.intervalSec, clockNow(), timing.minInterval);
     for (const slot of Object.keys(slotFallback)) {
@@ -392,7 +382,6 @@ function createApp({
       layout,
       now: clockNow(),
       videoMemory,
-      pinVideos,
     });
     for (const [slot, fallback] of Object.entries(slotFallback)) {
       if (fallback.tick === tick && fallback.card) rotationPlan[slot] = fallback.card;
@@ -411,7 +400,6 @@ function createApp({
       layout,
       now: clockNow() + Math.max(1, Number(timing.intervalSec) || 30) * 1000,
       videoMemory,
-      pinVideos,
     });
     return {
       state: {
@@ -1095,10 +1083,24 @@ function createApp({
     for (const key of Object.keys(slotFallback)) delete slotFallback[key];
   }
 
+  async function clearVideoPins() {
+    const displays = currentConfig().displays;
+    const screens = {};
+    for (const slot of ["1", "2", "3"]) {
+      if (displays.screens[slot]?.content === "video") {
+        screens[slot] = { content: "rotation", clipId: null };
+      }
+    }
+    if (Object.keys(screens).length) await localStore.update({ displays: { screens } });
+    forgetVideoPins();
+  }
+
   app.put("/api/theme", requirePin, async (req, res, next) => {
     try {
+      const previous = store.getState().theme;
       await store.setTheme(req.body?.theme);
-      forgetVideoPins();
+      if (store.getState().theme !== previous) await clearVideoPins();
+      else forgetVideoPins();
       broadcast();
       sendJson(res, 200, payload());
     } catch (err) {
@@ -1331,10 +1333,10 @@ function createApp({
   });
 
   function sendMachineFile(res, board, file) {
-    if (!board || !file || !cacheDir) return res.status(404).send("No machine art");
+    if (!board || !file || !cacheDir) return res.status(404).end();
     const resolved = path.resolve(cacheDir, file);
     if (!isInside(cacheDir, resolved) || !fs.existsSync(resolved)) {
-      return res.status(404).send("No machine art");
+      return res.status(404).end();
     }
     res.setHeader("Cache-Control", "no-store");
     return res.sendFile(resolved);
@@ -1371,13 +1373,18 @@ function createApp({
     try {
       const body = req.body || {};
       if (body.screens && typeof body.screens === "object") {
+        const holiday = store.getState().theme === "halloween" || store.getState().theme === "christmas";
         for (const slot of ["1", "2", "3"]) {
           const screen = body.screens[slot];
           if (!screen) continue;
-          if (screen.content !== undefined && !canonicalDisplayContent(screen.content)) {
+          if (screen.content === "video" && !holiday) {
+            body.screens[slot] = { ...screen, content: "rotation", clipId: null };
+          }
+          const next = body.screens[slot];
+          if (next.content !== undefined && !canonicalDisplayContent(next.content)) {
             return sendJson(res, 400, { error: "Unknown display content" });
           }
-          if (screen.leaderboardId && !store.findBoard(screen.leaderboardId)) {
+          if (next.leaderboardId && !store.findBoard(next.leaderboardId)) {
             return sendJson(res, 400, { error: "Unknown leaderboard" });
           }
         }
@@ -2234,11 +2241,20 @@ function createApp({
     }
   });
 
-  app.get("/api/guest-photos/zip", requirePin, async (req, res, next) => {
+  function zipFailed(err, res) {
+    console.error(err);
+    if (res.headersSent) {
+      if (!res.writableEnded) res.destroy();
+      return;
+    }
+    sendJson(res, 500, { error: "Could not download the photos." });
+  }
+
+  app.get("/api/guest-photos/zip", requirePin, async (req, res) => {
     try {
       await album.zipApproved(res);
     } catch (err) {
-      next(err);
+      zipFailed(err, res);
     }
   });
 
@@ -2252,11 +2268,11 @@ function createApp({
     }
   });
 
-  app.get("/api/guest-photos/events/:id/zip", requirePin, async (req, res, next) => {
+  app.get("/api/guest-photos/events/:id/zip", requirePin, async (req, res) => {
     try {
       await album.zipEvent(req.params.id, res);
     } catch (err) {
-      next(err);
+      zipFailed(err, res);
     }
   });
 

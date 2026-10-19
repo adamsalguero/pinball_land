@@ -77,7 +77,7 @@ function buildPlaylist(state, options = {}) {
     });
   }
   for (const board of state?.leaderboards || []) {
-    if (board.inRotation) {
+    if (board.inRotation && Array.isArray(board.rows) && board.rows.length > 0) {
       cards.push({ type: "leaderboard", id: board.id });
     }
   }

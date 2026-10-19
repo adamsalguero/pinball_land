@@ -86,7 +86,7 @@ input[type="file"][hidden] {
   -webkit-touch-callout: default; cursor: default;
 }
 .lightbox-close {
-  position: absolute; top: 12px; right: 12px;
+  position: absolute; top: 12px; left: 12px;
   width: 48px; height: 48px; border: 0; border-radius: 999px;
   background: #fff; color: #1a1020; font-size: 28px; line-height: 1;
 }

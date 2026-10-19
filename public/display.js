@@ -171,7 +171,6 @@ function activeTheme() {
 }
 
 function themeAllowsVideo() {
-  if (payload?.layout?.[SLOT]?.content === "video") return true;
   const theme = activeTheme();
   return theme === "halloween" || theme === "christmas";
 }
@@ -758,7 +757,7 @@ function resolveCard() {
         failedClipIds = new Set();
       }
     }
-    if (planned?.type === "video" && earlierSlotHasClip(planned)) {
+    if (planned?.type === "video" && earlierSlotHasClip(planned) && !cardMatchesPin(planned)) {
       const fallback = window.PinballRotation.replacementFor(payload.rotationPlan, SLOT, payload.playlist, {
         failedIds: [planned.id],
         salt: `${SLOT}:duplicate`,
@@ -1074,6 +1073,18 @@ function clearStall() {
   wallVideo.onpause = null;
 }
 
+function pinnedClipId() {
+  const layout = payload?.layout?.[SLOT];
+  if (layout?.content !== "video" || !layout.clipId) return "";
+  return String(layout.clipId).replace(/^starter:/, "");
+}
+
+function cardMatchesPin(card) {
+  const id = pinnedClipId();
+  if (!id || !card) return false;
+  return card.starterId === id || card.id === id || card.id === `starter:${id}`;
+}
+
 function earlierSlotHasClip(card) {
   if (!card || card.type !== "video" || !card.url) return false;
   const plan = payload?.rotationPlan || {};
@@ -1109,6 +1120,8 @@ function clipAssignedSlot(url) {
 }
 
 function thisSlotMayPlay(url) {
+  const mine = payload?.rotationPlan?.[SLOT] || payload?.rotationPlan?.[String(SLOT)];
+  if (mine?.type === "video" && mine.url === url) return true;
   const owner = clipAssignedSlot(url);
   return !owner || owner === String(SLOT);
 }

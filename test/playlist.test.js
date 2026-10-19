@@ -49,8 +49,8 @@ test("playlist stagger keeps neighboring TVs on different cards", () => {
   const state = {
     rotation: normalizeRotation({}),
     leaderboards: [
-      { id: "evt", inRotation: true },
-      { id: "mach", inRotation: true },
+      { id: "evt", inRotation: true, rows: [{ name: "Ada", score: 10 }] },
+      { id: "mach", inRotation: true, rows: [{ name: "Bea", score: 20 }] },
     ],
   };
   const playlist = buildPlaylist(state);
@@ -115,14 +115,16 @@ test("currentTick advances by interval and disabled boards drop out", () => {
       },
     }),
     leaderboards: [
-      { id: "hidden", inRotation: false },
-      { id: "shown", inRotation: true },
+      { id: "hidden", inRotation: false, rows: [{ name: "Ada", score: 10 }] },
+      { id: "shown", inRotation: true, rows: [{ name: "Bea", score: 20 }] },
+      { id: "empty", inRotation: true, rows: [] },
     ],
   });
   assert.deepEqual(
     playlist.map((card) => card.type + ":" + (card.key || card.id)),
     ["logo:pinball-land", "clock:clock", "pinboard:pinboard", "leaderboard:shown"]
   );
+  assert.equal(playlist.some((card) => card.id === "empty"), false);
 });
 
 test("screens advance together every dwell and stay on different cards", () => {
@@ -202,7 +204,7 @@ test("leaderboard and pinboard subtypes count as one card, and video mode plays 
   }
 });
 
-test("a pinned video with no cached clip stays a video screen", () => {
+test("a video pin with no cached clip falls back to rotation", () => {
   const playlist = [
     { type: "logo", key: "pinnacle" },
     { type: "logo", key: "pinball-land" },
@@ -225,9 +227,8 @@ test("a pinned video with no cached clip stays a video screen", () => {
     });
     const keys = ["1", "2", "3"].map((slot) => rotationKey(plan[slot]));
     assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
-    assert.equal(plan["1"].type, "video");
-    assert.equal(plan["1"].empty, true);
-    assert.equal(plan["1"].url, "");
+    assert.notEqual(plan["1"].type, "video");
+    assert.notEqual(plan["1"].empty, true);
   }
 });
 

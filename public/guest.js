@@ -96,16 +96,55 @@ post.addEventListener("click", async () => {
   }
 });
 
+function appleHandheld() {
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function homeScreen() {
+  return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+}
+
 function openPhotoLightbox(url, filename) {
   const box = document.getElementById("photo-lightbox");
   const img = document.getElementById("photo-lightbox-img");
-  const link = document.getElementById("photo-lightbox-download");
   img.src = url;
   img.alt = filename || "Guest photo";
-  link.href = `${url}${url.includes("?") ? "&" : "?"}download=1`;
-  link.download = filename || "photo.jpg";
+  box.dataset.photoUrl = url;
+  box.dataset.photoName = filename || "photo.jpg";
   box.hidden = false;
 }
+
+async function shareOrKeep(url, filename) {
+  const name = filename || "photo.jpg";
+  const ios = appleHandheld() || homeScreen();
+  if (ios && typeof navigator.share === "function") {
+    try {
+      const res = await fetch(url, { credentials: "same-origin" });
+      if (res.ok) {
+        const blob = await res.blob();
+        const file = new File([blob], name, { type: blob.type || "image/jpeg" });
+        const payload = { files: [file], title: "Pinball Land" };
+        if (typeof navigator.canShare !== "function" || navigator.canShare(payload)) {
+          await navigator.share(payload);
+          return;
+        }
+      }
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+    }
+  }
+  openPhotoLightbox(url, name);
+  if (!homeScreen()) {
+    const opened = window.open(url, "_blank", "noopener");
+    if (opened) return;
+  }
+}
+
+document.getElementById("photo-lightbox-download").addEventListener("click", () => {
+  const box = document.getElementById("photo-lightbox");
+  shareOrKeep(box.dataset.photoUrl, box.dataset.photoName);
+});
 
 document.getElementById("photo-lightbox-close").addEventListener("click", () => {
   document.getElementById("photo-lightbox").hidden = true;

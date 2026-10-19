@@ -21,13 +21,6 @@ function seasonsOn(now = Date.now()) {
   return seasons;
 }
 
-function pinSeason(now = Date.now()) {
-  const { month } = venueDateParts(now);
-  if (month === 10) return "halloween";
-  if (month === 11 || month === 12) return "christmas";
-  return "";
-}
-
 function starterThemes(theme, now = Date.now()) {
   const forced = String(process.env.PINBALL_STARTER_THEMES || "")
     .split(",")
@@ -44,6 +37,5 @@ module.exports = {
   VENUE_TIME_ZONE,
   venueDateParts,
   seasonsOn,
-  pinSeason,
   starterThemes,
 };
