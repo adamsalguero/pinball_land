@@ -168,7 +168,7 @@ async function runBlobSoak() {
     }
     const bySlot = {};
     for (const slot of slots) {
-      await waitFor(`http://127.0.0.1:${ports[slot]}/json/version`);
+      await waitFor(`http://127.0.0.1:${ports[slot]}/json/version`, 120);
       const connected = await chromium.connectOverCDP(`http://127.0.0.1:${ports[slot]}`);
       browsers.push(connected);
       let page = null;

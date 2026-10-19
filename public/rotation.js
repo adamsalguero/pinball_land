@@ -224,8 +224,15 @@ function planRotation(playlist, options = {}) {
   }
   const autoSlots = rotationSlots.filter((slot) => !slots[slot]);
   if (holidayVideos.length && autoSlots.length) {
-    const owner = autoSlots[((Number(tick) || 0) % autoSlots.length + autoSlots.length) % autoSlots.length];
-    for (const source of holidayVideos) {
+    // One clip walks left, center, right and stays for that whole dwell.
+    // The next clip gets the next pass, so a playlist with two cartoons
+    // still plays both without putting two screens on video.
+    const span = autoSlots.length * holidayVideos.length;
+    const step = ((Number(tick) || 0) % span + span) % span;
+    const owner = autoSlots[step % autoSlots.length];
+    const start = Math.floor(step / autoSlots.length) % holidayVideos.length;
+    for (let hop = 0; hop < holidayVideos.length; hop += 1) {
+      const source = holidayVideos[(start + hop) % holidayVideos.length];
       if (clipTaken(used, source)) continue;
       const chosen = withVideoStart(prepare(source, owner), `${source.id}:${owner}`);
       reserveClip(used, chosen);

@@ -477,13 +477,16 @@ test("a holiday clip walks left, center, right and stays for the whole dwell", (
     now: tick * 30000,
   });
   const order = ["1", "2", "3"];
+  const played = [];
   for (let tick = 0; tick < 9; tick += 1) {
     const plan = at(tick);
     const urls = ["1", "2", "3"].map((slot) => (plan[slot]?.type === "video" ? plan[slot].url : "")).filter(Boolean);
     assert.equal(urls.length, 1, JSON.stringify(urls));
     const owner = order[tick % 3];
     assert.equal(plan[owner].type, "video");
-    assert.match(plan[owner].url, /skeleton-dance-1929|christmas-comes-1936/);
+    const expected = tick < 3 || tick >= 6 ? /skeleton-dance-1929/ : /christmas-comes-1936/;
+    assert.match(plan[owner].url, expected);
+    played.push(plan[owner].url);
     const mid = planRotation(playlist, {
       startedAt: 0,
       intervalSec: 30,
@@ -493,6 +496,8 @@ test("a holiday clip walks left, center, right and stays for the whole dwell", (
     });
     assert.equal(mid[owner].playId, plan[owner].playId);
   }
+  assert.equal(played.filter((url) => url.includes("skeleton-dance-1929")).length, 6);
+  assert.equal(played.filter((url) => url.includes("christmas-comes-1936")).length, 3);
 });
 
 test("two cards with the same file never share a screen", () => {
