@@ -85,7 +85,7 @@ test("mirror keeps each screen's saved content but shows screen 1 and the same r
       3: { enabled: false, content: "leaderboard", leaderboardId: "board-a" },
     },
   });
-  assert.equal(config.screens["2"].content, "rotation");
+  assert.equal(config.screens["2"].content, "video");
   const layout = layoutForDisplays(config);
   assert.equal(layout["1"].content, "logos");
   assert.equal(layout["2"].content, "logos");

@@ -429,6 +429,7 @@ const DISPLAY_CONTENT = [
   { id: "leaderboard", label: "Leaderboard" },
   { id: "pinboard", label: "Pinboard" },
   { id: "clock", label: "Clock" },
+  { id: "video", label: "Video" },
 ];
 
 function shareUrl() {

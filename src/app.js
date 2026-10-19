@@ -20,7 +20,7 @@ const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./me
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
-const { starterThemes } = require("./season");
+const { starterThemes, pinSeason } = require("./season");
 const { noteStall } = require("./playback-flags");
 const { relaunchWallChrome } = require("./wall-chrome");
 const { bundledFile } = require("./bundled");
@@ -369,6 +369,16 @@ function createApp({
       })),
       youtube: config.youtube?.[state.theme] || [],
     });
+    const pinTheme = state.theme === "pinnacle" ? pinSeason(clockNow()) : "";
+    const pinVideos = pinTheme
+      ? starterCards(catalogItems, {
+        theme: pinTheme,
+        allAges: config.media.allAges,
+        urlFor: (id) => `/media/cache/${id}`,
+        disabledIds: config.media.disabledIds,
+        isReady: (id) => clips.isReady(id),
+      })
+      : [];
     const timing = effectiveRotation(state);
     const tick = currentTick(state.rotation.startedAt, timing.intervalSec, clockNow(), timing.minInterval);
     for (const slot of Object.keys(slotFallback)) {
@@ -382,6 +392,7 @@ function createApp({
       layout,
       now: clockNow(),
       videoMemory,
+      pinVideos,
     });
     for (const [slot, fallback] of Object.entries(slotFallback)) {
       if (fallback.tick === tick && fallback.card) rotationPlan[slot] = fallback.card;
@@ -400,6 +411,7 @@ function createApp({
       layout,
       now: clockNow() + Math.max(1, Number(timing.intervalSec) || 30) * 1000,
       videoMemory,
+      pinVideos,
     });
     return {
       state: {
