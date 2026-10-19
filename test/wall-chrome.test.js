@@ -22,6 +22,7 @@ test("each display gets its own Chrome profile and decode flags", () => {
   assert.ok(args.includes("--disable-backgrounding-occluded-windows"));
   assert.ok(args.includes("--disable-background-media-suspend"));
   assert.ok(args.some((arg) => arg.includes("CalculateNativeWinOcclusion")));
+  assert.ok(args.includes("--force-device-scale-factor=1"));
   assert.ok(args.includes("--disable-gpu-video-decode"));
   assert.ok(args.includes("--disable-accelerated-video-decode"));
   assert.ok(args.some((arg) => arg.startsWith("--window-position=10,20")));

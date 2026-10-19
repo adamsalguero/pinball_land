@@ -64,6 +64,22 @@ function sortDisplays(displays) {
   });
 }
 
+function scaleOf(display) {
+  const scale = Number(display?.scaleFactor);
+  return scale > 0 ? scale : 1;
+}
+
+function physicalBounds(bounds, scaleFactor) {
+  const scale = Number(scaleFactor) > 0 ? Number(scaleFactor) : 1;
+  const box = bounds || {};
+  return {
+    x: Math.round((Number(box.x) || 0) * scale),
+    y: Math.round((Number(box.y) || 0) * scale),
+    width: Math.round((Number(box.width) || 0) * scale),
+    height: Math.round((Number(box.height) || 0) * scale),
+  };
+}
+
 function applyOrder(sorted, order) {
   if (!order?.length) return sorted;
   const byId = new Map(sorted.map((display) => [String(display.id), display]));
@@ -99,6 +115,7 @@ function mapDisplaysToSlots(displays, options = {}) {
     windows.push({
       slot,
       bounds: display.bounds,
+      scaleFactor: scaleOf(display),
       id: display.id,
     });
   }
@@ -148,6 +165,8 @@ module.exports = {
   clampCount,
   normalizeDisplays,
   sortDisplays,
+  scaleOf,
+  physicalBounds,
   applyOrder,
   mapDisplaysToSlots,
   layoutForDisplays,

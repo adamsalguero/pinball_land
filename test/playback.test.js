@@ -97,6 +97,11 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
     assert.match(source, /IntensiveWakeUpThrottling/);
   }
   assert.match(kiosk, /backgroundThrottling: false/);
+  assert.match(kiosk, /physicalBounds/);
+  assert.match(kiosk, /setZoomFactor/);
+  assert.match(kiosk, /scaleFactor: display.scaleFactor/);
+  assert.match(launcher, /force-device-scale-factor=1/);
+  assert.match(launcher, /SetProcessDPIAware/);
   assert.match(kiosk, /displayUrl/);
   assert.match(kiosk, /discoverDisplayOrigins/);
   assert.match(launcher, /localhost/);
@@ -119,6 +124,9 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
   assert.match(fs.readFileSync(path.join(__dirname, "..", "public", "control.html"), "utf8"), /id="decor-toggle"/);
   assert.match(control, /label: "Video"/);
   assert.match(wall, /function decorationsPaused\(\) \{\n  return Boolean\(SHOT \|\| document\.documentElement\.dataset\.motion === "reduced"\);\n\}/);
+  assert.match(wall, /else if \(planned\?\.type === "video" && heldClip\.tick === serverTick\(\)\)/);
+  assert.match(wall, /const publicUrl = payload\?\.guest\?\.publicUrl \|\| ""/);
+  assert.match(control, /\(\$\{percent\}%\) at/);
   assert.match(control, /label: "Auto"/);
   assert.match(control, /Show photo on wall/);
   assert.match(control, /Remove photo/);

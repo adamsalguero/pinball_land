@@ -15,7 +15,7 @@ const path = require("path");
 const { loadConfig, writeDefaultPin } = require("./config");
 const { DEFAULT_PIN } = require("./devices");
 const { startServer } = require("./server");
-const { mapDisplaysToSlots, windowLayoutKey } = require("./displays");
+const { mapDisplaysToSlots, physicalBounds, windowLayoutKey } = require("./displays");
 const { placementDecision, expectedMonitorCount, monitorSignature, MONITOR_WAIT_MS } = require("./watchdog");
 const { defaultDataDir, dataLayout } = require("./paths");
 const { launchDisplays } = require("./wall-chrome");
@@ -67,6 +67,22 @@ function closeWindows() {
   windows.clear();
 }
 
+function applyWallZoom(win, scaleFactor) {
+  const scale = Number(scaleFactor) > 0 ? Number(scaleFactor) : 1;
+  if (!(scale > 1) || !win) return;
+  const zoom = 1 / scale;
+  const apply = () => {
+    if (win.isDestroyed()) return;
+    try {
+      win.webContents.setZoomFactor(zoom);
+    } catch {
+      // The window can close while the page is still loading.
+    }
+  };
+  apply();
+  win.webContents.on("did-finish-load", apply);
+}
+
 function openWaitingWindows() {
   const displays = screen.getAllDisplays();
   const signature = displays.map((display) => String(display.id)).join(",") || "none";
@@ -97,6 +113,7 @@ function openWaitingWindows() {
     });
     win.setMenuBarVisibility(false);
     win.setFullScreen(true);
+    applyWallZoom(win, display?.scaleFactor);
     win.loadFile(waitingPage);
     win.on("closed", () => {
       if (windows.get(`wait-${index}`) === win) windows.delete(`wait-${index}`);
@@ -193,7 +210,7 @@ function openDisplayWindows({ onlySlots = null } = {}) {
       displays: wanted.map((item) => ({
         slot: item.slot,
         url: displayUrl(item.slot),
-        bounds: item.bounds,
+        bounds: physicalBounds(item.bounds, item.scaleFactor),
       })),
     });
     if (launched.length) {
@@ -210,7 +227,7 @@ function openDisplayWindows({ onlySlots = null } = {}) {
   for (const item of wanted) {
     const current = windows.get(item.slot);
     if (current && !current.isDestroyed()) continue;
-    const { x, y, width, height } = item.bounds;
+    const { x, y, width, height } = item.bounds || {};
     const win = new BrowserWindow({
       x,
       y,
@@ -231,6 +248,7 @@ function openDisplayWindows({ onlySlots = null } = {}) {
     });
     win.setMenuBarVisibility(false);
     win.setFullScreen(true);
+    applyWallZoom(win, item.scaleFactor);
     win.loadURL(displayUrl(item.slot));
     win.on("unresponsive", () => {
       console.warn(`Display ${item.slot} is unresponsive. Reloading.`);
@@ -337,6 +355,7 @@ async function reportMonitors() {
   const displays = screen.getAllDisplays().map((display) => ({
     id: display.id,
     bounds: display.bounds,
+    scaleFactor: display.scaleFactor,
   }));
   await fetch(`http://127.0.0.1:${port}/api/kiosk/monitors`, {
     method: "POST",
