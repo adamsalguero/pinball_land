@@ -379,7 +379,7 @@ select {
 .lightbox-close {
   position: absolute;
   top: 12px;
-  right: 12px;
+  left: 12px;
   width: 48px;
   height: 48px;
   border: 0;

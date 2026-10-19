@@ -166,7 +166,22 @@ test("rotation payload, amenity copy, theme, and machine enable", async () => {
     const machine = added.data.state.leaderboards.at(-1);
     assert.equal(machine.kind, "machine");
     assert.equal(machine.inRotation, true);
-    assert.ok(added.data.playlist.some((card) => card.type === "leaderboard" && card.id === machine.id));
+    assert.equal(added.data.playlist.some((card) => card.id === machine.id), false);
+    const pinnedBoard = await json(origin, "/api/displays", {
+      method: "PUT",
+      headers,
+      body: { screens: { 1: { content: "leaderboard", leaderboardId: machine.id } } },
+    });
+    assert.equal(pinnedBoard.data.rotationPlan["1"].type, "leaderboard");
+    assert.equal(pinnedBoard.data.rotationPlan["1"].id, machine.id);
+    assert.notEqual(pinnedBoard.data.rotationPlan["2"]?.type, "leaderboard");
+    assert.notEqual(pinnedBoard.data.rotationPlan["3"]?.type, "leaderboard");
+    const scored = await json(origin, `/api/leaderboards/${machine.id}/rows`, {
+      method: "POST",
+      headers,
+      body: { name: "Taylor", score: "1000" },
+    });
+    assert.equal(scored.data.playlist.some((card) => card.type === "leaderboard" && card.id === machine.id), true);
 
     const hidden = await json(origin, `/api/leaderboards/${machine.id}`, {
       method: "PUT",
@@ -206,6 +221,56 @@ test("can switch a slot and add a score with the PIN header", async () => {
       body: { name: "Taylor", score: "333" },
     });
     assert.ok(added.data.state.leaderboards[0].rows.some((row) => row.name === "Taylor"));
+  } finally {
+    server.close();
+  }
+});
+
+test("holiday clip pins clear when the theme changes, and pinnacle never keeps one", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const headers = { "x-pin": "2224" };
+    await json(origin, "/api/theme", { method: "PUT", headers, body: { theme: "halloween" } });
+    const pinned = await json(origin, "/api/displays", {
+      method: "PUT",
+      headers,
+      body: { screens: { 1: { content: "video", clipId: "skeleton-dance-1929" } } },
+    });
+    assert.equal(pinned.data.displays.screens["1"].content, "video");
+    assert.equal(pinned.data.displays.screens["1"].clipId, "skeleton-dance-1929");
+    const christmas = await json(origin, "/api/theme", { method: "PUT", headers, body: { theme: "christmas" } });
+    assert.equal(christmas.data.displays.screens["1"].content, "rotation");
+    assert.equal(christmas.data.displays.screens["1"].clipId, null);
+    const regular = await json(origin, "/api/displays", {
+      method: "PUT",
+      headers,
+      body: { screens: { 1: { content: "video", clipId: "christmas-comes-1936" } } },
+    });
+    assert.equal(regular.data.state.theme, "christmas");
+    await json(origin, "/api/theme", { method: "PUT", headers, body: { theme: "pinnacle" } });
+    const blocked = await json(origin, "/api/displays", {
+      method: "PUT",
+      headers,
+      body: { screens: { 1: { content: "video", clipId: "skeleton-dance-1929" } } },
+    });
+    assert.equal(blocked.data.displays.screens["1"].content, "rotation");
+    assert.equal(["1", "2", "3"].some((slot) => blocked.data.rotationPlan[slot]?.type === "video"), false);
+    assert.equal(regular.data.displays.screens["1"].content, "video");
+  } finally {
+    server.close();
+  }
+});
+
+test("download all returns a zip instead of an error page", async () => {
+  const { server, origin } = await startServer();
+  try {
+    const res = await fetch(`${origin}/api/guest-photos/zip`, { headers: { "x-pin": "2224" } });
+    const type = res.headers.get("content-type") || "";
+    const bytes = Buffer.from(await res.arrayBuffer());
+    assert.equal(res.status, 200);
+    assert.match(type, /zip/);
+    assert.equal(bytes.subarray(0, 2).toString(), "PK");
+    assert.doesNotMatch(bytes.toString("utf8", 0, 80), /error/i);
   } finally {
     server.close();
   }

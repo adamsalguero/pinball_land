@@ -2,7 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 const { loadCatalog, starterCards } = require("../src/catalog");
-const { seasonsOn, starterThemes, pinSeason } = require("../src/season");
+const { seasonsOn, starterThemes } = require("../src/season");
 const { buildPlaylist, planRotation, normalizeRotation } = require("../src/playlist");
 
 const OCT18 = Date.parse("2026-10-18T18:18:44-07:00");
@@ -55,10 +55,6 @@ test("pacific dates pick halloween through november 1 and christmas through the 
     assert.deepEqual(seasonsOn(Date.parse("2026-12-01T00:30:00-08:00")), ["christmas"]);
     assert.deepEqual(seasonsOn(Date.parse("2026-12-26T21:00:00-08:00")), ["christmas"]);
     assert.deepEqual(seasonsOn(Date.parse("2026-12-27T12:00:00-08:00")), []);
-    assert.equal(pinSeason(OCT18), "halloween");
-    assert.equal(pinSeason(Date.parse("2026-11-15T12:00:00-08:00")), "christmas");
-    assert.equal(pinSeason(DEC18), "christmas");
-    assert.equal(pinSeason(JULY4), "");
     assert.deepEqual(starterThemes("pinnacle", OCT18), []);
     assert.deepEqual(starterThemes("christmas", OCT18), ["christmas"]);
     assert.deepEqual(starterThemes("halloween", OCT18), ["halloween"]);
@@ -178,30 +174,52 @@ test("the regular theme shows no video, and switching to Christmas starts Christ
   assert.deepEqual(videoUrls(regularPlan).filter(Boolean), []);
   for (const slot of ["1", "2", "3"]) assert.notEqual(regularPlan[slot]?.type, "video");
 
-  const pinned = {
-    1: { content: "video", enabled: true },
+  const skeletonPin = {
+    1: { content: "video", clipId: "skeleton-dance-1929", enabled: true },
     2: { content: "rotation", enabled: true },
     3: { content: "rotation", enabled: true },
   };
-  const octoberPin = planRotation(october, {
+  const halloweenPin = planRotation(halloween, {
     startedAt: 0,
     intervalSec: 30,
     screenCount: 3,
-    layout: pinned,
+    layout: skeletonPin,
     now: OCT18,
-    pinVideos: halloween.filter((card) => card.type === "video"),
   });
-  assert.match(octoberPin["1"].url, /skeleton-dance-1929/);
-  assert.notEqual(octoberPin["2"].type, "video");
-  assert.notEqual(octoberPin["3"].type, "video");
-  const decemberPin = planRotation(playlistFor("pinnacle", DEC18), {
+  assert.match(halloweenPin["1"].url, /skeleton-dance-1929/);
+  assert.equal(halloweenPin["1"].title, "The Skeleton Dance");
+  assert.notEqual(halloweenPin["2"].type, "video");
+  assert.notEqual(halloweenPin["3"].type, "video");
+  const replay = planRotation(halloween, {
     startedAt: 0,
     intervalSec: 30,
     screenCount: 3,
-    layout: pinned,
-    now: DEC18,
-    pinVideos: christmas.filter((card) => card.type === "video"),
+    layout: skeletonPin,
+    now: OCT18,
+    videoMemory: { 1: { gen: 1, id: "" } },
   });
-  assert.match(decemberPin["1"].url, /christmas-comes-1936/);
-  assert.doesNotMatch(decemberPin["1"].url, /bundled/);
+  assert.equal(replay["1"].id, halloweenPin["1"].id);
+  assert.notEqual(replay["1"].playId, halloweenPin["1"].playId);
+  const regularPin = planRotation(october, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout: skeletonPin,
+    now: OCT18,
+  });
+  for (const slot of ["1", "2", "3"]) assert.notEqual(regularPin[slot]?.type, "video");
+  const christmasPin = planRotation(christmas, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout: {
+      1: { content: "video", clipId: "christmas-comes-1936", enabled: true },
+      2: { content: "rotation", enabled: true },
+      3: { content: "rotation", enabled: true },
+    },
+    now: OCT18,
+  });
+  assert.match(christmasPin["1"].url, /christmas-comes-1936/);
+  assert.equal(christmasPin["1"].title, "Christmas Comes But Once a Year");
+  assert.doesNotMatch(christmasPin["1"].url, /skeleton-dance/);
 });

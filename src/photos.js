@@ -166,22 +166,27 @@ class GuestAlbum {
       .map((photo) => this.toPublic(photo));
   }
 
-  async zipApproved(res) {
-    const photos = this.photos.filter((photo) => photo.status === "approved");
-    const archiver = require("archiver");
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", "attachment; filename=\"pinboard.zip\"");
-    const archive = archiver("zip", { zlib: { level: 9 } });
-    archive.on("error", (err) => {
-      throw err;
+  async sendZip(res, photos, filename, nameFor) {
+    const { ZipArchive } = require("archiver");
+    const archive = new ZipArchive({ zlib: { level: 9 } });
+    const finished = new Promise((resolve, reject) => {
+      archive.on("error", reject);
+      archive.on("end", resolve);
     });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     archive.pipe(res);
     for (const photo of photos) {
       const filePath = this.filePath(photo);
       if (!filePath || !fs.existsSync(filePath)) continue;
-      archive.file(filePath, { name: `${photo.id}.jpg` });
+      archive.file(filePath, { name: nameFor(photo) });
     }
-    await archive.finalize();
+    await Promise.all([archive.finalize(), finished]);
+  }
+
+  async zipApproved(res) {
+    const photos = this.photos.filter((photo) => photo.status === "approved");
+    await this.sendZip(res, photos, "pinboard.zip", (photo) => `${photo.id}.jpg`);
   }
 
   filePath(photo) {
@@ -259,21 +264,11 @@ class GuestAlbum {
   async zipEvent(eventId, res) {
     const event = this.events.find((item) => item.id === eventId) || { name: "photos" };
     const photos = this.photos.filter((photo) => photo.eventId === eventId && photo.status === "approved");
-    const archiver = require("archiver");
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="${event.name.replace(/[^\w.-]+/g, "-")}.zip"`);
-    const archive = archiver("zip", { zlib: { level: 9 } });
-    archive.on("error", (err) => {
-      throw err;
-    });
-    archive.pipe(res);
-    for (const photo of photos) {
-      const filePath = this.filePath(photo);
-      if (!filePath || !fs.existsSync(filePath)) continue;
+    const filename = `${String(event.name || "photos").replace(/[^\w.-]+/g, "-")}.zip`;
+    await this.sendZip(res, photos, filename, (photo) => {
       const safeName = String(photo.guestName || "guest").replace(/[^\w.-]+/g, "-").slice(0, 40) || "guest";
-      archive.file(filePath, { name: `${safeName}-${photo.id}.jpg` });
-    }
-    await archive.finalize();
+      return `${safeName}-${photo.id}.jpg`;
+    });
   }
 }
 

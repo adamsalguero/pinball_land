@@ -18,6 +18,10 @@ test("PIN unlock, displays, rotation, leaderboard, theme, present", async ({ pag
   const left = page.locator(".screen-card").first();
   for (const name of ["Logos", "Amenities", "Leaderboard", "Pinboard", "Clock", "Auto"]) {
     const button = left.getByRole("button", { name, exact: true });
+    if (name === "Leaderboard") {
+      await expect(button).toBeDisabled();
+      continue;
+    }
     await button.click();
     await expect(button).toHaveClass(/active/);
   }
@@ -28,6 +32,11 @@ test("PIN unlock, displays, rotation, leaderboard, theme, present", async ({ pag
     const cached = (body.playlist || []).some((card) => card.type === "video" && String(card.url || "").includes("/media/cache/"));
     return body.state.theme === "halloween" && cached;
   }, { timeout: 150000 }).toBeTruthy();
+  await page.goto("/admin");
+  await expect(left.getByRole("button", { name: "Video", exact: true })).toHaveCount(0);
+  await expect(left.getByRole("button", { name: "The Skeleton Dance" })).toBeVisible();
+  await left.getByRole("button", { name: "The Skeleton Dance" }).click();
+  await expect(page.locator("#toast")).toHaveText("Layout saved");
   await page.goto("/display/1?shot=1");
   await expect(page.locator("#screen")).toBeVisible();
   await page.goto("/admin");
@@ -180,7 +189,7 @@ test("wall and controller snapshots", async ({ page }) => {
   await expect(page).toHaveScreenshot("wall-logo.png");
 
   await page.goto("/display/1?preview=board&fixture=long&shot=1");
-  await expect(page.getByText("First")).toBeVisible();
+  await expect(page.getByText("First", { exact: true })).toBeVisible();
   await page.screenshot({ path: "e2e/artifacts/wall-board.png" });
   await expect(page).toHaveScreenshot("wall-board.png");
 

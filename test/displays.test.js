@@ -107,12 +107,25 @@ test("mirror keeps each screen's saved content but shows screen 1 and the same r
     },
   });
   assert.equal(config.screens["2"].content, "video");
+  assert.equal(config.screens["2"].clipId, null);
   const layout = layoutForDisplays(config);
   assert.equal(layout["1"].content, "logos");
   assert.equal(layout["2"].content, "logos");
   assert.equal(layout["2"].staggerIndex, 0);
   assert.equal(layout["3"].enabled, false);
   assert.equal(layout["1"].staggerIndex, 0);
+});
+
+test("a screen remembers the holiday clip it is pinned to", () => {
+  const config = normalizeDisplays({
+    screens: { 1: { content: "video", clipId: "starter:skeleton-dance-1929" } },
+  });
+  assert.equal(config.screens["1"].clipId, "skeleton-dance-1929");
+  assert.equal(layoutForDisplays(config)["1"].clipId, "skeleton-dance-1929");
+  const cleared = normalizeDisplays({
+    screens: { 1: { content: "logos", clipId: "skeleton-dance-1929" } },
+  });
+  assert.equal(cleared.screens["1"].clipId, null);
 });
 
 test("window layout ignores content changes and follows count, enable, order, and restart", () => {
