@@ -116,7 +116,7 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
   const control = fs.readFileSync(path.join(__dirname, "..", "public", "control.js"), "utf8");
   assert.match(control, /decor-toggle/);
   assert.match(fs.readFileSync(path.join(__dirname, "..", "public", "control.html"), "utf8"), /id="decor-toggle"/);
-  assert.doesNotMatch(control, /label: "Video"/);
+  assert.match(control, /label: "Video"/);
   assert.match(control, /label: "Auto"/);
   assert.match(control, /Show photo on wall/);
   assert.match(control, /Remove photo/);

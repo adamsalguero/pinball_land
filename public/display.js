@@ -171,6 +171,7 @@ function activeTheme() {
 }
 
 function themeAllowsVideo() {
+  if (payload?.layout?.[SLOT]?.content === "video") return true;
   const theme = activeTheme();
   return theme === "halloween" || theme === "christmas";
 }

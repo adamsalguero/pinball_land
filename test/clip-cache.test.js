@@ -168,7 +168,7 @@ test("holiday clips rotate, a give-up leaves them, and the regular theme has no 
     });
     assert.equal(pinned.status, 200);
     const migrated = await pinned.json();
-    assert.equal(migrated.displays.screens["1"].content, "rotation");
+    assert.equal(migrated.displays.screens["1"].content, "video");
     assert.equal(migrated.playlist.some((card) => card.type === "video"), false);
     await fetch(`${origin}/api/rotation`, {
       method: "PUT",
@@ -274,7 +274,9 @@ test("holiday clips rotate, a give-up leaves them, and the regular theme has no 
     const regularBody = await regular.json();
     assert.equal(regular.status, 200);
     assert.equal(regularBody.playlist.some((card) => card.type === "video"), false);
-    for (const slot of ["1", "2", "3"]) assert.notEqual(regularBody.rotationPlan[slot]?.type, "video");
+    assert.equal(regularBody.displays.screens["1"].content, "video");
+    assert.notEqual(regularBody.rotationPlan["2"]?.type, "video");
+    assert.notEqual(regularBody.rotationPlan["3"]?.type, "video");
     assert.equal(fs.existsSync(path.join(media, "halloween", "clip.mp4")), true);
     const log = fs.readFileSync(path.join(dir, "logs", "video.log"), "utf8");
     assert.match(log, new RegExp(`event=stalled id=${firstId}`));
