@@ -223,8 +223,10 @@ function planRotation(playlist, options = {}) {
     rotationSlots.push(slot);
   }
   const n = list.length;
-  // A holiday clip keeps one screen for the whole season. The play id is the
-  // clip id, so the dwell clock does not reload it every tick.
+  // One auto holiday clip, walking left, center, right with each dwell.
+  // The play id stays the clip id for that whole slot, so the screen does not
+  // reload it until the dwell moves it. A pinned video is the only way a
+  // second screen plays a clip at the same time.
   const holidayVideos = [];
   const seenHoliday = new Set();
   for (const source of list) {
@@ -233,24 +235,33 @@ function planRotation(playlist, options = {}) {
     seenHoliday.add(source.url);
     holidayVideos.push(source);
   }
-  let holidaySlot = 0;
-  for (const source of holidayVideos) {
-    while (holidaySlot < rotationSlots.length && slots[rotationSlots[holidaySlot]]) holidaySlot += 1;
-    if (holidaySlot >= rotationSlots.length) break;
-    if (clipTaken(used, source)) continue;
-    const owner = rotationSlots[holidaySlot];
-    holidaySlot += 1;
-    const chosen = withVideoStart(prepare(source, owner), source.id);
-    reserveClip(used, chosen);
-    slots[owner] = chosen;
+  const autoSlots = rotationSlots.filter((slot) => !slots[slot]);
+  if (holidayVideos.length && autoSlots.length) {
+    // One clip walks left, center, right and stays for that whole dwell.
+    // The next clip gets the next pass, so a playlist with two cartoons
+    // still plays both without putting two screens on video.
+    const span = autoSlots.length * holidayVideos.length;
+    const step = ((Number(tick) || 0) % span + span) % span;
+    const owner = autoSlots[step % autoSlots.length];
+    const start = Math.floor(step / autoSlots.length) % holidayVideos.length;
+    for (let hop = 0; hop < holidayVideos.length; hop += 1) {
+      const source = holidayVideos[(start + hop) % holidayVideos.length];
+      if (clipTaken(used, source)) continue;
+      const chosen = withVideoStart(prepare(source, owner), `${source.id}:${owner}`);
+      reserveClip(used, chosen);
+      slots[owner] = chosen;
+      break;
+    }
   }
   const inWindow = new Set();
   for (let offset = 0; offset < rotationSlots.length && n; offset += 1) {
     inWindow.add((((tick + offset) % n) + n) % n);
   }
+  const autoHasVideo = () => rotationSlots.some((slot) => slots[slot]?.type === "video" && slots[slot].url);
   // Other clips stay on the screen that owns their playlist index. The next
-  // dwell must not slide one onto a neighbor.
+  // dwell must not slide one onto a neighbor. Auto still shows only one clip.
   for (const index of inWindow) {
+    if (autoHasVideo()) break;
     const source = list[index];
     if (!source || source.type !== "video" || !source.url || source.blocked || source.empty || source.holiday) continue;
     const owner = rotationSlots[index % rotationSlots.length];

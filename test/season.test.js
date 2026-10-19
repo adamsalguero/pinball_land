@@ -84,15 +84,14 @@ test("the real catalog gives each in-season clip one screen and never a second",
   ];
   for (const item of cases) {
     const playlist = playlistFor(item.theme, item.now);
-    let previous = null;
-    const homes = new Map();
     for (let tick = 0; tick < 16; tick += 1) {
+      const now = item.now + tick * 30000;
       const plan = planRotation(playlist, {
         startedAt: 0,
         intervalSec: 30,
         screenCount: 3,
         layout,
-        now: item.now + tick * 30000,
+        now,
       });
       const urls = videoUrls(plan).filter(Boolean);
       const skeleton = urls.filter((url) => url.includes("skeleton-dance-1929"));
@@ -100,20 +99,11 @@ test("the real catalog gives each in-season clip one screen and never a second",
       assert.equal(skeleton.length, item.skeleton, `${item.theme} tick ${tick}`);
       assert.equal(christmas.length, item.christmas, `${item.theme} tick ${tick}`);
       assert.equal(new Set(urls).size, urls.length, `${item.theme} tick ${tick}`);
-      for (const slot of ["1", "2", "3"]) {
-        const url = plan[slot]?.type === "video" ? plan[slot].url : "";
-        if (!url) continue;
-        if (!homes.has(url)) homes.set(url, slot);
-        assert.equal(homes.get(url), slot, `${url} moved`);
-        if (previous) {
-          for (const other of ["1", "2", "3"]) {
-            if (other === slot) continue;
-            const otherUrl = previous[other]?.type === "video" ? previous[other].url : "";
-            assert.notEqual(url, otherUrl, `${url} slid onto slot ${slot}`);
-          }
-        }
+      if (item.skeleton || item.christmas) {
+        const dwell = Math.floor(now / 30000);
+        const owner = String((dwell % 3) + 1);
+        assert.equal(plan[owner]?.type, "video", `${item.theme} tick ${tick} slot ${owner}`);
       }
-      previous = plan;
       if (item.theme === "pinnacle") {
         for (const slot of ["1", "2", "3"]) {
           assert.notEqual(plan[slot]?.type, "video", `pinnacle tick ${tick} slot ${slot}`);

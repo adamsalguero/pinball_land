@@ -378,13 +378,15 @@ test("cached halloween cartoon advances past ten seconds in Chrome", async ({ re
       data: { theme: "halloween" },
     });
     expect(theme.ok()).toBeTruthy();
+    // The holiday clip walks across every auto screen. Leave only the left
+    // screen on so this sample can watch one clip for ten seconds.
     const pinned = await request.put("/api/displays", {
       headers: { "x-pin": "2224" },
       data: {
         screens: {
-          1: { content: "video" },
-          2: { content: "rotation" },
-          3: { content: "rotation" },
+          1: { content: "rotation", enabled: true },
+          2: { content: "rotation", enabled: false },
+          3: { content: "rotation", enabled: false },
         },
       },
     });
