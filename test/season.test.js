@@ -55,12 +55,14 @@ test("pacific dates pick halloween through november 1 and christmas through the 
     assert.deepEqual(seasonsOn(Date.parse("2026-12-01T00:30:00-08:00")), ["christmas"]);
     assert.deepEqual(seasonsOn(Date.parse("2026-12-26T21:00:00-08:00")), ["christmas"]);
     assert.deepEqual(seasonsOn(Date.parse("2026-12-27T12:00:00-08:00")), []);
-    assert.deepEqual(starterThemes("pinnacle", OCT18), ["halloween"]);
-    assert.deepEqual(starterThemes("christmas", OCT18), ["halloween", "christmas"]);
+    assert.deepEqual(starterThemes("pinnacle", OCT18), []);
+    assert.deepEqual(starterThemes("christmas", OCT18), ["christmas"]);
     assert.deepEqual(starterThemes("halloween", OCT18), ["halloween"]);
     assert.deepEqual(starterThemes("pinnacle", JULY4), []);
     assert.deepEqual(starterThemes("halloween", JULY4), ["halloween"]);
-    assert.deepEqual(starterThemes("pinnacle", DEC18), ["christmas"]);
+    assert.deepEqual(starterThemes("christmas", JULY4), ["christmas"]);
+    assert.deepEqual(starterThemes("pinnacle", DEC18), []);
+    assert.deepEqual(starterThemes("christmas", DEC18), ["christmas"]);
     assert.ok(catalog.some((item) => item.id === "skeleton-dance-1929" && item.holiday === "halloween"));
     assert.ok(catalog.some((item) => item.id === "christmas-comes-1936" && item.holiday === "christmas"));
   } finally {
@@ -71,12 +73,14 @@ test("pacific dates pick halloween through november 1 and christmas through the 
 
 test("the real catalog gives each in-season clip one screen and never a second", () => {
   const cases = [
-    { theme: "pinnacle", now: OCT18, skeleton: 1, christmas: 0 },
+    { theme: "pinnacle", now: OCT18, skeleton: 0, christmas: 0 },
     { theme: "halloween", now: OCT18, skeleton: 1, christmas: 0 },
-    { theme: "christmas", now: OCT18, skeleton: 1, christmas: 1 },
+    { theme: "christmas", now: OCT18, skeleton: 0, christmas: 1 },
     { theme: "pinnacle", now: JULY4, skeleton: 0, christmas: 0 },
     { theme: "halloween", now: JULY4, skeleton: 1, christmas: 0 },
-    { theme: "pinnacle", now: DEC18, skeleton: 0, christmas: 1 },
+    { theme: "christmas", now: JULY4, skeleton: 0, christmas: 1 },
+    { theme: "pinnacle", now: DEC18, skeleton: 0, christmas: 0 },
+    { theme: "christmas", now: DEC18, skeleton: 0, christmas: 1 },
   ];
   for (const item of cases) {
     const playlist = playlistFor(item.theme, item.now);
@@ -110,6 +114,63 @@ test("the real catalog gives each in-season clip one screen and never a second",
         }
       }
       previous = plan;
+      if (item.theme === "pinnacle") {
+        for (const slot of ["1", "2", "3"]) {
+          assert.notEqual(plan[slot]?.type, "video", `pinnacle tick ${tick} slot ${slot}`);
+        }
+      }
+      if (item.theme === "christmas") {
+        assert.equal(urls.some((url) => url.includes("christmas-comes-1936")), true);
+      }
     }
   }
+});
+
+test("the regular theme shows no video, and switching to Christmas starts Christmas Comes", () => {
+  const library = {
+    id: "library-loop",
+    title: "Lobby",
+    folder: "library",
+    tags: [],
+    allAges: true,
+    inRotation: true,
+    url: "/media/videos/library-loop",
+  };
+  const october = playlistFor("pinnacle", OCT18);
+  const withLibrary = buildPlaylist({
+    theme: "pinnacle",
+    rotation: normalizeRotation({}),
+    leaderboards: [],
+  }, { videos: [library], pinboard: true });
+  assert.equal(october.some((card) => card.type === "video"), false);
+  assert.equal(withLibrary.some((card) => card.type === "video"), false);
+  const halloween = playlistFor("halloween", OCT18);
+  const christmas = playlistFor("christmas", OCT18);
+  const halloweenPlan = planRotation(halloween, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout,
+    now: OCT18,
+  });
+  const christmasPlan = planRotation(christmas, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout,
+    now: OCT18,
+  });
+  const regularPlan = planRotation(october, {
+    startedAt: 0,
+    intervalSec: 30,
+    screenCount: 3,
+    layout,
+    now: OCT18,
+  });
+  assert.equal(videoUrls(halloweenPlan).some((url) => url.includes("skeleton-dance-1929")), true);
+  assert.equal(videoUrls(halloweenPlan).some((url) => url.includes("christmas-comes-1936")), false);
+  assert.equal(videoUrls(christmasPlan).filter((url) => url.includes("christmas-comes-1936")).length, 1);
+  assert.equal(videoUrls(christmasPlan).some((url) => url.includes("skeleton-dance-1929")), false);
+  assert.deepEqual(videoUrls(regularPlan).filter(Boolean), []);
+  for (const slot of ["1", "2", "3"]) assert.notEqual(regularPlan[slot]?.type, "video");
 });

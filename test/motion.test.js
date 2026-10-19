@@ -8,6 +8,7 @@ test("transitions are subtle or off, and particles move on their own canvas fiel
   assert.equal(normalizeMotion("dark"), "subtle");
   assert.equal(normalizeMotion("off"), "subtle");
   assert.equal(normalizeMotion(undefined), "subtle");
+  assert.equal(normalizeMotion("reduced"), "reduced");
 
   const { worldPoint, screenPoint, spiderSilk, WORLD_W, SLICE_W } = require("../public/motion");
   const halloween = createField("halloween", 2);

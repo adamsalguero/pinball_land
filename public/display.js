@@ -17,17 +17,15 @@ const boardRows = document.getElementById("board-rows");
 const boardEmpty = document.getElementById("board-empty");
 const machineArtWrap = document.getElementById("machine-art-wrap");
 const machineArt = document.getElementById("machine-art");
-const machineVideo = document.getElementById("machine-video");
 const presentPanel = document.getElementById("present");
 const presentWaiting = document.getElementById("present-waiting");
 const presentHeading = document.getElementById("present-heading");
 const presentCode = document.getElementById("present-code");
 const presentInstructions = document.getElementById("present-instructions");
-const presentVideo = document.getElementById("present-video");
 const presentImage = document.getElementById("present-image");
 const presentFrame = document.getElementById("present-frame");
 const videoPanel = document.getElementById("video-panel");
-let wallVideo = document.getElementById("wall-video");
+let wallVideo = null;
 const clockPanel = document.getElementById("clock");
 const clockTime = document.getElementById("clock-time");
 const clockEvent = document.getElementById("clock-event");
@@ -166,10 +164,54 @@ function formatScore(score) {
   return Number(score || 0).toLocaleString("en-US");
 }
 
-function applyTheme(theme) {
+function activeTheme() {
   const forced = queryTheme();
-  const name = forced || (theme === "halloween" || theme === "christmas" ? theme : "pinnacle");
-  document.documentElement.dataset.theme = name;
+  const theme = forced || payload?.state?.theme || "pinnacle";
+  return theme === "halloween" || theme === "christmas" ? theme : "pinnacle";
+}
+
+function themeAllowsVideo() {
+  const theme = activeTheme();
+  return theme === "halloween" || theme === "christmas";
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = activeTheme() || (theme === "halloween" || theme === "christmas" ? theme : "pinnacle");
+  document.documentElement.dataset.motion = payload?.motion === "reduced" ? "reduced" : "subtle";
+}
+
+function videoElementCount() {
+  return document.querySelectorAll("video").length;
+}
+
+function presentVideoEl() {
+  return document.getElementById("present-video");
+}
+
+function ensurePresentVideo() {
+  const existing = presentVideoEl();
+  if (existing) return existing;
+  const video = document.createElement("video");
+  video.id = "present-video";
+  video.autoplay = true;
+  video.playsInline = true;
+  video.setAttribute("playsinline", "");
+  video.preload = "none";
+  video.hidden = true;
+  presentPanel.append(video);
+  return video;
+}
+
+function releasePresentVideo() {
+  const video = presentVideoEl();
+  if (!video) return;
+  const stream = video.srcObject;
+  if (stream && typeof stream.getTracks === "function") {
+    for (const track of stream.getTracks()) track.stop();
+  }
+  video.srcObject = null;
+  releaseVideoElement(video);
+  video.remove();
 }
 
 function setMode(mode) {
@@ -205,8 +247,9 @@ function clearSync() {
 
 function releaseVideoElement(video) {
   if (!video) return;
-  video.pause();
+  try { video.pause(); } catch { /* already stopped */ }
   video.removeAttribute("src");
+  video.src = "";
   video.preload = "none";
   try { video.load(); } catch { /* decoder already released */ }
 }
@@ -214,25 +257,34 @@ function releaseVideoElement(video) {
 function stopWallVideo() {
   swapping = true;
   clearSync();
-  wallVideo.onended = null;
-  wallVideo.onloadedmetadata = null;
-  wallVideo.onprogress = null;
-  wallVideo.onseeked = null;
-  wallVideo.oncanplay = null;
-  wallVideo.onpause = null;
-  wallVideo.onerror = null;
-  wallVideo.onwaiting = null;
-  wallVideo.onstalled = null;
-  wallVideo.onsuspend = null;
-  wallVideo.ontimeupdate = null;
-  releaseVideoElement(wallVideo);
-  wallVideo.preload = "none";
-  wallVideo.classList.remove("span", "is-ready");
-  wallVideo.style.width = "";
-  wallVideo.style.transform = "";
-  delete wallVideo.dataset.playId;
-  delete wallVideo.dataset.ready;
-  if (wallVideo.isConnected) wallVideo.remove();
+  if (wallVideo) {
+    wallVideo.onended = null;
+    wallVideo.onloadedmetadata = null;
+    wallVideo.onprogress = null;
+    wallVideo.onseeked = null;
+    wallVideo.oncanplay = null;
+    wallVideo.onpause = null;
+    wallVideo.onerror = null;
+    wallVideo.onwaiting = null;
+    wallVideo.onstalled = null;
+    wallVideo.onsuspend = null;
+    wallVideo.ontimeupdate = null;
+    wallVideo.classList.remove("span", "is-ready");
+    wallVideo.style.width = "";
+    wallVideo.style.transform = "";
+    delete wallVideo.dataset.playId;
+    delete wallVideo.dataset.ready;
+    delete wallVideo.dataset.mediaUrl;
+    delete wallVideo.dataset.blobUrl;
+    releaseVideoElement(wallVideo);
+    if (wallVideo.isConnected) wallVideo.remove();
+    wallVideo = null;
+  }
+  for (const [url, entry] of clipBlobs) {
+    entry.dropped = true;
+    if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
+    clipBlobs.delete(url);
+  }
   const hold = document.getElementById("video-hold");
   if (hold) {
     hold.hidden = true;
@@ -251,6 +303,11 @@ function replaceWallVideo() {
   fresh.setAttribute("playsinline", "");
   fresh.preload = "auto";
   const previous = wallVideo;
+  if (!previous) {
+    videoPanel.append(fresh);
+    wallVideo = fresh;
+    return fresh;
+  }
   previous.onended = null;
   previous.onloadedmetadata = null;
   previous.onprogress = null;
@@ -270,7 +327,17 @@ function replaceWallVideo() {
 }
 
 function ensureWallVideo() {
-  if (!videoPanel.contains(wallVideo)) videoPanel.append(wallVideo);
+  if (!wallVideo || !wallVideo.isConnected) {
+    const fresh = document.createElement("video");
+    fresh.id = "wall-video";
+    fresh.muted = true;
+    fresh.defaultMuted = true;
+    fresh.playsInline = true;
+    fresh.setAttribute("playsinline", "");
+    fresh.preload = "none";
+    videoPanel.append(fresh);
+    wallVideo = fresh;
+  }
   wallVideo.preload = "auto";
   wallVideo.muted = true;
   wallVideo.defaultMuted = true;
@@ -304,6 +371,7 @@ function releaseHold() {
 
 function stageWallVideo() {
   ensureWallVideo();
+  setMode("video");
   videoPanel.hidden = false;
   videoPanel.classList.add("is-staging");
 }
@@ -319,8 +387,7 @@ function teardownPresent() {
   helloId = null;
   shownPresentId = null;
   shownPresentSource = null;
-  presentVideo.srcObject = null;
-  presentVideo.hidden = true;
+  releasePresentVideo();
   presentImage.hidden = true;
   presentImage.removeAttribute("src");
   presentFrame.hidden = true;
@@ -409,8 +476,10 @@ function showAmenity(amenity, photos) {
 }
 
 function stopVideo() {
-  releaseVideoElement(machineVideo);
-  machineVideo.hidden = true;
+  const video = document.getElementById("machine-video");
+  if (!video) return;
+  releaseVideoElement(video);
+  video.remove();
 }
 
 function renderRows(rows) {
@@ -478,7 +547,6 @@ function paintBoardArt() {
   const isMachine = board?.kind === "machine";
   const urls = boardArtList(board).filter((url) => !failedArt.has(url));
   const showPlaceholder = () => {
-    machineVideo.hidden = true;
     machineArt.hidden = true;
     machineArt.onerror = null;
     machineArt.onload = null;
@@ -505,7 +573,6 @@ function paintBoardArt() {
   const cursor = Math.floor(Math.max(0, Date.now() - clockSkew) / 8000);
   const artUrl = urls[cursor % urls.length];
   boardPanel.classList.add("has-art");
-  machineVideo.hidden = true;
   machineArtWrap.hidden = false;
   if (fallback) fallback.hidden = true;
   machineArt.alt = "";
@@ -820,6 +887,7 @@ function fadeOutgoing(outgoing) {
   if (!transitionsOn()) return;
   const token = ++transitionToken;
   screen.classList.add("is-entering");
+  ensureMotion();
   for (const el of outgoing) {
     if (!el.hidden) continue;
     el.hidden = false;
@@ -855,11 +923,17 @@ function renderCard(raw) {
     document.fonts?.ready.then(fit).catch(() => {});
     if (!first) fadeOutgoing(outgoing);
   };
-  if (card?.type === "video" && card.url && !card.empty) {
+  if (card?.type === "video" && card.url && !card.empty && themeAllowsVideo()) {
     showVideo(card, () => {
       if (lastKey !== key) return;
       finish();
     });
+    return;
+  }
+  stopWallVideo();
+  if (card?.type === "video" && card.url && !card.empty) {
+    paintCard({ type: "clock", id: "clock" });
+    finish();
     return;
   }
   paintCard(card);
@@ -937,7 +1011,7 @@ function screenLabel() {
 
 function playbackQuality() {
   try {
-    const quality = wallVideo.getVideoPlaybackQuality?.();
+    const quality = wallVideo?.getVideoPlaybackQuality?.();
     if (!quality) return { dropped: undefined, total: undefined };
     return {
       dropped: Number.isFinite(quality.droppedVideoFrames) ? quality.droppedVideoFrames : undefined,
@@ -952,10 +1026,11 @@ function reportVideo(card, eventName, extra = {}) {
   const id = String(card?.id || "");
   const event = String(eventName || "event");
   const seen = `${id}:${event}`;
-  const always = event === "ended" || event === "give-up" || event === "stall-timeout" || event === "error" || event === "progress" || event === "blob-loaded" || event === "play-start";
+  const always = event === "ended" || event === "give-up" || event === "stall-timeout" || event === "error" || event === "progress" || event === "blob-loaded" || event === "play-start" || event === "perf";
   if (!always && reportedEvents.has(seen)) return;
   if (!always) reportedEvents.add(seen);
-  const err = wallVideo.error;
+  const video = wallVideo;
+  const err = video?.error;
   const quality = playbackQuality();
   sendSocket({
     type: "media-failure",
@@ -965,10 +1040,10 @@ function reportVideo(card, eventName, extra = {}) {
     reason: event,
     title: card?.title || "",
     code: err ? err.code : null,
-    networkState: wallVideo.networkState,
-    readyState: wallVideo.readyState,
-    currentTime: wallVideo.currentTime,
-    src: extra.src || wallVideo.dataset.mediaUrl || card?.url || "",
+    networkState: video ? video.networkState : "",
+    readyState: video ? video.readyState : "",
+    currentTime: video ? video.currentTime : "",
+    src: extra.src || video?.dataset?.mediaUrl || card?.url || "",
     bytes: Number.isFinite(Number(extra.bytes)) ? Number(extra.bytes) : undefined,
     ms: Number.isFinite(Number(extra.ms)) ? Number(extra.ms) : undefined,
     offset: Number.isFinite(Number(extra.offset)) ? Number(extra.offset) : undefined,
@@ -977,6 +1052,11 @@ function reportVideo(card, eventName, extra = {}) {
     gpu: gpuRenderer(),
     dropped: quality.dropped,
     total: quality.total,
+    videos: videoElementCount(),
+    fps: Number.isFinite(Number(extra.fps)) ? Number(extra.fps) : undefined,
+    longTasks: Number.isFinite(Number(extra.longTasks)) ? Number(extra.longTasks) : undefined,
+    longMs: Number.isFinite(Number(extra.longMs)) ? Number(extra.longMs) : undefined,
+    card: extra.card || screen.dataset.mode || "",
   });
 }
 
@@ -984,6 +1064,7 @@ function clearStall() {
   stallGeneration += 1;
   if (stallTimer) clearInterval(stallTimer);
   stallTimer = null;
+  if (!wallVideo) return;
   wallVideo.ontimeupdate = null;
   wallVideo.onerror = null;
   wallVideo.onwaiting = null;
@@ -1195,7 +1276,7 @@ function armStall(card) {
   wallVideo.onstalled = () => note("stalled");
   wallVideo.onsuspend = () => note("suspend");
   const check = () => {
-    if (generation !== stallGeneration || !wallVideo.isConnected || swapping) return;
+    if (generation !== stallGeneration || !wallVideo || !wallVideo.isConnected || swapping) return;
     const now = Date.now();
     if (now - lastCheck < 500) return;
     lastCheck = now;
@@ -1306,11 +1387,16 @@ function seekPastStall(card) {
 
 async function showVideo(card, onReady) {
   const playToken = String(card?.playId || card?.id || "");
+  if (card?.url && !card.empty && !themeAllowsVideo()) {
+    stopWallVideo();
+    if (onReady) onReady();
+    return;
+  }
   if (card?.url && !thisSlotMayPlay(card.url)) {
     if (onReady) onReady();
     return;
   }
-  if (card?.url && wallVideo.dataset.playId === playToken && wallVideo.dataset.blobUrl && !wallVideo.ended && wallVideo.dataset.ready === "1") {
+  if (card?.url && wallVideo?.dataset.playId === playToken && wallVideo.dataset.blobUrl && !wallVideo.ended && wallVideo.dataset.ready === "1") {
     ensureWallVideo();
     if (screen.dataset.mode !== "video") setMode("video");
     if (onReady) onReady();
@@ -1330,13 +1416,13 @@ async function showVideo(card, onReady) {
   }
   const token = ++showToken;
   clearLoadTimer();
-  if (wallVideo.dataset.ready === "1") holdFrame();
+  if (wallVideo?.dataset.ready === "1") holdFrame();
   stageWallVideo();
   wallVideo.dataset.playId = playToken;
   wallVideo.dataset.ready = "0";
   wallVideo.dataset.mediaUrl = card.url;
   loadTimer = window.setTimeout(() => {
-    if (token !== showToken || wallVideo.dataset.ready === "1") return;
+    if (token !== showToken || !wallVideo || wallVideo.dataset.ready === "1") return;
     failClip(card, "stall-timeout");
   }, 20000);
   let entry;
@@ -1347,7 +1433,7 @@ async function showVideo(card, onReady) {
     failClip(card, "error");
     return;
   }
-  if (!entry || token !== showToken || wallVideo.dataset.playId !== playToken) return;
+  if (!entry || token !== showToken || !wallVideo || wallVideo.dataset.playId !== playToken) return;
   noteBlob(card, entry);
   swapping = true;
   wallVideo.onloadedmetadata = null;
@@ -1406,8 +1492,17 @@ function preloadUpcoming() {
     if (card?.type === "video" && card.url) busy.add(card.url);
   }
   const keep = new Set();
-  if (wallVideo.dataset.mediaUrl) keep.add(wallVideo.dataset.mediaUrl);
-  if (next?.type === "video" && next.url && !next.empty && !busy.has(next.url) && thisSlotMayPlay(next.url)) {
+  const playing = themeAllowsVideo() && screen.dataset.mode === "video" && wallVideo?.isConnected && wallVideo.dataset.mediaUrl;
+  if (playing) keep.add(wallVideo.dataset.mediaUrl);
+  if (
+    playing
+    && next?.type === "video"
+    && next.url
+    && !next.empty
+    && next.url !== wallVideo.dataset.mediaUrl
+    && !busy.has(next.url)
+    && thisSlotMayPlay(next.url)
+  ) {
     keep.add(next.url);
     loadClipBlob(next.url).then((entry) => noteBlob(next, entry)).catch(() => {});
   }
@@ -1454,6 +1549,7 @@ function openViewerPeer(presentation) {
   pc.ontrack = (event) => {
     const [stream] = event.streams;
     if (!stream) return;
+    const presentVideo = ensurePresentVideo();
     presentVideo.srcObject = stream;
     presentVideo.hidden = false;
     presentWaiting.hidden = true;
@@ -1510,8 +1606,7 @@ function showPresent(presentation) {
     }
     iceQueue = [];
     helloId = null;
-    presentVideo.srcObject = null;
-    presentVideo.hidden = true;
+    releasePresentVideo();
     presentImage.hidden = true;
     presentImage.removeAttribute("src");
     presentFrame.hidden = true;
@@ -1527,7 +1622,7 @@ function showPresent(presentation) {
     presentCode.hidden = false;
     presentCode.textContent = presentation.code || "";
     presentInstructions.textContent = `On a laptop or Android phone, open\n${shareLines()}\nand enter this code.\n\niPhone and iPad cannot share from Safari. Use AirPlay and choose ${payload?.airplay?.serverName || "Pinball Land"}.`;
-    if (!presentVideo.srcObject) presentWaiting.hidden = false;
+    if (!presentVideoEl()?.srcObject) presentWaiting.hidden = false;
     helloViewer(presentation);
     return;
   }
@@ -1540,9 +1635,10 @@ function showPresent(presentation) {
     if (presentation.helper?.capture) {
       presentHeading.textContent = "AirPlay on every screen";
       presentInstructions.textContent = "Copying the mirror from the first TV.";
-      if (mirrorId !== presentation.id || !presentVideo.srcObject) {
+      if (mirrorId !== presentation.id || !presentVideoEl()?.srcObject) {
         mirrorId = presentation.id;
         navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }).then((stream) => {
+          const presentVideo = ensurePresentVideo();
           presentVideo.srcObject = stream;
           presentVideo.muted = true;
           presentVideo.hidden = false;
@@ -1550,18 +1646,14 @@ function showPresent(presentation) {
           presentVideo.play().catch(() => {});
         }).catch(() => {
           presentWaiting.hidden = false;
-          presentVideo.hidden = true;
+          releasePresentVideo();
           presentInstructions.textContent = "This screen copies the AirPlay picture. The first TV still has the real mirror.";
         });
       }
       return;
     }
-    if (presentVideo.srcObject) {
-      for (const track of presentVideo.srcObject.getTracks()) track.stop();
-      presentVideo.srcObject = null;
-    }
+    releasePresentVideo();
     mirrorId = null;
-    presentVideo.hidden = true;
     presentWaiting.hidden = false;
     presentHeading.textContent = presentation.helper?.ok === false ? "AirPlay needs setup" : "AirPlay to this screen";
     presentInstructions.textContent = presentation.helper?.ok === false
@@ -1572,7 +1664,7 @@ function showPresent(presentation) {
 
   presentWaiting.hidden = true;
   presentCode.hidden = true;
-  presentVideo.hidden = true;
+  releasePresentVideo();
   if (presentation.source === "file" && presentation.fileKind === "image") {
     presentFrame.hidden = true;
     presentFrame.src = "about:blank";
@@ -1610,12 +1702,19 @@ function themeSlogan() {
   return "";
 }
 
+let paintedClock = "";
+
 function paintClock() {
   const now = new Date(Date.now() - clockSkew);
-  clockTime.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const text = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const slogan = FIXTURE ? LONG_TEXT : themeSlogan();
+  const signature = `${text}|${slogan}`;
+  if (signature === paintedClock) return;
+  paintedClock = signature;
+  clockTime.textContent = text;
   setFit(clockEvent, slogan);
   clockEvent.hidden = !slogan;
+  requestAnimationFrame(() => fitVisibleText());
 }
 
 const PIN_CAP = 12;
@@ -1994,7 +2093,7 @@ function serverTick() {
 function paintMotion(dt) {
   if (!motionCanvas) return;
   const ctx = motionCanvas.getContext("2d");
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = 1;
   const width = Math.max(1, window.innerWidth);
   const height = Math.max(1, window.innerHeight);
   if (motionCanvas.width !== Math.round(width * dpr) || motionCanvas.height !== Math.round(height * dpr)) {
@@ -2032,8 +2131,51 @@ function paintMotion(dt) {
   window.PinballMotion.drawField(ctx, motionField, width, height, { slot: slotIndex(), elapsed, avoid });
 }
 
+let motionRunning = false;
+let lastPaint = 0;
+let decorFrames = 0;
+let decorWindowStart = 0;
+let longTasks = 0;
+let longMs = 0;
+
+function clearMotionCanvas() {
+  if (!motionCanvas) return;
+  const ctx = motionCanvas.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, motionCanvas.width, motionCanvas.height);
+}
+
+function decorationsPaused() {
+  if (SHOT || document.documentElement.dataset.motion === "reduced") return true;
+  return !screen.classList.contains("is-entering");
+}
+
+function ensureMotion() {
+  if (decorationsPaused()) {
+    if (motionRunning) return;
+    clearMotionCanvas();
+    return;
+  }
+  if (motionRunning) return;
+  motionRunning = true;
+  requestAnimationFrame(motionFrame);
+}
+
 function motionFrame(ts) {
-  const dt = lastFrame ? (ts - lastFrame) / 1000 : 0.016;
+  if (decorationsPaused()) {
+    motionRunning = false;
+    lastPaint = 0;
+    clearMotionCanvas();
+    return;
+  }
+  if (lastPaint && ts - lastPaint < 33) {
+    requestAnimationFrame(motionFrame);
+    return;
+  }
+  if (!decorWindowStart) decorWindowStart = ts;
+  decorFrames += 1;
+  const dt = lastPaint ? (ts - lastPaint) / 1000 : 0.033;
+  lastPaint = ts;
   lastFrame = ts;
   paintMotion(dt);
   requestAnimationFrame(motionFrame);
@@ -2048,7 +2190,9 @@ function tick() {
     renderCard(resolveCard());
     if (screen.dataset.mode === "board") paintBoardArt();
     if (screen.dataset.mode === "clock") paintClock();
-    if (screen.dataset.mode === "clock" || FIXTURE) requestAnimationFrame(() => fitVisibleText());
+    if (!themeAllowsVideo() && wallVideo) stopWallVideo();
+    ensureMotion();
+    if (FIXTURE) requestAnimationFrame(() => fitVisibleText());
   } catch (err) {
     console.error(err);
   }
@@ -2105,7 +2249,31 @@ fetch("/api/state")
 
 connect();
 setInterval(tick, 250);
-requestAnimationFrame(motionFrame);
+try {
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      longTasks += 1;
+      longMs += entry.duration || 0;
+    }
+  });
+  observer.observe({ type: "longtask", buffered: true });
+} catch {
+  // Long tasks are a hint in video.log, not required to play.
+}
+setInterval(() => {
+  const span = decorWindowStart ? (performance.now() - decorWindowStart) / 1000 : 0;
+  const fps = span > 0.2 ? Math.round(decorFrames / span) : 0;
+  reportVideo({ id: "screen" }, "perf", {
+    fps,
+    longTasks,
+    longMs: Math.round(longMs),
+    card: screen.dataset.mode || "",
+  });
+  decorFrames = 0;
+  decorWindowStart = 0;
+  longTasks = 0;
+  longMs = 0;
+}, 15000);
 if (document.fonts?.ready) {
   document.fonts.ready.then(() => fitVisibleText()).catch(() => {});
 }

@@ -64,8 +64,8 @@ function normalizeMediaSettings(raw) {
   };
 }
 
-function normalizeMotion() {
-  return "subtle";
+function normalizeMotion(value) {
+  return value === "reduced" ? "reduced" : "subtle";
 }
 
 function httpBaseUrl(value) {

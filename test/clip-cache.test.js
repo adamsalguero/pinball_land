@@ -106,21 +106,22 @@ test("cached clips are transcoded to faststart 30 fps h264 and an old file is mi
   assert.match(migratedLog, /cache migrate late-moov/);
 });
 
-test("a stall timeout pauses a cached clip and a pinned screen stays on video", async () => {
+test("holiday clips rotate, a give-up leaves them, and the regular theme has no video", async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pinball-fail-"));
   const media = path.join(dir, "media");
   const id = crypto.randomUUID();
   const other = crypto.randomUUID();
-  await fsp.mkdir(path.join(media, "library"), { recursive: true });
-  await fsp.writeFile(path.join(media, "library", "clip.mp4"), Buffer.from("mp4"));
-  await fsp.writeFile(path.join(media, "library", "other.mp4"), Buffer.from("mp4"));
+  await fsp.mkdir(path.join(media, "halloween"), { recursive: true });
+  await fsp.mkdir(path.join(media, "christmas"), { recursive: true });
+  await fsp.writeFile(path.join(media, "halloween", "clip.mp4"), Buffer.from("mp4"));
+  await fsp.writeFile(path.join(media, "christmas", "other.mp4"), Buffer.from("mp4"));
   await fsp.writeFile(path.join(media, "library.json"), JSON.stringify({
     items: [{
       id,
       title: "Lobby loop",
       file: "clip.mp4",
-      folder: "library",
-      tags: [],
+      folder: "halloween",
+      tags: ["halloween"],
       allAges: true,
       inRotation: true,
       loop: true,
@@ -130,8 +131,8 @@ test("a stall timeout pauses a cached clip and a pinned screen stays on video", 
       id: other,
       title: "Second loop",
       file: "other.mp4",
-      folder: "library",
-      tags: [],
+      folder: "christmas",
+      tags: ["christmas"],
       allAges: true,
       inRotation: true,
       loop: true,
@@ -166,15 +167,39 @@ test("a stall timeout pauses a cached clip and a pinned screen stays on video", 
       body: JSON.stringify({ screens: { 1: { content: "video" }, 2: { content: "rotation" }, 3: { content: "rotation" } } }),
     });
     assert.equal(pinned.status, 200);
-    const before = await (await fetch(`${origin}/api/state`)).json();
-    const firstId = before.rotationPlan["1"].id;
-    assert.ok([id, other].includes(firstId));
+    const migrated = await pinned.json();
+    assert.equal(migrated.displays.screens["1"].content, "rotation");
+    assert.equal(migrated.playlist.some((card) => card.type === "video"), false);
+    await fetch(`${origin}/api/rotation`, {
+      method: "PUT",
+      headers: pin,
+      body: JSON.stringify({
+        items: {
+          logoPinnacle: false,
+          logoEntertainment: false,
+          amenities: false,
+          clock: true,
+          pinboard: false,
+        },
+      }),
+    });
+    const themed = await fetch(`${origin}/api/theme`, {
+      method: "PUT",
+      headers: pin,
+      body: JSON.stringify({ theme: "halloween" }),
+    });
+    assert.equal(themed.status, 200);
+    const before = await themed.json();
+    const videoSlot = ["1", "2", "3"].find((slot) => before.rotationPlan[slot]?.id === id);
+    assert.ok(videoSlot, JSON.stringify(before.rotationPlan));
+    const firstId = id;
+    assert.equal(before.playlist.some((card) => card.id === other), false);
     const stalled = await fetch(`${origin}/api/media/failure`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         event: "stalled",
-        slot: "1",
+        slot: videoSlot,
         id: firstId,
         title: "Lobby loop",
         code: 4,
@@ -190,7 +215,7 @@ test("a stall timeout pauses a cached clip and a pinned screen stays on video", 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         event: "suspend",
-        slot: "1",
+        slot: videoSlot,
         id: firstId,
         title: "Lobby loop",
         networkState: 1,
@@ -201,47 +226,56 @@ test("a stall timeout pauses a cached clip and a pinned screen stays on video", 
     });
     assert.equal(suspended.status, 200);
     const still = await (await fetch(`${origin}/api/state`)).json();
-    assert.equal(still.rotationPlan["1"].id, firstId);
+    assert.equal(still.rotationPlan[videoSlot].id, firstId);
     assert.notEqual(still.playlist.find((card) => card.id === firstId).blocked, true);
     const ended = await fetch(`${origin}/api/media/failure`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ event: "ended", slot: "1", id: firstId, title: "Lobby loop", currentTime: 12, src: `/media/videos/${firstId}` }),
+      body: JSON.stringify({ event: "ended", slot: videoSlot, id: firstId, title: "Lobby loop", currentTime: 12, src: `/media/videos/${firstId}` }),
     });
     assert.equal(ended.status, 200);
     const advanced = await (await fetch(`${origin}/api/state`)).json();
-    assert.equal(advanced.rotationPlan["1"].type, "video");
-    assert.notEqual(advanced.rotationPlan["1"].id, firstId);
-    const secondId = advanced.rotationPlan["1"].id;
-    const beforeTimeout = ["2", "3"].map((slot) => advanced.rotationPlan[slot] && `${advanced.rotationPlan[slot].type}:${advanced.rotationPlan[slot].id || advanced.rotationPlan[slot].key || ""}`);
+    assert.equal(advanced.rotationPlan[videoSlot].id, firstId);
+    const beforeTimeout = ["1", "2", "3"].filter((slot) => slot !== videoSlot).map((slot) => advanced.rotationPlan[slot] && `${advanced.rotationPlan[slot].type}:${advanced.rotationPlan[slot].id || advanced.rotationPlan[slot].key || ""}`);
     const timeout = await fetch(`${origin}/api/media/failure`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ event: "stall-timeout", slot: "1", id: secondId, title: "Second loop", code: null, networkState: 2, readyState: 2, currentTime: 3.4, src: `/media/videos/${secondId}` }),
+      body: JSON.stringify({ event: "stall-timeout", slot: videoSlot, id: firstId, title: "Lobby loop", code: null, networkState: 2, readyState: 2, currentTime: 3.4, src: `/media/videos/${firstId}` }),
     });
     assert.equal(timeout.status, 200);
     const after = await (await fetch(`${origin}/api/state`)).json();
-    assert.equal(after.rotationPlan["1"].id, secondId);
-    assert.notEqual(after.playlist.find((card) => card.id === secondId).blocked, true);
-    const afterOthers = ["2", "3"].map((slot) => after.rotationPlan[slot] && `${after.rotationPlan[slot].type}:${after.rotationPlan[slot].id || after.rotationPlan[slot].key || ""}`);
+    assert.equal(after.rotationPlan[videoSlot].id, firstId);
+    assert.notEqual(after.playlist.find((card) => card.id === firstId).blocked, true);
+    const afterOthers = ["1", "2", "3"].filter((slot) => slot !== videoSlot).map((slot) => after.rotationPlan[slot] && `${after.rotationPlan[slot].type}:${after.rotationPlan[slot].id || after.rotationPlan[slot].key || ""}`);
     assert.deepEqual(afterOthers, beforeTimeout);
     const giveUp = await fetch(`${origin}/api/media/failure`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ event: "give-up", slot: "1", id: secondId, failedIds: [firstId, secondId], title: "Second loop", currentTime: 0, src: "" }),
+      body: JSON.stringify({ event: "give-up", slot: videoSlot, id: firstId, failedIds: [firstId], title: "Lobby loop", currentTime: 0, src: "" }),
     });
     assert.equal(giveUp.status, 200);
     const replaced = await (await fetch(`${origin}/api/state`)).json();
-    const keys = ["1", "2", "3"].map((slot) => {
-      const card = replaced.rotationPlan[slot];
-      if (!card) return "";
-      if (card.type === "video") return `video:${card.id}`;
-      if (card.type === "logo") return `logo:${card.key}`;
-      return card.type;
+    assert.notEqual(replaced.rotationPlan[videoSlot].type, "video");
+    const christmas = await fetch(`${origin}/api/theme`, {
+      method: "PUT",
+      headers: pin,
+      body: JSON.stringify({ theme: "christmas" }),
     });
-    assert.equal(new Set(keys).size, 3, JSON.stringify(keys));
-    assert.notEqual(replaced.rotationPlan["1"].type, "video");
-    assert.equal(fs.existsSync(path.join(media, "library", "clip.mp4")), true);
+    const christmasBody = await christmas.json();
+    assert.equal(christmas.status, 200);
+    assert.equal(christmasBody.playlist.some((card) => card.id === other), true);
+    assert.equal(christmasBody.playlist.some((card) => card.id === id), false);
+    assert.equal(["1", "2", "3"].some((slot) => christmasBody.rotationPlan[slot]?.id === other), true);
+    const regular = await fetch(`${origin}/api/theme`, {
+      method: "PUT",
+      headers: pin,
+      body: JSON.stringify({ theme: "pinnacle" }),
+    });
+    const regularBody = await regular.json();
+    assert.equal(regular.status, 200);
+    assert.equal(regularBody.playlist.some((card) => card.type === "video"), false);
+    for (const slot of ["1", "2", "3"]) assert.notEqual(regularBody.rotationPlan[slot]?.type, "video");
+    assert.equal(fs.existsSync(path.join(media, "halloween", "clip.mp4")), true);
     const log = fs.readFileSync(path.join(dir, "logs", "video.log"), "utf8");
     assert.match(log, new RegExp(`event=stalled id=${firstId}`));
     assert.match(log, /networkState=2/);

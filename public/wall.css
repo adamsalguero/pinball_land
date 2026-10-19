@@ -21,11 +21,9 @@ html, body, .screen {
 .logo-panel, .amenity-panel, .board-panel, .clock-panel, .pinboard, .video-frame {
   background: var(--panel);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(22px) saturate(1.2);
 }
 .logo-panel img, #logo-image {
   width: min(78vw, 1100px);
-  filter: drop-shadow(0 24px 40px rgba(0, 0, 0, 0.35));
 }
 .amenity-layout {
   width: 100%;

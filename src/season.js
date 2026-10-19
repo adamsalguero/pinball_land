@@ -27,12 +27,10 @@ function starterThemes(theme, now = Date.now()) {
     .map((item) => item.trim())
     .filter((item) => item === "halloween" || item === "christmas");
   if (forced.length) return [...new Set(forced)];
-  const themes = [];
-  for (const season of seasonsOn(now)) {
-    if (!themes.includes(season)) themes.push(season);
-  }
-  if ((theme === "halloween" || theme === "christmas") && !themes.includes(theme)) themes.push(theme);
-  return themes;
+  // The regular theme never plays a clip. An explicit holiday replaces the
+  // calendar, so Christmas in October is Christmas only.
+  if (theme === "halloween" || theme === "christmas") return [theme];
+  return [];
 }
 
 module.exports = {
