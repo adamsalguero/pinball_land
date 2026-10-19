@@ -2731,6 +2731,9 @@ function createApp({
   settleAccess();
 
   try {
+    // The server is the only process that starts UxPlay. The kiosk reuses this
+    // server and does not spawn a second receiver. ensureRunning also refuses
+    // to spawn when uxplay-windows.exe is already running.
     airplayController.ensureRunning?.();
   } catch (err) {
     console.error(err);

@@ -8,7 +8,7 @@
   Pass -Kiosk to register the server, the wall, and the boot and nightly update tasks.
   Without -Kiosk an interactive console asks first, and the default answer is no.
   Pass -RustDesk or -RustDeskPassword to install the latest RustDesk as a service.
-  -DryRun skips Node install, npm ci, AutoAdminLogon, RustDesk, and starting the server.
+  -DryRun skips Node install, npm ci, Google Chrome, AutoAdminLogon, RustDesk, and starting the server.
   It registers boot tasks only when -Kiosk is also set.
 .PARAMETER AutoLogonUser
   Local passwordless account to sign in automatically, for example Admin.
@@ -58,6 +58,9 @@ if ($DryRun) {
   npm ci --omit=dev
   if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
 }
+
+. (Join-Path $PSScriptRoot "install-chrome.ps1")
+Install-PinballChrome -DryRun:$DryRun | Out-Null
 
 $kioskScript = Join-Path $PSScriptRoot "install-kiosk-windows.ps1"
 $configure = @{

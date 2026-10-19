@@ -40,8 +40,18 @@ $candidates = @(
   "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
   "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
 )
+if ($env:LOCALAPPDATA) {
+  $candidates += (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
+}
+$candidates += @(
+  "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+  "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+)
+if ($env:LOCALAPPDATA) {
+  $candidates += (Join-Path $env:LOCALAPPDATA "Microsoft\Edge\Application\msedge.exe")
+}
 $chrome = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-if (-not $chrome) { throw "Google Chrome was not found." }
+if (-not $chrome) { throw "Google Chrome and Microsoft Edge were not found." }
 
 function Test-Health([string]$Url) {
   $curl = Get-Command curl.exe -ErrorAction SilentlyContinue

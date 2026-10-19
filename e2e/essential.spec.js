@@ -172,10 +172,11 @@ test("mock plug toggle and video section", async ({ page, request }) => {
   const plug = page.getByLabel("Plug for display 1");
   await expect(plug.locator("option")).toHaveCount(2);
   await plug.selectOption("mock-1");
-  await expect(page.getByRole("button", { name: "On" }).first()).toBeEnabled();
-  await page.getByRole("button", { name: "TVs On" }).click();
+  await expect(page.locator("#toast")).toHaveText("Plug assignment saved");
+  await expect(page.getByRole("button", { name: "On", exact: true }).first()).toBeEnabled();
+  await page.getByRole("button", { name: "TVs On", exact: true }).click();
   await expect(page.locator("#toast")).toHaveText("Plugs on", { timeout: 15000 });
-  await expect(page.getByText("· On")).toBeVisible();
+  await expect(page.getByText("Left · On")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Videos", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "YouTube" })).toBeVisible();
   await page.getByRole("button", { name: "Clear TP-Link login" }).click();

@@ -50,27 +50,67 @@ if (Test-Path $Dest) {
   Remove-Item $Dest -Recurse -Force
 }
 Expand-Archive -Path $zip -DestinationPath $Dest -Force
-$exe = Get-ChildItem -Path $Dest -Recurse -Filter "uxplay*.exe" | Where-Object { $_.Name -notmatch "arm64" } | Select-Object -First 1
+$exe = Get-ChildItem -Path $Dest -Recurse -Filter "uxplay-windows.exe" | Where-Object { $_.Name -notmatch "beacon|arm64" } | Select-Object -First 1
 if (-not $exe) {
-  throw "The UxPlay zip extracted, but no uxplay exe was inside $Dest."
+  $exe = Get-ChildItem -Path $Dest -Recurse -Filter "uxplay*.exe" | Where-Object { $_.Name -notmatch "beacon|arm64" } | Select-Object -First 1
+}
+if (-not $exe) {
+  throw "The UxPlay zip extracted, but uxplay-windows.exe was not inside $Dest."
 }
 Write-Host "UxPlay is at $($exe.FullName)"
-Write-Host "The kiosk finds it automatically. uxplay-windows 2.0 also bundles mDNSResponder."
+$bundledMdns = Get-ChildItem -Path $Dest -Recurse -Filter "mDNSResponder.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+Write-Host "The kiosk starts uxplay-windows.exe. It does not start uxplay-bluetooth-beacon.exe."
 Write-Host "The exe is unsigned. If SmartScreen appears, choose More info, then Run anyway."
+
+$argumentLine = '-n "Pinball Land" -nh'
+$argumentDirs = @(
+  (Join-Path $env:ProgramData "uxplay-windows")
+)
+if ($env:APPDATA) {
+  $argumentDirs += (Join-Path $env:APPDATA "leapbtw\uxplay-windows")
+}
+foreach ($dir in $argumentDirs) {
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $argumentFile = Join-Path $dir "arguments.txt"
+  $existing = ""
+  if (Test-Path -LiteralPath $argumentFile) {
+    $existing = Get-Content -LiteralPath $argumentFile -Raw -ErrorAction SilentlyContinue
+  }
+  $rest = [string]$existing
+  $rest = [regex]::Replace($rest, '(^|\s)-n\s+("[^"]*"|''[^'']*''|\S+)', ' ')
+  $rest = [regex]::Replace($rest, '(^|\s)-nh\b', ' ')
+  $rest = ($rest -replace '\s+', ' ').Trim()
+  $body = $argumentLine
+  if ($rest) { $body = "$argumentLine $rest" }
+  Set-Content -LiteralPath $argumentFile -Value $body -Encoding ASCII
+  Write-Host "Wrote $argumentFile"
+}
+Write-Host "The tray app reads arguments.txt, so the receiver name is Pinball Land without a tray click."
 
 $bonjour = Join-Path $Temp "BonjourPSSetup.exe"
 Save-Checked $BonjourUrl $bonjour $BonjourSha
 if (Test-Administrator) {
   Write-Host "Installing Bonjour Print Services (quiet)."
   $proc = Start-Process -FilePath $bonjour -ArgumentList "/quiet", "/norestart" -Wait -PassThru
-  if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
-    Write-Warning "Bonjour installer exited $($proc.ExitCode). Install it by hand from $BonjourPage"
-  } else {
+  $bonjourService = Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue
+  if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
     Write-Host "Bonjour installer finished (exit $($proc.ExitCode))."
+  } elseif ($proc.ExitCode -eq 1603 -and ($bonjourService -or $bundledMdns)) {
+    $where = if ($bundledMdns) { $bundledMdns.FullName } else { "Bonjour Service" }
+    Write-Host "Bonjour Print Services exited 1603. That is non-fatal. AirPlay uses the bundled mDNSResponder ($where)."
+  } elseif ($bonjourService -or $bundledMdns) {
+    $where = if ($bundledMdns) { $bundledMdns.FullName } else { "Bonjour Service" }
+    Write-Host "Bonjour installer exited $($proc.ExitCode). AirPlay uses the bundled mDNSResponder ($where)."
+  } else {
+    Write-Warning "Bonjour installer exited $($proc.ExitCode). Neither Bonjour Service nor the bundled mDNSResponder is available. Install Bonjour by hand from $BonjourPage"
   }
 } else {
   Write-Warning "Not elevated. UxPlay was unpacked, but Bonjour was not installed."
-  Write-Warning "Re-run this script in an Administrator PowerShell, or install Bonjour from $BonjourPage"
+  if ($bundledMdns) {
+    Write-Host "AirPlay can still use the bundled mDNSResponder at $($bundledMdns.FullName)."
+  } else {
+    Write-Warning "Re-run this script in an Administrator PowerShell, or install Bonjour from $BonjourPage"
+  }
 }
 
 Write-Host ""

@@ -442,6 +442,8 @@ async function waitForHealth(targetPort, tries = 40) {
 }
 
 async function tryBringUpServer() {
+  // UxPlay starts inside the server, once. This kiosk does not spawn it.
+  // If the logon server task is already healthy, leave that process alone.
   const paths = dataLayout(defaultDataDir());
   const config = loadConfig(fs.existsSync(paths.config) ? paths.config : path.join(__dirname, "..", "config.json"));
   try {

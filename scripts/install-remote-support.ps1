@@ -50,6 +50,37 @@ function Get-LatestRustDeskExe {
   return $chosen
 }
 
+function Invoke-RustDeskCommand {
+  param(
+    [Parameter(Mandatory = $true)][string]$Exe,
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [int]$TimeoutSec = 20,
+    [switch]$Capture
+  )
+  # WaitForExit on this PID only. Waiting on the process tree follows the GUI
+  # the installer leaves running and never returns.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $Exe
+  $quoted = foreach ($arg in $Arguments) {
+    if ($arg -match '[\s"]') { '"' + ($arg -replace '"', '\"') + '"' } else { $arg }
+  }
+  $psi.Arguments = $quoted -join " "
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = [bool]$Capture
+  $psi.RedirectStandardError = [bool]$Capture
+  $proc = New-Object System.Diagnostics.Process
+  $proc.StartInfo = $psi
+  [void]$proc.Start()
+  if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+    Write-Warning "rustdesk.exe $($Arguments -join ' ') did not exit within ${TimeoutSec}s. Continuing."
+    try { $proc.Kill() } catch { }
+    return ""
+  }
+  if (-not $Capture) { return "" }
+  return ([string]$proc.StandardOutput.ReadToEnd()).Trim()
+}
+
 function Install-RustDeskService {
   param([Parameter(Mandatory = $true)][string]$Password)
   $asset = Get-LatestRustDeskExe
@@ -59,29 +90,51 @@ function Install-RustDeskService {
   }
   $installer = Join-Path $env:TEMP "rustdesk-latest-x86_64.exe"
   Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer -UseBasicParsing
-  $install = Start-Process -FilePath $installer -ArgumentList "--silent-install" -Wait -PassThru
-  if ($install.ExitCode -ne 0 -and $null -ne $install.ExitCode) {
-    throw "RustDesk installer exited $($install.ExitCode)"
-  }
   $exe = Join-Path $env:ProgramFiles "RustDesk\rustdesk.exe"
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $installer
+  $psi.Arguments = "--silent-install"
+  $psi.UseShellExecute = $true
+  $install = New-Object System.Diagnostics.Process
+  $install.StartInfo = $psi
+  [void]$install.Start()
+  $deadline = (Get-Date).AddSeconds(120)
+  $service = $null
+  while ((Get-Date) -lt $deadline) {
+    try { $install.Refresh() } catch { }
+    $service = Get-Service -Name "RustDesk" -ErrorAction SilentlyContinue
+    $exeReady = Test-Path -LiteralPath $exe
+    if ($exeReady -and $service) { break }
+    $exited = $false
+    try { $exited = $install.HasExited } catch { $exited = $true }
+    if ($exited) {
+      $code = 0
+      try { $code = $install.ExitCode } catch { $code = 0 }
+      if (-not $exeReady -and $code -ne 0) {
+        throw "RustDesk installer exited $code"
+      }
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
   if (-not (Test-Path -LiteralPath $exe)) {
-    throw "RustDesk was not installed at $exe"
+    throw "RustDesk was not installed at $exe within 120 seconds. The installer was not waited on after that, so the window cannot hang."
   }
   $service = Get-Service -Name "RustDesk" -ErrorAction SilentlyContinue
   if (-not $service) {
-    & $exe --install-service | Out-Null
+    Invoke-RustDeskCommand -Exe $exe -Arguments @("--install-service") -TimeoutSec 30 | Out-Null
     $service = Get-Service -Name "RustDesk" -ErrorAction SilentlyContinue
   }
-  if ($service) {
-    Set-Service -Name "RustDesk" -StartupType Automatic
-    if ($service.Status -ne "Running") {
-      Start-Service -Name "RustDesk"
-    }
-  } else {
-    Write-Warning "The RustDesk service was not found after install. The program is installed; start it from the Start menu once if the ID is blank."
+  if (-not $service) {
+    throw "The RustDesk service was not found after install, and rustdesk.exe --install-service did not create it."
   }
-  & $exe --password $Password | Out-Null
-  $id = (& $exe --get-id | Out-String).Trim()
+  Set-Service -Name "RustDesk" -StartupType Automatic
+  $service = Get-Service -Name "RustDesk"
+  if ($service.Status -ne "Running") {
+    Start-Service -Name "RustDesk"
+  }
+  Invoke-RustDeskCommand -Exe $exe -Arguments @("--password", $Password) -TimeoutSec 20 | Out-Null
+  $id = Invoke-RustDeskCommand -Exe $exe -Arguments @("--get-id") -TimeoutSec 20 -Capture
   Write-Host "RustDesk is installed as a Windows service and starts with Windows."
   Write-Host "RustDesk ID: $id"
 }
