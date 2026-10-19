@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { wallChromeArgs, chromeProfileDir, ownsDisplayProfile, relaunchWallChrome } = require("../src/wall-chrome");
+const { wallChromeArgs, chromeProfileDir, ownsDisplayProfile, relaunchWallChrome, launchPlan } = require("../src/wall-chrome");
 
 test("each display gets its own Chrome profile and decode flags", () => {
   const profile = chromeProfileDir(path.join("C:", "ProgramData", "PinballLand"), 2);
@@ -30,6 +30,27 @@ test("each display gets its own Chrome profile and decode flags", () => {
   assert.equal(plain.includes("--disable-gpu-video-decode"), false);
   assert.equal(ownsDisplayProfile(`google-chrome --user-data-dir=${profile} --app=http://127.0.0.1/display/2`, path.join("C:", "ProgramData", "PinballLand")), true);
   assert.equal(ownsDisplayProfile("google-chrome --user-data-dir=/home/adam/.config/google-chrome", path.join("C:", "ProgramData", "PinballLand")), false);
+});
+
+test("opening one missing display leaves the running displays alone", () => {
+  const added = launchPlan({
+    saved: [{ slot: 1, pid: 11 }, { slot: 2, pid: 22 }],
+    requested: [{ slot: 3 }],
+    killExisting: false,
+    runningSlots: [1, 2],
+  });
+  assert.deepEqual(added.spawn, [3]);
+  assert.deepEqual(added.keep, []);
+  assert.deepEqual(added.untouched, [1, 2]);
+  const again = launchPlan({
+    saved: [{ slot: 1, pid: 11 }, { slot: 2, pid: 22 }],
+    requested: [{ slot: 1 }, { slot: 2 }],
+    killExisting: false,
+    runningSlots: [1, 2],
+  });
+  assert.deepEqual(again.spawn, []);
+  assert.deepEqual(again.keep, [1, 2]);
+  assert.deepEqual(again.untouched, []);
 });
 
 test("unit tests do not relaunch Chrome", async () => {

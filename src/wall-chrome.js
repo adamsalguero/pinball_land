@@ -130,15 +130,53 @@ function killOwned(dataDir) {
   return killed;
 }
 
-function launchDisplays({ dataDir, displays, softwareDecode = false, kiosk = true, chromePath } = {}) {
+function launchPlan({ saved = [], requested = [], killExisting = true, runningSlots = [] } = {}) {
+  const wanted = [];
+  for (const item of requested || []) {
+    const slot = Number(item?.slot ?? item);
+    if (slot < 1 || slot > 3 || wanted.includes(slot)) continue;
+    wanted.push(slot);
+  }
+  const live = new Set((runningSlots || []).map((slot) => Number(slot)));
+  if (killExisting) return { spawn: wanted, keep: [], untouched: [] };
+  const spawn = [];
+  const keep = [];
+  for (const slot of wanted) {
+    if (live.has(slot)) keep.push(slot);
+    else spawn.push(slot);
+  }
+  const untouched = [];
+  for (const row of saved || []) {
+    const slot = Number(row?.slot);
+    if (slot < 1 || slot > 3 || wanted.includes(slot) || untouched.includes(slot)) continue;
+    untouched.push(slot);
+  }
+  return { spawn, keep, untouched };
+}
+
+function launchDisplays({ dataDir, displays, softwareDecode = false, kiosk = true, chromePath, killExisting = true } = {}) {
   if (!dataDir) throw new Error("launchDisplays needs a data dir");
   const browser = chromePath || findChrome();
   if (!browser) throw new Error("Google Chrome was not found.");
-  killOwned(dataDir);
-  const slots = [];
+  const saved = readPidFile(dataDir);
+  const runningSlots = [];
+  if (!killExisting) {
+    for (const row of saved.slots) {
+      const line = commandLine(row.pid);
+      if (line && ownsDisplayProfile(line, dataDir)) runningSlots.push(row.slot);
+    }
+  }
+  const plan = launchPlan({
+    saved: saved.slots,
+    requested: displays,
+    killExisting,
+    runningSlots,
+  });
+  if (killExisting) killOwned(dataDir);
+  const spawned = [];
   for (const item of displays || []) {
     const slot = Number(item.slot);
-    if (slot < 1 || slot > 3 || !item.url) continue;
+    if (!plan.spawn.includes(slot) || !item.url) continue;
     const bounds = item.bounds || { x: (slot - 1) * 80, y: (slot - 1) * 60, width: 1280, height: 720 };
     const profile = chromeProfileDir(dataDir, slot);
     fs.mkdirSync(profile, { recursive: true });
@@ -151,7 +189,7 @@ function launchDisplays({ dataDir, displays, softwareDecode = false, kiosk = tru
     });
     const child = spawn(browser, args, { detached: true, stdio: "ignore" });
     child.unref();
-    slots.push({
+    spawned.push({
       slot,
       pid: child.pid,
       url: item.url,
@@ -161,8 +199,12 @@ function launchDisplays({ dataDir, displays, softwareDecode = false, kiosk = tru
       height: Number(bounds.height) || 720,
     });
   }
+  const keptRows = killExisting
+    ? []
+    : saved.slots.filter((row) => plan.keep.includes(row.slot) || plan.untouched.includes(row.slot));
+  const slots = [...keptRows, ...spawned];
   writePidFile(dataDir, slots);
-  return slots;
+  return [...keptRows.filter((row) => plan.keep.includes(row.slot)), ...spawned];
 }
 
 function relaunchWallChrome({ dataDir, softwareDecode = true, port = 3000, kiosk = true } = {}) {
@@ -194,6 +236,7 @@ module.exports = {
   commandLine,
   ownsDisplayProfile,
   killOwned,
+  launchPlan,
   launchDisplays,
   relaunchWallChrome,
 };

@@ -8,18 +8,25 @@
   or active-hours write is a warning and does not stop firewall, power, or startup.
   -AutoLogonUser sets AutoAdminLogon for a local passwordless account (for example Admin).
   -DryRun applies the same machine setup except AutoAdminLogon, and is what CI runs.
+  Boot tasks are registered only with -Kiosk, or when an interactive console answers yes.
+  Dev and test PCs should leave -Kiosk off. scripts\enable-autostart.ps1 registers them later.
 .PARAMETER AutoLogonUser
   Local passwordless account to sign in automatically, for example Admin.
 .PARAMETER DryRun
-  Skip AutoAdminLogon. Still registers tasks, power, firewall, and the private network profile.
+  Skip AutoAdminLogon. Power, firewall, and the private network profile still run.
+  Boot tasks are registered only when -Kiosk is also set.
+.PARAMETER Kiosk
+  Register PinballLandServer, PinballLandKiosk, PinballLandUpdateBoot, and PinballLandUpdateNightly.
 .PARAMETER Verify
   Print the verify summary and exit. Does not change the machine.
+  Pass -Kiosk to require the four boot tasks.
 #>
 param(
   [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
   [switch]$Verify,
   [switch]$DryRun,
   [switch]$NoSummary,
+  [switch]$Kiosk,
   [string]$AutoLogonUser
 )
 
@@ -310,7 +317,8 @@ function Test-TaskWaitsForUpdate {
 function Write-KioskVerifySummary {
   param(
     [string]$AutoLogonUser,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Kiosk
   )
 
   $rows = New-Object System.Collections.Generic.List[object]
@@ -321,28 +329,37 @@ function Write-KioskVerifySummary {
 
   $kiosk = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   $server = Get-ScheduledTask -TaskName $serverTask -ErrorAction SilentlyContinue
-  Add-Row "Kiosk task" $(if ($kiosk) { "OK" } else { "FAIL" }) $(if ($kiosk) { $taskName } else { "missing" })
-  Add-Row "Server task" $(if ($server) { "OK" } else { "FAIL" }) $(if ($server) { $serverTask } else { "missing" })
-  $boot = Get-ScheduledTask -TaskName "PinballLandUpdateBoot" -ErrorAction SilentlyContinue
-  $nightly = Get-ScheduledTask -TaskName "PinballLandUpdateNightly" -ErrorAction SilentlyContinue
-  $bootArg = ""
-  $nightlyArg = ""
-  if ($boot -and $boot.Actions) { $bootArg = [string]@($boot.Actions)[0].Arguments }
-  if ($nightly -and $nightly.Actions) { $nightlyArg = [string]@($nightly.Actions)[0].Arguments }
-  $bootOk = $boot -and $bootArg -match "invoke-update\.ps1" -and $bootArg -match "-Mode boot"
-  $nightlyOk = $nightly -and $nightlyArg -match "invoke-update\.ps1" -and $nightlyArg -match "-Mode nightly"
-  Add-Row "Update boot task" $(if ($bootOk) { "OK" } else { "FAIL" }) $(if ($bootOk) { "PinballLandUpdateBoot" } else { "missing" })
-  Add-Row "Update nightly task" $(if ($nightlyOk) { "OK" } else { "FAIL" }) $(if ($nightlyOk) { "PinballLandUpdateNightly" } else { "missing" })
-  $serverWaits = Test-TaskWaitsForUpdate -Task $server
-  $kioskWaits = Test-TaskWaitsForUpdate -Task $kiosk
-  $orderOk = $serverWaits -and $kioskWaits
-  Add-Row "Update before start" $(if ($orderOk) { "OK" } else { "FAIL" }) "server and kiosk start from the boot task"
-  $nodePath = $null
-  if ($server -and $server.Actions) {
-    $nodePath = [string]@($server.Actions)[0].Execute
+  if (-not $Kiosk) {
+    Add-Row "Kiosk task" "SKIP" "pass -Kiosk to register boot tasks"
+    Add-Row "Server task" "SKIP" "pass -Kiosk to register boot tasks"
+    Add-Row "Update boot task" "SKIP" "pass -Kiosk to register boot tasks"
+    Add-Row "Update nightly task" "SKIP" "pass -Kiosk to register boot tasks"
+    Add-Row "Update before start" "SKIP" "pass -Kiosk to register boot tasks"
+    Add-Row "Server node.exe" "SKIP" "pass -Kiosk to register boot tasks"
+  } else {
+    Add-Row "Kiosk task" $(if ($kiosk) { "OK" } else { "FAIL" }) $(if ($kiosk) { $taskName } else { "missing" })
+    Add-Row "Server task" $(if ($server) { "OK" } else { "FAIL" }) $(if ($server) { $serverTask } else { "missing" })
+    $boot = Get-ScheduledTask -TaskName "PinballLandUpdateBoot" -ErrorAction SilentlyContinue
+    $nightly = Get-ScheduledTask -TaskName "PinballLandUpdateNightly" -ErrorAction SilentlyContinue
+    $bootArg = ""
+    $nightlyArg = ""
+    if ($boot -and $boot.Actions) { $bootArg = [string]@($boot.Actions)[0].Arguments }
+    if ($nightly -and $nightly.Actions) { $nightlyArg = [string]@($nightly.Actions)[0].Arguments }
+    $bootOk = $boot -and $bootArg -match "invoke-update\.ps1" -and $bootArg -match "-Mode boot"
+    $nightlyOk = $nightly -and $nightlyArg -match "invoke-update\.ps1" -and $nightlyArg -match "-Mode nightly"
+    Add-Row "Update boot task" $(if ($bootOk) { "OK" } else { "FAIL" }) $(if ($bootOk) { "PinballLandUpdateBoot" } else { "missing" })
+    Add-Row "Update nightly task" $(if ($nightlyOk) { "OK" } else { "FAIL" }) $(if ($nightlyOk) { "PinballLandUpdateNightly" } else { "missing" })
+    $serverWaits = Test-TaskWaitsForUpdate -Task $server
+    $kioskWaits = Test-TaskWaitsForUpdate -Task $kiosk
+    $orderOk = $serverWaits -and $kioskWaits
+    Add-Row "Update before start" $(if ($orderOk) { "OK" } else { "FAIL" }) "server and kiosk start from the boot task"
+    $nodePath = $null
+    if ($server -and $server.Actions) {
+      $nodePath = [string]@($server.Actions)[0].Execute
+    }
+    $nodeOk = $nodePath -and [System.IO.Path]::IsPathRooted($nodePath) -and $nodePath.ToLower().EndsWith("\node.exe")
+    Add-Row "Server node.exe" $(if ($nodeOk) { "OK" } else { "FAIL" }) $(if ($nodePath) { $nodePath } else { "missing" })
   }
-  $nodeOk = $nodePath -and [System.IO.Path]::IsPathRooted($nodePath) -and $nodePath.ToLower().EndsWith("\node.exe")
-  Add-Row "Server node.exe" $(if ($nodeOk) { "OK" } else { "FAIL" }) $(if ($nodePath) { $nodePath } else { "missing" })
   $dataDir = Get-PinballDataDir
   $dataOk = Test-PinballUsersModify -Dir $dataDir
   Add-Row "Data folder" $(if ($dataOk) { "OK" } else { "FAIL" }) $dataDir
@@ -451,7 +468,7 @@ function Write-KioskVerifySummary {
 }
 
 if ($Verify) {
-  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun
+  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun -Kiosk:$Kiosk
   if ($passed) {
     Write-Host "Verify passed."
     exit 0
@@ -489,33 +506,40 @@ try {
   Write-Warning "Data folder permissions were not updated: $($_.Exception.Message)"
 }
 
-Write-Host "Registering scheduled task '$taskName' to run at logon..."
-try {
-  $action = New-ScheduledTaskAction -Execute $cmdPath -WorkingDirectory $RepoRoot
-  $trigger = New-ScheduledTaskTrigger -AtLogOn
-  $trigger.Delay = "PT20S"
-  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+. (Join-Path $PSScriptRoot "confirm-kiosk-autostart.ps1")
+$registerAutostart = Confirm-KioskAutostart -Kiosk:$Kiosk -DryRun:$DryRun
+if ($registerAutostart) {
+  Write-Host "Registering scheduled task '$taskName' to run at logon..."
+  try {
+    $action = New-ScheduledTaskAction -Execute $cmdPath -WorkingDirectory $RepoRoot
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $trigger.Delay = "PT20S"
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 
-  $nodeExe = Resolve-NodeExe
-  if (-not $nodeExe) {
-    Write-Warning "node.exe was not found on PATH. The server task was not registered."
-  } else {
-    $serverAction = New-ScheduledTaskAction -Execute $nodeExe -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
-    $serverTrigger = New-ScheduledTaskTrigger -AtLogOn
-    Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
-    Write-Host "Registered '$serverTask' with $nodeExe. The boot update task starts it after the update check."
+    $nodeExe = Resolve-NodeExe
+    if (-not $nodeExe) {
+      Write-Warning "node.exe was not found on PATH. The server task was not registered."
+    } else {
+      $serverAction = New-ScheduledTaskAction -Execute $nodeExe -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
+      $serverTrigger = New-ScheduledTaskTrigger -AtLogOn
+      Register-ScheduledTask -TaskName $serverTask -Action $serverAction -Trigger $serverTrigger -Settings $settings -Principal $principal -Force | Out-Null
+      Write-Host "Registered '$serverTask' with $nodeExe. The boot update task starts it after the update check."
+    }
+  } catch {
+    Write-Warning "Scheduled tasks were not registered: $($_.Exception.Message)"
   }
-} catch {
-  Write-Warning "Scheduled tasks were not registered: $($_.Exception.Message)"
-}
 
-Write-Host "Registering boot and nightly update tasks..."
-try {
-  & (Join-Path $PSScriptRoot "register-update-tasks.ps1") -RepoRoot $RepoRoot
-} catch {
-  Write-Warning "Update tasks were not registered: $($_.Exception.Message)"
+  Write-Host "Registering boot and nightly update tasks..."
+  try {
+    & (Join-Path $PSScriptRoot "register-update-tasks.ps1") -RepoRoot $RepoRoot
+  } catch {
+    Write-Warning "Update tasks were not registered: $($_.Exception.Message)"
+  }
+} else {
+  Write-Host "Boot tasks were not registered. Dev and test PCs stay manual."
+  Write-Host "On the venue PC, pass -Kiosk or run scripts\enable-autostart.ps1."
 }
 
 Write-Host "Hiding notifications, the screensaver, and update reboots during open hours..."
@@ -577,7 +601,8 @@ if (-not $NoSummary) {
   Write-Host "  Sign out and back in, or run scripts\start-kiosk.cmd to test now."
   Write-Host ""
   Write-Host "Uninstall later with:  powershell -File scripts\uninstall-kiosk-windows.ps1"
-  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun
+  Write-Host "Stop boot tasks on a dev PC with:  powershell -File scripts\disable-autostart.ps1"
+  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun -Kiosk:$registerAutostart
   if ($passed) {
     Write-Host "Verify passed."
   } else {

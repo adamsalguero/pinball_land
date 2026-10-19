@@ -10,7 +10,7 @@ RustDesk is the default. On a Beelink that already has Pinball Land, the same on
 cd C:\pinball-land
 git pull
 npm.cmd ci
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -RustDeskPassword "choose-a-long-password"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -Kiosk -RustDeskPassword "choose-a-long-password"
 shutdown /r /t 0
 ```
 

@@ -13,10 +13,10 @@ Copy this repo to `C:\pinball-land` (git clone, or unzip a release there). Git f
 Open PowerShell and run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Test-Path C:\pinball-land\package.json)) { git clone https://github.com/adamsalguero/pinball_land.git C:\pinball-land }; & C:\pinball-land\scripts\install-beelink.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "if (-not (Test-Path C:\pinball-land\package.json)) { git clone https://github.com/adamsalguero/pinball_land.git C:\pinball-land }; & C:\pinball-land\scripts\install-beelink.ps1 -Kiosk"
 ```
 
-That installs Node.js LTS if it is missing, installs the app, registers the server and the wall to start at sign-in, opens the private-network firewall for ports 3000 and 3443, and starts the server. The window prints two addresses. The admin PIN is `2224`.
+That installs Node.js LTS if it is missing, installs the app, registers the server and the wall to start at sign-in, opens the private-network firewall for ports 3000 and 3443, and starts the server. The window prints two addresses. The admin PIN is `2224`. `-Kiosk` is the venue PC. A home or test PC should omit it. If those tasks are already registered, `scripts\disable-autostart.ps1` removes them (it asks for Administrator).
 
 Sign out and back in once so the wall windows open on the TVs. The server is already running from the command above.
 
@@ -28,7 +28,7 @@ Run this once in PowerShell so the PC updates itself from GitHub `main` at sign-
 cd C:\pinball-land
 git pull
 npm.cmd ci
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -RustDeskPassword "your-permanent-password"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\enable-autoupdate.ps1 -Kiosk -RustDeskPassword "your-permanent-password"
 shutdown /r /t 0
 ```
 
