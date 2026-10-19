@@ -318,7 +318,7 @@ function Write-KioskVerifySummary {
   param(
     [string]$AutoLogonUser,
     [switch]$DryRun,
-    [switch]$Kiosk
+    [switch]$RequireTasks
   )
 
   $rows = New-Object System.Collections.Generic.List[object]
@@ -329,7 +329,7 @@ function Write-KioskVerifySummary {
 
   $kiosk = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   $server = Get-ScheduledTask -TaskName $serverTask -ErrorAction SilentlyContinue
-  if (-not $Kiosk) {
+  if (-not $RequireTasks) {
     Add-Row "Kiosk task" "SKIP" "pass -Kiosk to register boot tasks"
     Add-Row "Server task" "SKIP" "pass -Kiosk to register boot tasks"
     Add-Row "Update boot task" "SKIP" "pass -Kiosk to register boot tasks"
@@ -468,7 +468,7 @@ function Write-KioskVerifySummary {
 }
 
 if ($Verify) {
-  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun -Kiosk:$Kiosk
+  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun -RequireTasks:$Kiosk
   if ($passed) {
     Write-Host "Verify passed."
     exit 0
@@ -602,7 +602,7 @@ if (-not $NoSummary) {
   Write-Host ""
   Write-Host "Uninstall later with:  powershell -File scripts\uninstall-kiosk-windows.ps1"
   Write-Host "Stop boot tasks on a dev PC with:  powershell -File scripts\disable-autostart.ps1"
-  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun -Kiosk:$registerAutostart
+  $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun -RequireTasks:$registerAutostart
   if ($passed) {
     Write-Host "Verify passed."
   } else {
