@@ -6,6 +6,7 @@ const WALL_CHROME_FLAGS = [
   "--disable-background-timer-throttling",
   "--disable-renderer-backgrounding",
   "--disable-backgrounding-occluded-windows",
+  "--force-device-scale-factor=1",
 ];
 
 const SOFTWARE_DECODE_FLAGS = [

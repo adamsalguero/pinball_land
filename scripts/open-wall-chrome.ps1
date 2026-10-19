@@ -9,6 +9,7 @@ $flags = @(
   "--disable-renderer-backgrounding",
   "--disable-background-timer-throttling",
   "--disable-background-media-suspend",
+  "--force-device-scale-factor=1",
   "--disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo",
   "--kiosk",
   "--no-first-run",
@@ -92,6 +93,15 @@ Stop-OwnedChrome
 
 $positions = @()
 try {
+  if (-not ("PinballDpiAware" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class PinballDpiAware {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+}
+'@
+  }
+  [PinballDpiAware]::SetProcessDPIAware() | Out-Null
   Add-Type -AssemblyName System.Windows.Forms
   $screens = @([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X }, { $_.Bounds.Y })
   foreach ($screen in $screens) {

@@ -339,6 +339,7 @@ function createApp({
     monitors = Array.isArray(list)
       ? list.filter((item) => item && item.bounds).map((item) => ({
           id: item.id,
+          scaleFactor: Number(item.scaleFactor) > 0 ? Number(item.scaleFactor) : 1,
           bounds: {
             x: Number(item.bounds.x) || 0,
             y: Number(item.bounds.y) || 0,
@@ -478,6 +479,7 @@ function createApp({
         monitors: mapped.arranged.map((display) => ({
           id: display.id,
           bounds: display.bounds,
+          scaleFactor: Number(display.scaleFactor) > 0 ? Number(display.scaleFactor) : 1,
         })),
         planned: mapped.windows,
         skipped: mapped.skipped,
@@ -774,6 +776,18 @@ function createApp({
         url: found.url,
         source: found.source || "tailscale",
         detail: withGuest("Tailscale Funnel is up. The wall QR uses that link."),
+        checkedAt: clockNow(),
+      };
+      broadcast();
+      return publicStatus;
+    }
+    if (found?.installed && found?.loggedIn) {
+      cloudflareTunnel.stop();
+      const link = found.approvalUrl ? ` Approve it at ${found.approvalUrl}` : "";
+      publicStatus = {
+        url: "",
+        source: "",
+        detail: withGuest(`Tailscale is installed, but Funnel is not approved.${link}`),
         checkedAt: clockNow(),
       };
       broadcast();

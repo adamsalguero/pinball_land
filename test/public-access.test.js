@@ -20,7 +20,14 @@ const {
   readGuestCookie,
   COOKIE_MS,
 } = require("../src/guest-link");
-const { parseTailscaleStatus, parseFunnelStatus, publicUrlFrom, parseCloudflareLine } = require("../src/public-access");
+const {
+  parseTailscaleStatus,
+  parseFunnelStatus,
+  publicUrlFrom,
+  parseCloudflareLine,
+  parseFunnelApprovalUrl,
+  detectTailscale,
+} = require("../src/public-access");
 
 const HOUR = 60 * 60 * 1000;
 
@@ -130,6 +137,28 @@ test("tailscale status becomes a fixed https URL and cloudflare lines are read",
   assert.equal(parseFunnelStatus(JSON.stringify({ AllowFunnel: false })), false);
   assert.equal(parseCloudflareLine("request at https://random-name.trycloudflare.com ready"), "https://random-name.trycloudflare.com");
   assert.equal(parseTailscaleStatus(JSON.stringify({ Self: { DNSName: "offline.example.com", Online: true } })), "");
+  const approval = "https://login.tailscale.com/f/funnel?node=n123";
+  assert.equal(parseFunnelApprovalUrl(`Funnel is not enabled.\nTo enable, visit:\n\t${approval}`), approval);
+  assert.equal(parseFunnelApprovalUrl("https://wall.tailnet.ts.net"), "");
+});
+
+test("tailscale installed without funnel reports the approval link and does not invent a URL", async () => {
+  const dns = JSON.stringify({ BackendState: "Running", Self: { DNSName: "wall.tailnet.ts.net.", Online: true } });
+  const funnelOff = JSON.stringify({ AllowFunnel: false });
+  const approval = "https://login.tailscale.com/f/funnel?node=n123";
+  const found = await detectTailscale(async (command, args) => {
+    assert.equal(command, "tailscale");
+    if (args[0] === "status") return dns;
+    if (args.includes("--json")) return funnelOff;
+    return `Funnel is not enabled on your tailnet.\n${approval}\n`;
+  });
+  assert.equal(found.installed, true);
+  assert.equal(found.loggedIn, true);
+  assert.equal(found.url, "");
+  assert.equal(found.approvalUrl, approval);
+  const missing = await detectTailscale(async () => "");
+  assert.equal(missing.installed, false);
+  assert.equal(missing.url, "");
 });
 
 test("internet guests need today's or yesterday's QR, then a 12 hour cookie", async () => {
@@ -191,6 +220,34 @@ test("public access uses the funnel URL in the QR and falls back when it is off"
     assert.equal(on.data.guest.publicUrl, `https://pinball.example.ts.net/?k=${token}`);
     const hidden = await json(started.origin, "/api/state", { headers: { "x-forwarded-for": "1.1.1.1" } });
     assert.equal(hidden.res.status, 404);
+  } finally {
+    started.server.close();
+  }
+});
+
+test("public access names an unapproved funnel instead of starting cloudflare", async () => {
+  const started = await startServer({
+    publicProbe: async () => ({
+      url: "",
+      source: "",
+      installed: true,
+      loggedIn: true,
+      funnel: false,
+      approvalUrl: "https://login.tailscale.com/f/funnel?node=n1",
+    }),
+  });
+  try {
+    const on = await json(started.origin, "/api/public-access", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { enabled: true, cloudflare: true },
+    });
+    assert.equal(on.res.status, 200);
+    assert.equal(on.data.publicAccess.url, "");
+    assert.equal(on.data.publicAccess.source, "");
+    assert.match(on.data.publicAccess.detail, /Tailscale is installed, but Funnel is not approved/);
+    assert.match(on.data.publicAccess.detail, /https:\/\/login\.tailscale\.com\/f\/funnel\?node=n1/);
+    assert.equal(String(on.data.guest.publicUrl || "").includes("trycloudflare"), false);
   } finally {
     started.server.close();
   }

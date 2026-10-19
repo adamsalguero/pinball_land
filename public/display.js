@@ -744,13 +744,12 @@ function resolveCard() {
     }
     const pinned = payload.layout?.[SLOT]?.content === "video";
     if (heldClip) {
+      const sameClip = planned?.type === "video" && planned.playId === heldClip.serverPlayId;
       if (pinned) {
-        if (planned?.type === "video" && planned.playId === heldClip.serverPlayId) {
-          return { ...heldClip.card, span: false };
-        }
+        if (sameClip) return { ...heldClip.card, span: false };
         heldClip = null;
         failedClipIds = new Set();
-      } else if (heldClip.tick === serverTick()) {
+      } else if (planned?.type === "video" && heldClip.tick === serverTick()) {
         return { ...heldClip.card, span: false };
       } else {
         heldClip = null;
@@ -1992,7 +1991,7 @@ function placePhotos(target, card) {
   });
 }
 
-let qrDayShown = null;
+let qrShownKey = null;
 
 function refreshGuestQr() {
   const qr = document.querySelector("#pin-qr");
@@ -2004,13 +2003,14 @@ function refreshGuestQr() {
   }
   card.hidden = false;
   const day = payload?.guest?.qrDay || "";
-  if (qrDayShown === null) {
-    qrDayShown = day;
-    return;
-  }
-  if (!day || day === qrDayShown) return;
-  qrDayShown = day;
-  const next = `/api/guest-qr?d=${encodeURIComponent(day)}`;
+  const publicUrl = payload?.guest?.publicUrl || "";
+  const key = `${day}|${publicUrl}`;
+  if (key === qrShownKey) return;
+  qrShownKey = key;
+  const params = new URLSearchParams();
+  if (day) params.set("d", day);
+  if (publicUrl) params.set("u", publicUrl);
+  const next = params.toString() ? `/api/guest-qr?${params}` : "/api/guest-qr";
   if (qr.getAttribute("src") !== next) qr.src = next;
 }
 
