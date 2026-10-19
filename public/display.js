@@ -2146,8 +2146,7 @@ function clearMotionCanvas() {
 }
 
 function decorationsPaused() {
-  if (SHOT || document.documentElement.dataset.motion === "reduced") return true;
-  return !screen.classList.contains("is-entering");
+  return Boolean(SHOT || document.documentElement.dataset.motion === "reduced");
 }
 
 function ensureMotion() {
