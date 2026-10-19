@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   mapDisplaysToSlots,
+  physicalBounds,
   layoutForDisplays,
   normalizeDisplays,
   windowLayoutKey,
@@ -26,6 +27,26 @@ test("maps attached displays left-to-right, max three, extra ignored", () => {
     ]
   );
   assert.deepEqual(mapped.skipped, []);
+});
+
+test("a 150 percent monitor stays in DIP bounds and converts to physical pixels", () => {
+  const mapped = mapDisplaysToSlots([
+    { id: "left", scaleFactor: 1.5, bounds: { x: -1280, y: 0, width: 1280, height: 720 } },
+  ], { count: 1 });
+  assert.equal(mapped.windows[0].scaleFactor, 1.5);
+  assert.deepEqual(mapped.windows[0].bounds, { x: -1280, y: 0, width: 1280, height: 720 });
+  assert.deepEqual(physicalBounds(mapped.windows[0].bounds, mapped.windows[0].scaleFactor), {
+    x: -1920,
+    y: 0,
+    width: 1920,
+    height: 1080,
+  });
+  assert.deepEqual(physicalBounds({ x: 0, y: 0, width: 1920, height: 1080 }, 1), {
+    x: 0,
+    y: 0,
+    width: 1920,
+    height: 1080,
+  });
 });
 
 test("one monitor maps only to display 1 and skips the missing configured screens", () => {
@@ -85,7 +106,7 @@ test("mirror keeps each screen's saved content but shows screen 1 and the same r
       3: { enabled: false, content: "leaderboard", leaderboardId: "board-a" },
     },
   });
-  assert.equal(config.screens["2"].content, "rotation");
+  assert.equal(config.screens["2"].content, "video");
   const layout = layoutForDisplays(config);
   assert.equal(layout["1"].content, "logos");
   assert.equal(layout["2"].content, "logos");

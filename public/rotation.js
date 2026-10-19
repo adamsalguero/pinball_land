@@ -173,7 +173,8 @@ function planRotation(playlist, options = {}) {
     const content = layout[slot]?.content;
     if (content && content !== "rotation") {
       if (content === "video") {
-        const videos = openVideos(list);
+        const playlistVideos = openVideos(list);
+        const videos = playlistVideos.length ? playlistVideos : openVideos(options.pinVideos);
         const memory = options.videoMemory?.[slot];
         const gen = memory?.gen || 0;
         const salt = `${slot}:${gen}`;

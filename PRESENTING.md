@@ -75,15 +75,18 @@ powershell -ExecutionPolicy Bypass -File scripts\install-airplay-windows.ps1
 That script:
 
 1. Downloads `uxplay-windows.zip` and checks SHA-256 `9d3a51c15fc9db857351195e7eb7bbb21700d9ae25d936a54bcf8536b62cca18`.
-2. Unpacks it to `tools\uxplay-windows\`. The kiosk finds `uxplay*.exe` there on its own.
-3. Downloads [Bonjour Print Services 2.0.2](https://download.info.apple.com/Mac_OS_X/061-8098.20100603.gthyu/BonjourPSSetup.exe) (Apple’s page: [Bonjour Print Services for Windows](https://support.apple.com/en-us/106380)) and checks SHA-256 `7f1ec347cd429cfb25a34b2147e02231334f28290e0c28be213415b0f99da1a0`.
-4. Installs Bonjour quietly if the window is elevated.
+2. Unpacks it to `tools\uxplay-windows\` and uses `uxplay-windows.exe`. It does not start `uxplay-bluetooth-beacon.exe`. The ARM64 zip is not used.
+3. Writes `-n "Pinball Land" -nh` to `%ProgramData%\uxplay-windows\arguments.txt` and `%APPDATA%\leapbtw\uxplay-windows\arguments.txt`. Other flags already in those files stay. The tray app reads `arguments.txt`, so the name is Pinball Land without a tray click. The tray adds `-ble` itself.
+4. Downloads [Bonjour Print Services 2.0.2](https://download.info.apple.com/Mac_OS_X/061-8098.20100603.gthyu/BonjourPSSetup.exe) (Apple’s page: [Bonjour Print Services for Windows](https://support.apple.com/en-us/106380)) and checks SHA-256 `7f1ec347cd429cfb25a34b2147e02231334f28290e0c28be213415b0f99da1a0`.
+5. Installs Bonjour quietly if the window is elevated. Exit 1603 is non-fatal when the Bonjour Service or the bundled `mDNSResponder.exe` is present.
 
 The 2.0 build also bundles mDNSResponder, so an iPhone can still see the receiver if Bonjour’s installer complains. Install Bonjour anyway. The exe is unsigned: if SmartScreen appears, choose **More info**, then **Run anyway**.
 
+The server starts one `uxplay-windows.exe`. It checks for that process before spawning another, so the kiosk and the server task do not leave two receivers (and two beacons) running.
+
 Allow **uxplay** and **Node.js** on private networks when Windows Firewall asks. AirPlay uses Bonjour (UDP 5353) plus the ports UxPlay opens (TCP 7000 and nearby UDP).
 
-Restart the kiosk (`npm run kiosk`). The server starts UxPlay and leaves it running. The name iPhones see is **Pinball Land** (`airplay.windowTitle`).
+Restart the kiosk (`npm run kiosk`). The server starts UxPlay and leaves it running. The kiosk does not start a second copy. The name iPhones see is **Pinball Land** (`airplay.windowTitle`, also written to `arguments.txt`).
 
 To point at a different exe, set `airplay.command` in `config.json`. Extra flags in `args` are added after `-n`, `-nh`, `-s`, and on Windows `-vs d3d11videosink`. Do not add `-fs`. Fullscreen mode sticks to the primary monitor. The kiosk moves the window itself.
 

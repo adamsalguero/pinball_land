@@ -9,6 +9,7 @@ $flags = @(
   "--disable-renderer-backgrounding",
   "--disable-background-timer-throttling",
   "--disable-background-media-suspend",
+  "--force-device-scale-factor=1",
   "--disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo",
   "--kiosk",
   "--no-first-run",
@@ -39,8 +40,18 @@ $candidates = @(
   "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
   "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
 )
+if ($env:LOCALAPPDATA) {
+  $candidates += (Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe")
+}
+$candidates += @(
+  "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+  "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+)
+if ($env:LOCALAPPDATA) {
+  $candidates += (Join-Path $env:LOCALAPPDATA "Microsoft\Edge\Application\msedge.exe")
+}
 $chrome = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-if (-not $chrome) { throw "Google Chrome was not found." }
+if (-not $chrome) { throw "Google Chrome and Microsoft Edge were not found." }
 
 function Test-Health([string]$Url) {
   $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
@@ -92,6 +103,15 @@ Stop-OwnedChrome
 
 $positions = @()
 try {
+  if (-not ("PinballDpiAware" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class PinballDpiAware {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+}
+'@
+  }
+  [PinballDpiAware]::SetProcessDPIAware() | Out-Null
   Add-Type -AssemblyName System.Windows.Forms
   $screens = @([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X }, { $_.Bounds.Y })
   foreach ($screen in $screens) {

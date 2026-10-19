@@ -93,9 +93,24 @@ if (-not $loggedIn) {
   & $tailscale up
 }
 
-& $tailscale funnel --bg $Port
-if ($LASTEXITCODE -ne 0) {
-  throw "tailscale funnel failed. Confirm Tailscale is logged in, then run this script again."
+$funnelResult = & $tailscale funnel --bg $Port 2>&1 | Out-String
+$funnelCode = $LASTEXITCODE
+Write-Host $funnelResult
+if ($funnelCode -ne 0 -or $funnelResult -match "Funnel is not enabled") {
+  $link = ""
+  $found = [regex]::Match($funnelResult, "https://\S+")
+  if ($found.Success) { $link = $found.Value.TrimEnd(".", ")") }
+  Write-Host ""
+  Write-Host "Funnel is not enabled on this tailnet, so this script did not finish."
+  if ($link) {
+    Write-Host "Open this link and approve Funnel:"
+    Write-Host "  $link"
+  } else {
+    Write-Host "Open the link Tailscale printed and approve Funnel."
+  }
+  Write-Host "Then re-run this script:"
+  Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\enable-public-access.ps1"
+  exit 1
 }
 
 $funnel = & $tailscale funnel status

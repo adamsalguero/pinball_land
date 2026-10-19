@@ -1,5 +1,5 @@
 const SLOT_IDS = ["1", "2", "3"];
-const DISPLAY_CONTENTS = ["rotation", "logos", "amenities", "leaderboard", "pinboard", "clock"];
+const DISPLAY_CONTENTS = ["rotation", "logos", "amenities", "leaderboard", "pinboard", "clock", "video"];
 const BLACK_DISPLAY = new Set(["off", "black", "dark"]);
 const LEGACY_DISPLAY = {
   pinnacle: "logos",
@@ -13,7 +13,7 @@ const LEGACY_DISPLAY = {
 
 function canonicalDisplayContent(content) {
   const value = String(content || "");
-  if (BLACK_DISPLAY.has(value) || value === "video") return "rotation";
+  if (BLACK_DISPLAY.has(value)) return "rotation";
   const mapped = LEGACY_DISPLAY[value] || value;
   return DISPLAY_CONTENTS.includes(mapped) ? mapped : null;
 }
@@ -64,6 +64,22 @@ function sortDisplays(displays) {
   });
 }
 
+function scaleOf(display) {
+  const scale = Number(display?.scaleFactor);
+  return scale > 0 ? scale : 1;
+}
+
+function physicalBounds(bounds, scaleFactor) {
+  const scale = Number(scaleFactor) > 0 ? Number(scaleFactor) : 1;
+  const box = bounds || {};
+  return {
+    x: Math.round((Number(box.x) || 0) * scale),
+    y: Math.round((Number(box.y) || 0) * scale),
+    width: Math.round((Number(box.width) || 0) * scale),
+    height: Math.round((Number(box.height) || 0) * scale),
+  };
+}
+
 function applyOrder(sorted, order) {
   if (!order?.length) return sorted;
   const byId = new Map(sorted.map((display) => [String(display.id), display]));
@@ -99,6 +115,7 @@ function mapDisplaysToSlots(displays, options = {}) {
     windows.push({
       slot,
       bounds: display.bounds,
+      scaleFactor: scaleOf(display),
       id: display.id,
     });
   }
@@ -148,6 +165,8 @@ module.exports = {
   clampCount,
   normalizeDisplays,
   sortDisplays,
+  scaleOf,
+  physicalBounds,
   applyOrder,
   mapDisplaysToSlots,
   layoutForDisplays,

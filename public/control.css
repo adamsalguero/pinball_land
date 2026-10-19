@@ -215,6 +215,20 @@ select {
   color: var(--active-text);
 }
 
+[data-theme="halloween"] .btn,
+[data-theme="christmas"] .btn {
+  background: #3a3338;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+[data-theme="halloween"] .btn.active,
+[data-theme="christmas"] .btn.active {
+  background: var(--active);
+  color: var(--active-text);
+  box-shadow: none;
+}
+
 .choices {
   display: grid;
   grid-template-columns: 1fr 1fr;

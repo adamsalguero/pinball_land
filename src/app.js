@@ -20,7 +20,7 @@ const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./me
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
-const { starterThemes } = require("./season");
+const { starterThemes, pinSeason } = require("./season");
 const { noteStall } = require("./playback-flags");
 const { relaunchWallChrome } = require("./wall-chrome");
 const { bundledFile } = require("./bundled");
@@ -339,6 +339,7 @@ function createApp({
     monitors = Array.isArray(list)
       ? list.filter((item) => item && item.bounds).map((item) => ({
           id: item.id,
+          scaleFactor: Number(item.scaleFactor) > 0 ? Number(item.scaleFactor) : 1,
           bounds: {
             x: Number(item.bounds.x) || 0,
             y: Number(item.bounds.y) || 0,
@@ -369,6 +370,16 @@ function createApp({
       })),
       youtube: config.youtube?.[state.theme] || [],
     });
+    const pinTheme = state.theme === "pinnacle" ? pinSeason(clockNow()) : "";
+    const pinVideos = pinTheme
+      ? starterCards(catalogItems, {
+        theme: pinTheme,
+        allAges: config.media.allAges,
+        urlFor: (id) => `/media/cache/${id}`,
+        disabledIds: config.media.disabledIds,
+        isReady: (id) => clips.isReady(id),
+      })
+      : [];
     const timing = effectiveRotation(state);
     const tick = currentTick(state.rotation.startedAt, timing.intervalSec, clockNow(), timing.minInterval);
     for (const slot of Object.keys(slotFallback)) {
@@ -382,6 +393,7 @@ function createApp({
       layout,
       now: clockNow(),
       videoMemory,
+      pinVideos,
     });
     for (const [slot, fallback] of Object.entries(slotFallback)) {
       if (fallback.tick === tick && fallback.card) rotationPlan[slot] = fallback.card;
@@ -400,6 +412,7 @@ function createApp({
       layout,
       now: clockNow() + Math.max(1, Number(timing.intervalSec) || 30) * 1000,
       videoMemory,
+      pinVideos,
     });
     return {
       state: {
@@ -478,6 +491,7 @@ function createApp({
         monitors: mapped.arranged.map((display) => ({
           id: display.id,
           bounds: display.bounds,
+          scaleFactor: Number(display.scaleFactor) > 0 ? Number(display.scaleFactor) : 1,
         })),
         planned: mapped.windows,
         skipped: mapped.skipped,
@@ -774,6 +788,18 @@ function createApp({
         url: found.url,
         source: found.source || "tailscale",
         detail: withGuest("Tailscale Funnel is up. The wall QR uses that link."),
+        checkedAt: clockNow(),
+      };
+      broadcast();
+      return publicStatus;
+    }
+    if (found?.installed && found?.loggedIn) {
+      cloudflareTunnel.stop();
+      const link = found.approvalUrl ? ` Approve it at ${found.approvalUrl}` : "";
+      publicStatus = {
+        url: "",
+        source: "",
+        detail: withGuest(`Tailscale is installed, but Funnel is not approved.${link}`),
         checkedAt: clockNow(),
       };
       broadcast();
@@ -2689,6 +2715,9 @@ function createApp({
   settleAccess();
 
   try {
+    // The server is the only process that starts UxPlay. The kiosk reuses this
+    // server and does not spawn a second receiver. ensureRunning also refuses
+    // to spawn when uxplay-windows.exe is already running.
     airplayController.ensureRunning?.();
   } catch (err) {
     console.error(err);

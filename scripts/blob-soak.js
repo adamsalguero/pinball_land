@@ -155,20 +155,30 @@ async function runBlobSoak() {
     const slots = [1, 2, 3];
     note(`chrome ${browserPath}`);
     const ports = { 1: debugPort, 2: debugPort + 1, 3: debugPort + 2 };
+    const chromeExit = {};
     for (const slot of slots) {
       const [x, y] = positions[slot - 1];
-      children.push(spawn(browserPath, [
+      const child = spawn(browserPath, [
         `--user-data-dir=${path.join(dir, "chrome", `display${slot}`)}`,
         `--remote-debugging-port=${ports[slot]}`,
         `--app=${origins[slot]}/display/${slot}`,
         `--window-position=${x},${y}`,
         "--window-size=1100,700",
         ...FLAGS,
-      ], { stdio: "ignore", detached: true }));
+      ], { stdio: "ignore", detached: true });
+      child.on("exit", (code) => {
+        chromeExit[slot] = code;
+      });
+      children.push(child);
     }
     const bySlot = {};
     for (const slot of slots) {
-      await waitFor(`http://127.0.0.1:${ports[slot]}/json/version`, 120);
+      try {
+        await waitFor(`http://127.0.0.1:${ports[slot]}/json/version`, 120);
+      } catch (err) {
+        const gone = Object.prototype.hasOwnProperty.call(chromeExit, slot) ? chromeExit[slot] : "still running";
+        throw new Error(`display ${slot} debug port did not open (chrome exit ${gone}): ${err.message}`);
+      }
       const connected = await chromium.connectOverCDP(`http://127.0.0.1:${ports[slot]}`);
       browsers.push(connected);
       let page = null;

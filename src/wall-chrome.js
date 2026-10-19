@@ -13,15 +13,32 @@ function pidFile(dataDir) {
   return path.join(dataDir, "chrome", "pids.json");
 }
 
-function findChrome() {
-  if (process.env.PINBALL_CHROME && fs.existsSync(process.env.PINBALL_CHROME)) return process.env.PINBALL_CHROME;
-  const candidates = process.platform === "win32"
-    ? [
-      path.join(process.env.PROGRAMFILES || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
-    ]
-    : ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/local/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
-  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || "";
+function browserCandidates(env = process.env, platform = process.platform) {
+  if (platform !== "win32") {
+    return [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/local/bin/google-chrome",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ];
+  }
+  const programFiles = env.PROGRAMFILES || "C:\\Program Files";
+  const programFilesX86 = env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)";
+  const local = env.LOCALAPPDATA || "";
+  return [
+    path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    local ? path.join(local, "Google", "Chrome", "Application", "chrome.exe") : "",
+    path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+    path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    local ? path.join(local, "Microsoft", "Edge", "Application", "msedge.exe") : "",
+  ];
+}
+
+function findChrome({ env = process.env, exists = fs.existsSync, platform = process.platform } = {}) {
+  if (env.PINBALL_CHROME && exists(env.PINBALL_CHROME)) return env.PINBALL_CHROME;
+  return browserCandidates(env, platform).find((candidate) => candidate && exists(candidate)) || "";
 }
 
 function wallChromeArgs({ url, profile, bounds, softwareDecode = false, kiosk = true } = {}) {
@@ -157,7 +174,7 @@ function launchPlan({ saved = [], requested = [], killExisting = true, runningSl
 function launchDisplays({ dataDir, displays, softwareDecode = false, kiosk = true, chromePath, killExisting = true } = {}) {
   if (!dataDir) throw new Error("launchDisplays needs a data dir");
   const browser = chromePath || findChrome();
-  if (!browser) throw new Error("Google Chrome was not found.");
+  if (!browser) throw new Error("Google Chrome and Microsoft Edge were not found.");
   const saved = readPidFile(dataDir);
   const runningSlots = [];
   if (!killExisting) {
@@ -229,6 +246,7 @@ module.exports = {
   FEATURE_FLAGS,
   chromeProfileDir,
   pidFile,
+  browserCandidates,
   findChrome,
   wallChromeArgs,
   readPidFile,
