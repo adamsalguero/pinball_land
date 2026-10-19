@@ -1,5 +1,7 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { execFileSync } = require("child_process");
 
 function resolveAirplayCommand({
   command = "",
@@ -40,6 +42,21 @@ function resolveAirplayCommand({
   };
 }
 
+function uxplayExeRank(name) {
+  const base = path.basename(String(name || "")).toLowerCase();
+  if (base === "uxplay-windows.exe") return 0;
+  if (base === "uxplay.exe") return 1;
+  return 2;
+}
+
+function isUxplayExecutable(name) {
+  const base = path.basename(String(name || ""));
+  if (!/^uxplay.*\.exe$/i.test(base)) return false;
+  if (/beacon/i.test(base)) return false;
+  if (/arm64/i.test(base)) return false;
+  return true;
+}
+
 function findNestedUxplay(dir, exists, depth = 0) {
   if (depth > 4 || !exists(dir)) return null;
   let entries = [];
@@ -53,15 +70,132 @@ function findNestedUxplay(dir, exists, depth = 0) {
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) dirs.push(full);
-    else if (/^uxplay.*\.exe$/i.test(entry.name) && exists(full)) files.push(full);
+    else if (isUxplayExecutable(entry.name) && exists(full)) files.push(full);
   }
-  files.sort();
+  files.sort((a, b) => uxplayExeRank(a) - uxplayExeRank(b) || a.localeCompare(b));
   if (files[0]) return files[0];
   for (const child of dirs) {
     const found = findNestedUxplay(child, exists, depth + 1);
     if (found) return found;
   }
   return null;
+}
+
+function uxplayArgumentPaths(env = process.env) {
+  const paths = [];
+  const programData = env.PROGRAMDATA || "C:\\ProgramData";
+  paths.push(path.join(programData, "uxplay-windows", "arguments.txt"));
+  if (env.APPDATA) paths.push(path.join(env.APPDATA, "leapbtw", "uxplay-windows", "arguments.txt"));
+  return paths;
+}
+
+function mergeUxplayArguments(existing, windowTitle = "Pinball Land") {
+  const title = String(windowTitle || "Pinball Land").replace(/"/g, "");
+  let rest = String(existing || "");
+  rest = rest.replace(/(^|\s)-n\s+(?:"[^"]*"|'[^']*'|\S+)/g, " ");
+  rest = rest.replace(/(^|\s)-nh\b/g, " ");
+  rest = rest.replace(/\s+/g, " ").trim();
+  return `-n "${title}" -nh${rest ? ` ${rest}` : ""}`;
+}
+
+function writeUxplayArguments({
+  windowTitle = "Pinball Land",
+  platform = process.platform,
+  env = process.env,
+  fsImpl = fs,
+} = {}) {
+  if (platform !== "win32") return [];
+  const written = [];
+  for (const file of uxplayArgumentPaths(env)) {
+    let existing = "";
+    try {
+      existing = fsImpl.readFileSync(file, "utf8");
+    } catch {
+      existing = "";
+    }
+    const body = `${mergeUxplayArguments(existing, windowTitle)}\n`;
+    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
+    fsImpl.writeFileSync(file, body);
+    written.push(file);
+  }
+  return written;
+}
+
+function uxplayImageRunning(image, execImpl = execFileSync) {
+  try {
+    const out = execImpl("tasklist", ["/FI", `IMAGENAME eq ${image}`, "/FO", "CSV", "/NH"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 4000,
+    });
+    const text = String(out || "");
+    if (/no tasks are running/i.test(text)) return false;
+    return new RegExp(image.replace(".", "\\."), "i").test(text);
+  } catch {
+    return false;
+  }
+}
+
+function uxplayAlreadyRunning({ platform = process.platform, execImpl = execFileSync } = {}) {
+  if (platform !== "win32" || process.platform !== "win32") return false;
+  return uxplayImageRunning("uxplay-windows.exe", execImpl) || uxplayImageRunning("uxplay.exe", execImpl);
+}
+
+function uxplayLockPath() {
+  return path.join(os.tmpdir(), "pinball-land-uxplay.lock");
+}
+
+function pidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === "EPERM");
+  }
+}
+
+function claimUxplayLaunch({ fsImpl = fs } = {}) {
+  if (process.env.NODE_TEST_CONTEXT) return true;
+  const lock = uxplayLockPath();
+  const payload = JSON.stringify({ pid: process.pid, at: Date.now() });
+  try {
+    const fd = fsImpl.openSync(lock, "wx");
+    try {
+      fsImpl.writeFileSync(fd, payload);
+    } finally {
+      fsImpl.closeSync(fd);
+    }
+    return true;
+  } catch (err) {
+    if (!err || err.code !== "EEXIST") return true;
+  }
+  let current = null;
+  try {
+    current = JSON.parse(fsImpl.readFileSync(lock, "utf8"));
+  } catch {
+    current = null;
+  }
+  const at = Number(current && current.at) || 0;
+  const age = at ? Date.now() - at : 0;
+  const owner = Number(current && current.pid) || 0;
+  if (owner && owner !== process.pid && age < 20000 && pidAlive(owner)) return false;
+  if (owner && owner !== process.pid && age < 8000) return false;
+  try {
+    fsImpl.unlinkSync(lock);
+  } catch {
+    return false;
+  }
+  return claimUxplayLaunch({ fsImpl });
+}
+
+function releaseUxplayLaunch({ fsImpl = fs } = {}) {
+  if (process.env.NODE_TEST_CONTEXT) return;
+  try {
+    fsImpl.writeFileSync(uxplayLockPath(), JSON.stringify({ pid: process.pid, at: Date.now() }));
+  } catch {
+    // the lock is advisory; a missing file just means the next start rechecks tasklist
+  }
 }
 
 const AIRPLAY_TARGETS = ["off", "1", "2", "3", "all"];
@@ -219,6 +353,7 @@ class AirplayController {
     exists = fs.existsSync,
     onExit = null,
     onSession = null,
+    alreadyRunning = null,
   } = {}) {
     if (!spawnImpl) throw new Error("spawnImpl is required");
     this.spawn = spawnImpl;
@@ -228,6 +363,7 @@ class AirplayController {
     this.exists = exists;
     this.onExit = onExit;
     this.onSession = onSession;
+    this.alreadyRunning = alreadyRunning;
     this.child = null;
     this.slot = null;
     this.keepAlive = false;
@@ -253,14 +389,26 @@ class AirplayController {
       extraArgs: airplay.args,
       platform: this.platform,
     });
+    this.rememberArguments(airplay.windowTitle);
+    if (this.externalRunning()) {
+      return { ok: true, already: true, external: true, command: resolved.command };
+    }
+    if (!claimUxplayLaunch()) {
+      return { ok: true, already: true, external: true, command: resolved.command };
+    }
     let child;
     try {
+      if (this.externalRunning()) {
+        return { ok: true, already: true, external: true, command: resolved.command };
+      }
       child = this.spawn(resolved.command, args, {
         stdio: "ignore",
         windowsHide: false,
       });
     } catch (err) {
       return { ok: false, error: err.message || "Could not start UxPlay" };
+    } finally {
+      releaseUxplayLaunch();
     }
     this.child = child;
     this.slot = String(slot);
@@ -300,15 +448,42 @@ class AirplayController {
     return this.launch(resolved, args, null);
   }
 
+  externalRunning() {
+    if (typeof this.alreadyRunning === "function") return Boolean(this.alreadyRunning());
+    return uxplayAlreadyRunning({ platform: this.platform });
+  }
+
+  rememberArguments(windowTitle) {
+    if (process.env.NODE_TEST_CONTEXT) return;
+    try {
+      writeUxplayArguments({ windowTitle, platform: this.platform });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
   launch(resolved, args, slot) {
+    const airplay = this.getAirplayConfig() || {};
+    this.rememberArguments(airplay.windowTitle);
+    if (this.externalRunning()) {
+      return { ok: true, already: true, external: true, command: resolved.command };
+    }
+    if (!claimUxplayLaunch()) {
+      return { ok: true, already: true, external: true, command: resolved.command };
+    }
     let child;
     try {
+      if (this.externalRunning()) {
+        return { ok: true, already: true, external: true, command: resolved.command };
+      }
       child = this.spawn(resolved.command, args, {
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: false,
       });
     } catch (err) {
       return { ok: false, error: err.message || "Could not start UxPlay" };
+    } finally {
+      releaseUxplayLaunch();
     }
     this.child = child;
     this.slot = slot;
@@ -405,6 +580,12 @@ class AirplayController {
 
 module.exports = {
   resolveAirplayCommand,
+  findNestedUxplay,
+  isUxplayExecutable,
+  mergeUxplayArguments,
+  uxplayArgumentPaths,
+  writeUxplayArguments,
+  uxplayAlreadyRunning,
   buildAirplayArgs,
   buildPlacementScript,
   interpretAirplayLog,

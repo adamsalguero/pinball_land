@@ -70,7 +70,7 @@ No Assigned Access / Windows Kiosk Mode is required.
    powershell -ExecutionPolicy Bypass -File scripts\install-kiosk-windows.ps1 -Kiosk
    ```
 
-   `-Kiosk` creates Task Scheduler jobs for the server, the wall, and the automatic update: **PinballLandServer**, **PinballLandKiosk**, **PinballLandUpdateBoot**, and **PinballLandUpdateNightly**. Without `-Kiosk`, an interactive window asks `Start at sign-in? [y/N]`. The default is no, so pressing Enter does not register those tasks.
+   `-Kiosk` creates Task Scheduler jobs for the server, the wall, and the automatic update: **PinballLandServer**, **PinballLandKiosk**, **PinballLandUpdateBoot**, and **PinballLandUpdateNightly**. It also installs Google Chrome when `chrome.exe` is missing (`winget` id `Google.Chrome`, then the enterprise MSI). A dry run does not download Chrome. Verify prints a **Google Chrome** line. The wall looks for Chrome in Program Files and `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`, then Microsoft Edge, before it falls back to Electron. Without `-Kiosk`, an interactive window asks `Start at sign-in? [y/N]`. The default is no, so pressing Enter does not register those tasks.
 
    Turn the same four tasks on or off later. Both scripts need Administrator and self-elevate (they show a UAC prompt):
 

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { wallChromeArgs, chromeProfileDir, ownsDisplayProfile, relaunchWallChrome, launchPlan } = require("../src/wall-chrome");
+const { wallChromeArgs, chromeProfileDir, ownsDisplayProfile, relaunchWallChrome, launchPlan, findChrome } = require("../src/wall-chrome");
 
 test("each display gets its own Chrome profile and decode flags", () => {
   const profile = chromeProfileDir(path.join("C:", "ProgramData", "PinballLand"), 2);
@@ -51,6 +51,32 @@ test("opening one missing display leaves the running displays alone", () => {
   assert.deepEqual(again.spawn, []);
   assert.deepEqual(again.keep, [1, 2]);
   assert.deepEqual(again.untouched, []);
+});
+
+test("per-user Chrome is used before Edge, and Edge before Electron", () => {
+  const env = {
+    PROGRAMFILES: "C:\\Program Files",
+    "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+    LOCALAPPDATA: "C:\\Users\\venue\\AppData\\Local",
+  };
+  const localChrome = path.join(env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe");
+  assert.equal(findChrome({
+    platform: "win32",
+    env,
+    exists: (candidate) => candidate === localChrome,
+  }), localChrome);
+  const edge = path.join(env.PROGRAMFILES, "Microsoft", "Edge", "Application", "msedge.exe");
+  assert.equal(findChrome({
+    platform: "win32",
+    env,
+    exists: (candidate) => candidate === edge,
+  }), edge);
+  assert.equal(findChrome({
+    platform: "win32",
+    env: { ...env, PINBALL_CHROME: "/opt/chrome" },
+    exists: (candidate) => candidate === "/opt/chrome",
+  }), "/opt/chrome");
+  assert.equal(findChrome({ platform: "win32", env, exists: () => false }), "");
 });
 
 test("unit tests do not relaunch Chrome", async () => {
