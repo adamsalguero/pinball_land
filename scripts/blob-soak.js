@@ -135,6 +135,22 @@ async function runBlobSoak() {
       }),
     });
     if (!rotated.ok) throw new Error(`rotation ${rotated.status}`);
+    const themed = await fetch(`${healthOrigin}/api/theme`, {
+      method: "PUT",
+      headers: pin,
+      body: JSON.stringify({ theme: "halloween" }),
+    });
+    if (!themed.ok) throw new Error(`theme ${themed.status}`);
+    let starterUrls = [];
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const body = await (await fetch(`${healthOrigin}/api/state`)).json();
+      starterUrls = (body.playlist || []).filter((card) => card.type === "video").map((card) => String(card.url || ""));
+      if (starterUrls.some((url) => url.includes("skeleton-dance-1929")) && starterUrls.some((url) => url.includes("christmas-comes-1936"))) break;
+      await sleep(250);
+    }
+    if (!starterUrls.some((url) => url.includes("skeleton-dance-1929")) || !starterUrls.some((url) => url.includes("christmas-comes-1936"))) {
+      throw new Error(`starter clips missing from the playlist: ${starterUrls.join(" ")}`);
+    }
     const positions = [[0, 0], [80, 60], [160, 120]];
     const slots = [1, 2, 3];
     note(`chrome ${browserPath}`);
@@ -161,7 +177,7 @@ async function runBlobSoak() {
         if (!page) await sleep(250);
       }
       if (!page) {
-        const open = browser.contexts().flatMap((context) => context.pages()).map((item) => item.url()).join(" ");
+        const open = connected.contexts().flatMap((context) => context.pages()).map((item) => item.url()).join(" ");
         throw new Error(`display ${slot} did not open. pages=${open}`);
       }
       bySlot[slot] = page;
