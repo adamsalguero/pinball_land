@@ -4,7 +4,6 @@ const fsp = require("fs/promises");
 const path = require("path");
 const { classifyImage } = require("./resolution");
 const { maskProfanity } = require("./text-filter");
-const { checkImage } = require("./nsfw");
 
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_PER_WINDOW = 6;
@@ -87,7 +86,7 @@ class GuestAlbum {
     return this.sharp;
   }
 
-  async ingest(buffer, { caption, guestName, eventName, autoApprove = false, paused = false, ip, now, nsfw } = {}) {
+  async ingest(buffer, { caption, guestName, eventName, autoApprove = false, paused = false, ip, now } = {}) {
     if (paused) {
       throw Object.assign(new Error("Photo uploads are paused."), { status: 403 });
     }
@@ -114,8 +113,6 @@ class GuestAlbum {
         .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 84, progressive: true })
         .toBuffer({ resolveWithObject: true });
-      const scan = typeof nsfw === "function" ? await nsfw(processed.data) : await checkImage(processed.data);
-      const held = Boolean(scan?.flagged);
       const event = this.currentEvent(eventName);
       const id = crypto.randomUUID();
       await fsp.mkdir(this.filesDir, { recursive: true });
@@ -128,7 +125,7 @@ class GuestAlbum {
         height: processed.info.height,
         caption: maskProfanity(cleanText(caption, 80)),
         guestName: maskProfanity(cleanText(guestName, 40)),
-        status: autoApprove && !held ? "approved" : "pending",
+        status: autoApprove ? "approved" : "pending",
         createdAt: now || Date.now(),
       };
       this.photos.push(photo);

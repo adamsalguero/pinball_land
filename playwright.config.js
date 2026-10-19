@@ -8,6 +8,7 @@ module.exports = defineConfig({
   use: {
     baseURL: "http://127.0.0.1:3210",
     viewport: { width: 1280, height: 800 },
+    ...(process.env.PINBALL_E2E_CHANNEL ? { channel: process.env.PINBALL_E2E_CHANNEL } : {}),
   },
   webServer: {
     command: "node src/server.js",

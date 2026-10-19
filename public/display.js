@@ -913,14 +913,50 @@ function clearLoadTimer() {
 const reportedEvents = new Set();
 const warmedAssets = new Set();
 
+let gpuName = "";
+
+function gpuRenderer() {
+  if (gpuName) return gpuName;
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    const ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
+    gpuName = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || "") : "";
+  } catch {
+    gpuName = "";
+  }
+  return gpuName;
+}
+
+function screenLabel() {
+  const surface = window.screen || {};
+  const left = Number.isFinite(surface.availLeft) ? surface.availLeft : 0;
+  const top = Number.isFinite(surface.availTop) ? surface.availTop : 0;
+  return `${surface.width || 0}x${surface.height || 0}@${left},${top}`;
+}
+
+function playbackQuality() {
+  try {
+    const quality = wallVideo.getVideoPlaybackQuality?.();
+    if (!quality) return { dropped: undefined, total: undefined };
+    return {
+      dropped: Number.isFinite(quality.droppedVideoFrames) ? quality.droppedVideoFrames : undefined,
+      total: Number.isFinite(quality.totalVideoFrames) ? quality.totalVideoFrames : undefined,
+    };
+  } catch {
+    return { dropped: undefined, total: undefined };
+  }
+}
+
 function reportVideo(card, eventName, extra = {}) {
   const id = String(card?.id || "");
   const event = String(eventName || "event");
   const seen = `${id}:${event}`;
-  const always = event === "ended" || event === "give-up" || event === "stall-timeout" || event === "error" || event === "progress" || event === "blob-loaded" || event === "play-start" || event === "replay";
+  const always = event === "ended" || event === "give-up" || event === "stall-timeout" || event === "error" || event === "progress" || event === "blob-loaded" || event === "play-start";
   if (!always && reportedEvents.has(seen)) return;
   if (!always) reportedEvents.add(seen);
   const err = wallVideo.error;
+  const quality = playbackQuality();
   sendSocket({
     type: "media-failure",
     id,
@@ -937,6 +973,10 @@ function reportVideo(card, eventName, extra = {}) {
     ms: Number.isFinite(Number(extra.ms)) ? Number(extra.ms) : undefined,
     offset: Number.isFinite(Number(extra.offset)) ? Number(extra.offset) : undefined,
     failedIds: [...failedClipIds],
+    screen: screenLabel(),
+    gpu: gpuRenderer(),
+    dropped: quality.dropped,
+    total: quality.total,
   });
 }
 
@@ -975,6 +1015,22 @@ function otherScreenClipIds() {
   return ids;
 }
 
+function clipAssignedSlot(url) {
+  if (!url) return "";
+  for (const plan of [payload?.rotationPlan, payload?.nextRotationPlan]) {
+    for (const slot of ["1", "2", "3"]) {
+      const card = plan?.[slot];
+      if (card?.type === "video" && card.url === url) return String(slot);
+    }
+  }
+  return "";
+}
+
+function thisSlotMayPlay(url) {
+  const owner = clipAssignedSlot(url);
+  return !owner || owner === String(SLOT);
+}
+
 function holdClip(card) {
   const planned = payload?.rotationPlan?.[SLOT] || payload?.rotationPlan?.[String(SLOT)] || null;
   heldClip = {
@@ -984,10 +1040,19 @@ function holdClip(card) {
   };
 }
 
-function uniqueVideos(exceptId) {
+function uniqueVideos(exceptId, exceptUrl) {
   const busy = otherScreenClipIds();
+  const urls = new Set();
+  if (exceptUrl) urls.add(exceptUrl);
+  for (const plan of [payload?.rotationPlan, payload?.nextRotationPlan]) {
+    for (const slot of ["1", "2", "3"]) {
+      if (String(slot) === String(SLOT)) continue;
+      const card = plan?.[slot];
+      if (card?.type === "video" && card.url) urls.add(card.url);
+    }
+  }
   return (payload?.playlist || []).filter((item) => (
-    item?.type === "video" && item.url && !item.empty && item.id !== exceptId && !busy.has(item.id) && !failedClipIds.has(item.id)
+    item?.type === "video" && item.url && !item.empty && item.id !== exceptId && !busy.has(item.id) && !failedClipIds.has(item.id) && !urls.has(item.url)
   ));
 }
 
@@ -1022,7 +1087,7 @@ function failClip(card, eventName) {
   reportVideo(card, eventName);
   blobFailures = 0;
   failedClipIds.add(card.id);
-  const videos = uniqueVideos(card?.id);
+  const videos = uniqueVideos(card?.id, card?.url);
   if (!videos.length) {
     failedClipIds = new Set([card?.id].filter(Boolean));
     reportVideo(card, "give-up");
@@ -1239,34 +1304,12 @@ function seekPastStall(card) {
   }
 }
 
-function replayBlob(card, atTime) {
-  const blobUrl = wallVideo.dataset.blobUrl;
-  const mediaUrl = wallVideo.dataset.mediaUrl || card?.url || "";
-  if (!blobUrl) {
-    failClip(card, "stall-timeout");
-    return;
-  }
-  blobFailures += 1;
-  const playToken = String(card?.playId || card?.id || "");
-  reportVideo(card, "replay", { offset: Number(atTime) || 0 });
-  clearStall();
-  swapping = true;
-  replaceWallVideo();
-  wallVideo.dataset.playId = playToken;
-  wallVideo.dataset.mediaUrl = mediaUrl;
-  wallVideo.dataset.blobUrl = blobUrl;
-  wallVideo.dataset.ready = "0";
-  wallVideo.preload = "auto";
-  wallVideo.muted = true;
-  wallVideo.defaultMuted = true;
-  wallVideo.playsInline = true;
-  armClip(card, { playToken, startAt: Number(atTime) || 0 });
-  wallVideo.src = blobUrl;
-  swapping = false;
-}
-
 async function showVideo(card, onReady) {
   const playToken = String(card?.playId || card?.id || "");
+  if (card?.url && !thisSlotMayPlay(card.url)) {
+    if (onReady) onReady();
+    return;
+  }
   if (card?.url && wallVideo.dataset.playId === playToken && wallVideo.dataset.blobUrl && !wallVideo.ended && wallVideo.dataset.ready === "1") {
     ensureWallVideo();
     if (screen.dataset.mode !== "video") setMode("video");
@@ -1355,21 +1398,7 @@ function preloadUpcoming() {
   for (const amenity of payload.amenities || []) {
     if (amenity?.photo) warmAsset(payload.photos?.[amenity.photo]);
   }
-  const timing = payload.rotationTiming || {};
-  const min = Number(timing.minInterval) || 10;
-  const requested = Number(timing.intervalSec) || Number(payload.state?.rotation?.intervalSec) || 30;
-  const interval = window.PinballRotation.clampInterval(requested, min);
-  const startedAt = Number(payload.state?.rotation?.startedAt) || 0;
-  const nextAt = startedAt + (serverTick() + 1) * interval * 1000;
-  const plan = window.PinballRotation.planRotation(payload.playlist || [], {
-    startedAt,
-    intervalSec: interval,
-    minInterval: min,
-    screenCount: Number(payload.displays?.count) || 3,
-    layout: payload.layout || {},
-    now: nextAt + 5,
-  });
-  const next = plan?.[SLOT] || plan?.[String(SLOT)];
+  const next = payload.nextRotationPlan?.[SLOT] || payload.nextRotationPlan?.[String(SLOT)];
   if (next?.type === "logo") warmAsset(logos[next.key]);
   const busy = new Set();
   for (const slot of ["1", "2", "3"]) {
@@ -1378,7 +1407,7 @@ function preloadUpcoming() {
   }
   const keep = new Set();
   if (wallVideo.dataset.mediaUrl) keep.add(wallVideo.dataset.mediaUrl);
-  if (next?.type === "video" && next.url && !next.empty && !busy.has(next.url)) {
+  if (next?.type === "video" && next.url && !next.empty && !busy.has(next.url) && thisSlotMayPlay(next.url)) {
     keep.add(next.url);
     loadClipBlob(next.url).then((entry) => noteBlob(next, entry)).catch(() => {});
   }
@@ -1928,19 +1957,23 @@ function showYoutube(card) {
 }
 
 window.addEventListener("message", (event) => {
-  let host = "";
-  try { host = new URL(event.origin).hostname; } catch { return; }
-  if (!["www.youtube.com", "youtube.com", "www.youtube-nocookie.com", "youtube-nocookie.com"].includes(host)) return;
-  let data = event.data;
-  if (typeof data === "string") {
-    try { data = JSON.parse(data); } catch { return; }
+  try {
+    let host = "";
+    try { host = new URL(event.origin).hostname; } catch { return; }
+    if (!["www.youtube.com", "youtube.com", "www.youtube-nocookie.com", "youtube-nocookie.com"].includes(host)) return;
+    let data = event.data;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch { return; }
+    }
+    const code = Number(data?.info);
+    const ended = data?.event === "onStateChange" && code === 0;
+    const failed = data?.event === "onError" && [100, 101, 150].includes(code);
+    if (!ended && !failed) return;
+    if (String(SLOT) !== "1" && payload?.playback?.slots?.[0] && String(payload.playback.slots[0]) !== String(SLOT)) return;
+    sendSocket({ type: "media-next", videoId: payload?.playback?.videoId || "" });
+  } catch (err) {
+    console.error(err);
   }
-  const code = Number(data?.info);
-  const ended = data?.event === "onStateChange" && code === 0;
-  const failed = data?.event === "onError" && [100, 101, 150].includes(code);
-  if (!ended && !failed) return;
-  if (String(SLOT) !== "1" && payload?.playback?.slots?.[0] && String(payload.playback.slots[0]) !== String(SLOT)) return;
-  sendSocket({ type: "media-next", videoId: payload?.playback?.videoId || "" });
 });
 
 let clockSkew = 0;
@@ -2007,14 +2040,18 @@ function motionFrame(ts) {
 }
 
 function tick() {
-  if (!payload) return;
-  applyTheme(payload.state?.theme);
-  refreshGuestQr();
-  preloadUpcoming();
-  renderCard(resolveCard());
-  if (screen.dataset.mode === "board") paintBoardArt();
-  if (screen.dataset.mode === "clock") paintClock();
-  if (screen.dataset.mode === "clock" || FIXTURE) requestAnimationFrame(() => fitVisibleText());
+  try {
+    if (!payload) return;
+    applyTheme(payload.state?.theme);
+    refreshGuestQr();
+    preloadUpcoming();
+    renderCard(resolveCard());
+    if (screen.dataset.mode === "board") paintBoardArt();
+    if (screen.dataset.mode === "clock") paintClock();
+    if (screen.dataset.mode === "clock" || FIXTURE) requestAnimationFrame(() => fitVisibleText());
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 function applyPayload(next) {
@@ -2039,16 +2076,20 @@ function connect() {
     if (presentation?.source === "webrtc") helloViewer(presentation);
   });
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "state") {
-      applyPayload(message);
-      return;
-    }
-    if (message.type === "present-signal" && message.payload) {
-      const presentation = payload?.presentations?.[SLOT];
-      if (presentation?.source === "webrtc" && presentation.id === message.presentationId) {
-        signalChain = signalChain.then(() => acceptSignal(presentation, message.payload)).catch(() => {});
+    try {
+      const message = JSON.parse(event.data);
+      if (message.type === "state") {
+        applyPayload(message);
+        return;
       }
+      if (message.type === "present-signal" && message.payload) {
+        const presentation = payload?.presentations?.[SLOT];
+        if (presentation?.source === "webrtc" && presentation.id === message.presentationId) {
+          signalChain = signalChain.then(() => acceptSignal(presentation, message.payload)).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.error(err);
     }
   });
   socket.addEventListener("close", () => {

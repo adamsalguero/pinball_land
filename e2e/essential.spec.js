@@ -28,6 +28,74 @@ test("PIN unlock, displays, rotation, leaderboard, theme, present", async ({ pag
   await expect(page.getByRole("heading", { name: "AirPlay" })).toBeVisible();
 });
 
+async function phoneJpeg() {
+  const width = 1200;
+  const height = 1600;
+  const raw = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < raw.length; i += 3) {
+    const n = i / 3;
+    raw[i] = n & 255;
+    raw[i + 1] = (n >> 3) & 255;
+    raw[i + 2] = (n * 5) & 255;
+  }
+  let body = null;
+  for (const quality of [42, 55, 70, 85]) {
+    body = await sharp(raw, { raw: { width, height, channels: 3 } }).jpeg({ quality }).toBuffer();
+    if (body.length >= 200 * 1024 && body.length <= 800 * 1024) return body;
+  }
+  return body;
+}
+
+test("a phone photo leaves admin, guest, and the displays rendering", async ({ browser }) => {
+  const jpeg = await phoneJpeg();
+  expect(jpeg.length).toBeGreaterThan(200 * 1024);
+  const admin = await browser.newPage();
+  const guest = await browser.newPage();
+  const displays = [];
+  for (let slot = 1; slot <= 3; slot += 1) displays.push(await browser.newPage());
+  const errors = [];
+  for (const page of [admin, guest, ...displays]) {
+    page.on("pageerror", (err) => errors.push(err.message));
+    page.on("response", (res) => {
+      if (res.status() < 400) return;
+      const url = res.url();
+      if (url.endsWith("/favicon.ico")) return;
+      errors.push(`${res.status()} ${url}`);
+    });
+    page.on("console", (msg) => {
+      if (msg.type() !== "error") return;
+      const text = msg.text();
+      if (/favicon|vibrate|Failed to load resource/i.test(text)) return;
+      errors.push(text);
+    });
+  }
+  await Promise.all(displays.map((page, index) => page.goto(`/display/${index + 1}`)));
+  await unlock(admin);
+  await admin.getByRole("button", { name: "Photos", exact: true }).click();
+  await guest.goto("/");
+  await expect(guest.getByRole("heading", { name: "Pinball Land" })).toBeVisible();
+  await guest.locator("#choose-file").setInputFiles({
+    name: "phone.jpg",
+    mimeType: "image/jpeg",
+    buffer: jpeg,
+  });
+  await guest.locator("#post").click();
+  await expect(guest.locator("#post-status")).toHaveText("Posted. It is on the pinboard.");
+  await guest.getByRole("button", { name: "Pinboard" }).click();
+  await expect(guest.locator("#feed img").first()).toBeVisible();
+  await admin.getByRole("button", { name: "Screens" }).click();
+  await expect(admin.getByRole("heading", { name: "Displays" })).toBeVisible();
+  await admin.reload();
+  await expect(admin.locator("#app")).toBeVisible();
+  await guest.reload();
+  await expect(guest.getByRole("heading", { name: "Pinball Land" })).toBeVisible();
+  await guest.getByRole("button", { name: "Pinboard" }).click();
+  await expect(guest.locator("#feed img").first()).toBeVisible();
+  await displays[0].goto("/display/1?preview=pinboard");
+  await expect(displays[0].locator("#pin-wall .pin-card img").first()).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("guest upload has no PIN and admin approves it", async ({ page, request }) => {
   const jpeg = await sharp({
     create: { width: 640, height: 480, channels: 3, background: "#2d4c32" },

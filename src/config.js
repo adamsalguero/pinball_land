@@ -60,6 +60,7 @@ function normalizeMediaSettings(raw) {
   return {
     allAges: incoming.allAges !== false,
     disabledIds,
+    softwareDecode: incoming.softwareDecode === true,
   };
 }
 

@@ -91,11 +91,16 @@ async function api(url, options = {}) {
 }
 
 function applyPayload(payload) {
-  current = payload;
-  if (!selectedBoardId || !current.state.leaderboards.some((board) => board.id === selectedBoardId)) {
-    selectedBoardId = current.state.leaderboards[0]?.id || null;
+  try {
+    if (!payload?.state || !Array.isArray(payload.state.leaderboards)) return;
+    current = payload;
+    if (!selectedBoardId || !current.state.leaderboards.some((board) => board.id === selectedBoardId)) {
+      selectedBoardId = current.state.leaderboards[0]?.id || null;
+    }
+    render();
+  } catch (err) {
+    console.error(err);
   }
-  render();
 }
 
 function applyTheme(theme) {
@@ -1399,21 +1404,25 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${proto}://${location.host}/ws`);
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "kiosk" && message.kiosk && !appEl.hidden) {
-      current.kiosk = message.kiosk;
-      const order = document.getElementById("monitor-order");
-      const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
-      if (order && !typing) renderMonitorOrder(order);
-      return;
-    }
-    if (message.type === "state" && !appEl.hidden) {
-      const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
-        current = message;
+    try {
+      const message = JSON.parse(event.data);
+      if (message.type === "kiosk" && message.kiosk && !appEl.hidden) {
+        current.kiosk = message.kiosk;
+        const order = document.getElementById("monitor-order");
+        const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
+        if (order && !typing) renderMonitorOrder(order);
         return;
       }
-      applyPayload(message);
+      if (message.type === "state" && !appEl.hidden) {
+        const tag = document.activeElement?.tagName;
+        if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
+          if (message.state && Array.isArray(message.state.leaderboards)) current = message;
+          return;
+        }
+        applyPayload(message);
+      }
+    } catch (err) {
+      console.error(err);
     }
   });
   socket.addEventListener("close", () => setTimeout(connect, 1000));
@@ -1588,6 +1597,7 @@ async function renderPhotos() {
     renderPhotos();
   });
   root.append(auto, pause, downloadAll);
+  try {
   for (const photo of data.photos || []) {
     if (photo.status === "rejected") continue;
     const card = document.createElement("article");
@@ -1653,6 +1663,9 @@ async function renderPhotos() {
       card.append(approve, reject);
     }
     root.append(card);
+  }
+  } catch (err) {
+    console.error(err);
   }
 }
 
