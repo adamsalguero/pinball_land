@@ -114,9 +114,11 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
   assert.match(doc, /disable-gpu-video-decode/);
   assert.match(doc, /disable-accelerated-video-decode/);
   const control = fs.readFileSync(path.join(__dirname, "..", "public", "control.js"), "utf8");
+  const wall = fs.readFileSync(path.join(__dirname, "..", "public", "display.js"), "utf8");
   assert.match(control, /decor-toggle/);
   assert.match(fs.readFileSync(path.join(__dirname, "..", "public", "control.html"), "utf8"), /id="decor-toggle"/);
   assert.doesNotMatch(control, /label: "Video"/);
+  assert.match(wall, /function decorationsPaused\(\) \{\n  return Boolean\(SHOT \|\| document\.documentElement\.dataset\.motion === "reduced"\);\n\}/);
   assert.match(control, /label: "Auto"/);
   assert.match(control, /Show photo on wall/);
   assert.match(control, /Remove photo/);
