@@ -210,18 +210,39 @@ function planRotation(playlist, options = {}) {
     rotationSlots.push(slot);
   }
   const n = list.length;
+  // A holiday clip keeps one screen for the whole season. The play id is the
+  // clip id, so the dwell clock does not reload it every tick.
+  const holidayVideos = [];
+  const seenHoliday = new Set();
+  for (const source of list) {
+    if (!source || source.type !== "video" || !source.url || source.blocked || source.empty || !source.holiday) continue;
+    if (seenHoliday.has(source.url)) continue;
+    seenHoliday.add(source.url);
+    holidayVideos.push(source);
+  }
+  let holidaySlot = 0;
+  for (const source of holidayVideos) {
+    while (holidaySlot < rotationSlots.length && slots[rotationSlots[holidaySlot]]) holidaySlot += 1;
+    if (holidaySlot >= rotationSlots.length) break;
+    if (clipTaken(used, source)) continue;
+    const owner = rotationSlots[holidaySlot];
+    holidaySlot += 1;
+    const chosen = withVideoStart(prepare(source, owner), source.id);
+    reserveClip(used, chosen);
+    slots[owner] = chosen;
+  }
   const inWindow = new Set();
   for (let offset = 0; offset < rotationSlots.length && n; offset += 1) {
     inWindow.add((((tick + offset) % n) + n) % n);
   }
-  // A clip stays on the screen that owns it. The next dwell must not slide it
-  // onto a neighbor while this screen is still showing the old frame.
+  // Other clips stay on the screen that owns their playlist index. The next
+  // dwell must not slide one onto a neighbor.
   for (const index of inWindow) {
     const source = list[index];
-    if (!source || source.type !== "video" || !source.url || source.blocked || source.empty) continue;
+    if (!source || source.type !== "video" || !source.url || source.blocked || source.empty || source.holiday) continue;
     const owner = rotationSlots[index % rotationSlots.length];
     if (!owner || slots[owner] || clipTaken(used, source)) continue;
-    const chosen = withVideoStart(prepare(source, owner), tick);
+    const chosen = withVideoStart(prepare(source, owner), source.id);
     reserveClip(used, chosen);
     slots[owner] = chosen;
   }

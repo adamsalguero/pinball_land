@@ -9,7 +9,6 @@ const { Store } = require("../src/store");
 const { createApp } = require("../src/app");
 const { createConfigStore } = require("../src/config");
 const { GuestAlbum } = require("../src/photos");
-const { checkImage } = require("../src/nsfw");
 const { maskProfanity } = require("../src/text-filter");
 const {
   guestDay,
@@ -29,6 +28,24 @@ async function jpeg(color = "#224466") {
   return sharp({
     create: { width: 400, height: 300, channels: 3, background: color },
   }).jpeg().toBuffer();
+}
+
+async function phoneJpeg() {
+  const width = 1200;
+  const height = 1600;
+  const raw = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < raw.length; i += 3) {
+    const n = i / 3;
+    raw[i] = n & 255;
+    raw[i + 1] = (n >> 3) & 255;
+    raw[i + 2] = (n * 5) & 255;
+  }
+  let body = null;
+  for (const quality of [42, 55, 70, 85]) {
+    body = await sharp(raw, { raw: { width, height, channels: 3 } }).jpeg({ quality }).toBuffer();
+    if (body.length >= 200 * 1024 && body.length <= 800 * 1024) return body;
+  }
+  return body;
 }
 
 async function startServer(extra = {}) {
@@ -241,7 +258,7 @@ test("photo uploads auto-approve, pause, rate-limit, and strip words", async () 
   }
 });
 
-test("album holds flagged photos, strips exif, and caps the daily count", async () => {
+test("album strips exif, approves clean photos, and caps the daily count", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-album-"));
   const album = new GuestAlbum({ root: dir });
   const tagged = await sharp({
@@ -249,24 +266,64 @@ test("album holds flagged photos, strips exif, and caps the daily count", async 
   }).jpeg().withMetadata({ exif: { IFD0: { ImageDescription: "secret-gps" } } }).toBuffer();
   assert.ok((await sharp(tagged).metadata()).exif);
   const clean = await album.ingest(tagged, { caption: "hello", guestName: "Sam", autoApprove: true, ip: "exif" });
+  assert.equal(clean.status, "approved");
   assert.ok(clean.width <= 1600);
   assert.ok(clean.height <= 1600);
   const saved = await sharp(path.join(dir, "files", `${clean.id}.jpg`)).metadata();
   assert.equal(saved.exif, undefined);
-  const held = await album.ingest(await jpeg(), {
-    autoApprove: true,
-    ip: "nsfw",
-    nsfw: async () => ({ checked: true, flagged: true }),
-  });
+  const held = await album.ingest(await jpeg(), { autoApprove: false, ip: "review" });
   assert.equal(held.status, "pending");
   const start = Date.UTC(2026, 9, 18, 12, 0, 0);
   for (let i = 0; i < 30; i += 1) {
     assert.equal(album.allow("day", start + i * 11 * 60 * 1000), true);
   }
   assert.equal(album.allow("day", start + 30 * 11 * 60 * 1000), false);
-  const scan = await checkImage(Buffer.from("not-a-model"));
-  assert.deepEqual(scan, { checked: false, flagged: false });
   assert.equal(maskProfanity("oh shit").includes("shit"), false);
+  assert.equal(require("node:fs").existsSync(path.join(__dirname, "..", "src", "nsfw.js")), false);
+});
+
+test("a phone photo leaves admin and guest responding", async () => {
+  const started = await startServer();
+  try {
+    const body = await phoneJpeg();
+    assert.ok(body.length >= 200 * 1024 && body.length <= 800 * 1024, `jpeg bytes ${body.length}`);
+    const posted = await fetch(`${started.origin}/api/guest-photos`, {
+      method: "POST",
+      headers: { "content-type": "image/jpeg", "x-guest-name": "Sam", "x-caption": "Wall" },
+      body,
+    });
+    assert.equal(posted.status, 200);
+    const photo = await posted.json();
+    assert.equal(photo.photo.status, "approved");
+    const admin = await fetch(`${started.origin}/admin`);
+    assert.equal(admin.status, 200);
+    const adminHtml = await admin.text();
+    assert.match(adminHtml, /id="app"/);
+    assert.match(adminHtml, /control\.js/);
+    const guestPage = await fetch(`${started.origin}/`);
+    assert.equal(guestPage.status, 200);
+    const guestHtml = await guestPage.text();
+    assert.match(guestHtml, /Pinball Land/);
+    assert.match(guestHtml, /guest\.js/);
+    const state = await json(started.origin, "/api/state");
+    assert.equal(state.res.status, 200);
+    assert.ok(Array.isArray(state.data.state.leaderboards));
+    assert.equal(state.data.guest.photos.length, 1);
+    const guestApi = await json(started.origin, "/api/guest");
+    assert.equal(guestApi.res.status, 200);
+    assert.equal(guestApi.data.guest.pinboard, true);
+    const feed = await json(started.origin, "/api/guest-photos/feed");
+    assert.equal(feed.res.status, 200);
+    assert.equal(feed.data.photos.length, 1);
+    const image = await fetch(`${started.origin}${feed.data.photos[0].url}`);
+    assert.equal(image.status, 200);
+    assert.match(image.headers.get("content-type") || "", /jpeg/);
+    const display = await fetch(`${started.origin}/display/1`);
+    assert.equal(display.status, 200);
+    assert.match(await display.text(), /display\.js/);
+  } finally {
+    started.server.close();
+  }
 });
 
 test("pinboard off leaves rotation and rejects a pinboard slot", async () => {

@@ -20,6 +20,8 @@ const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./me
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
 const { GuestAlbum } = require("./photos");
 const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
+const { starterThemes } = require("./season");
+const { noteStall } = require("./playback-flags");
 const { bundledFile } = require("./bundled");
 const { createClipCache } = require("./clip-cache");
 const { prepareLogoSvg } = require("./logo-color");
@@ -121,15 +123,6 @@ function publicLeaderboards(leaderboards) {
   });
 }
 
-function starterThemes(theme) {
-  const forced = String(process.env.PINBALL_STARTER_THEMES || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item === "halloween" || item === "christmas");
-  if (forced.length) return [...new Set(forced)];
-  return [theme];
-}
-
 function effectiveRotation(state) {
   const override = Number.parseInt(process.env.PINBALL_ROTATION_SEC || "", 10);
   if (Number.isFinite(override) && override >= 1 && override <= 120) {
@@ -191,6 +184,8 @@ function createApp({
   };
   const slotFallback = {};
   const seenVideoLog = new Set();
+  let stallStrikes = 0;
+  let decodePersist = null;
   function appendVideoLog(line) {
     const root = dataDir || path.dirname(store.filePath);
     const dir = path.join(root, "logs");
@@ -364,7 +359,7 @@ function createApp({
       videos: library.list(),
       allAges: config.media.allAges,
       pinboard: config.photos.pinboard !== false,
-      starters: starterThemes(state.theme).flatMap((theme) => starterCards(catalogItems, {
+      starters: starterThemes(state.theme, clockNow()).flatMap((theme) => starterCards(catalogItems, {
         theme,
         allAges: config.media.allAges,
         urlFor: (id) => `/media/cache/${id}`,
@@ -396,6 +391,15 @@ function createApp({
         videoMemory[slot] = { gen: videoMemory[slot]?.gen || 0, id: card.id };
       }
     }
+    const nextRotationPlan = planRotation(playlist, {
+      startedAt: state.rotation.startedAt,
+      intervalSec: timing.intervalSec,
+      minInterval: timing.minInterval,
+      screenCount: displays.count,
+      layout,
+      now: clockNow() + Math.max(1, Number(timing.intervalSec) || 30) * 1000,
+      videoMemory,
+    });
     return {
       state: {
         ...state,
@@ -407,6 +411,7 @@ function createApp({
       amenities: AMENITIES,
       playlist,
       rotationPlan,
+      nextRotationPlan,
       opdb: { configured: opdb.configured },
       displays,
       layout,
@@ -491,6 +496,7 @@ function createApp({
       amenities: full.amenities,
       playlist: full.playlist,
       rotationPlan: full.rotationPlan,
+      nextRotationPlan: full.nextRotationPlan,
       guest: {
         path: full.guest.path,
         eventName: full.guest.eventName,
@@ -978,6 +984,7 @@ function createApp({
       openMedia: mediaTracker.count(),
       maxOpenMedia: mediaTracker.maxOpen(),
       longestMediaMs: mediaTracker.longestMs(),
+      softwareVideoDecode: currentConfig().media.softwareDecode === true,
     });
   });
 
@@ -1543,6 +1550,19 @@ function createApp({
     }
   });
 
+  function rememberStall(event) {
+    const strike = noteStall(stallStrikes, event);
+    stallStrikes = strike.count;
+    if (!strike.enable || currentConfig().media.softwareDecode === true || process.env.NODE_TEST_CONTEXT === "1") return;
+    if (decodePersist) return;
+    decodePersist = localStore.update({ media: { softwareDecode: true } }).then(() => {
+      appendVideoLog(`${new Date(clockNow()).toISOString()} event=software-decode reason=repeated-stalls`);
+    }).catch((err) => {
+      decodePersist = null;
+      console.error(err);
+    });
+  }
+
   function recordMediaFailure(body) {
     const event = String(body?.event || body?.reason || "event").replace(/[^\w-]/g, "").slice(0, 40) || "event";
     const id = String(body?.id || "").replace(/[^\w:-]/g, "").slice(0, 80);
@@ -1556,15 +1576,20 @@ function createApp({
     const ms = Number.isFinite(Number(body?.ms)) ? String(Math.round(Number(body.ms))) : "";
     const offset = Number.isFinite(Number(body?.offset)) ? Number(body.offset).toFixed(2) : "";
     const slot = ["1", "2", "3"].includes(String(body?.slot || "")) ? String(body.slot) : "";
+    const screen = String(body?.screen || "").replace(/[^\d.x@,+-]/g, "").slice(0, 48);
+    const gpu = String(body?.gpu || "").replace(/[\r\n"]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+    const dropped = Number.isFinite(Number(body?.dropped)) ? String(Math.round(Number(body.dropped))) : "";
+    const total = Number.isFinite(Number(body?.total)) ? String(Math.round(Number(body.total))) : "";
     const nowMs = clockNow();
     const noisy = event === "waiting" || event === "suspend" || event === "stalled" || event === "abort" || event === "emptied";
     const dedupeKey = `${slot}:${id}:${event}`;
     if (!noisy || !seenVideoLog.has(dedupeKey)) {
       if (noisy) seenVideoLog.add(dedupeKey);
       appendVideoLog(
-        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src} bytes=${bytes} ms=${ms} offset=${offset}`,
+        `${new Date(nowMs).toISOString()} event=${event} id=${id} slot=${slot} title="${title}" code=${code} networkState=${networkState} readyState=${readyState} currentTime=${currentTime} src=${src} bytes=${bytes} ms=${ms} offset=${offset} screen=${screen} gpu="${gpu}" dropped=${dropped} total=${total}`,
       );
     }
+    rememberStall(event);
     const state = store.getState();
     const layout = wallLayout(currentConfig().displays);
     let changed = false;
@@ -2499,7 +2524,12 @@ function createApp({
     res.redirect(302, "/admin");
   });
 
-  app.use(express.static(publicDir, { fallthrough: true }));
+  app.use(express.static(publicDir, {
+    fallthrough: true,
+    setHeaders(res, filePath) {
+      if (/\.(js|css|html)$/i.test(filePath)) res.setHeader("Cache-Control", "no-store");
+    },
+  }));
 
   app.use((err, _req, res, _next) => {
     const status = err.status || 500;

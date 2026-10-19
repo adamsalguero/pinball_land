@@ -59,6 +59,11 @@ test("the wall player uses one blob per screen and does not nudge a waiting elem
   assert.match(display, /replaceWallVideo/);
   assert.match(display, /type: "media-failure"/);
   assert.match(display, /type: "media-next"/);
+  assert.match(display, /getVideoPlaybackQuality/);
+  assert.match(display, /WEBGL_debug_renderer_info/);
+  assert.match(display, /nextRotationPlan/);
+  assert.match(display, /thisSlotMayPlay/);
+  assert.doesNotMatch(display, /function replayBlob/);
   assert.doesNotMatch(display, /\/api\/media\/failure/);
   assert.doesNotMatch(display, /\/api\/media\/next/);
   assert.match(control, /id="tvs-toggle"/);
@@ -97,6 +102,14 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
   assert.match(doc, /http:\/\/localhost:3000\/display\/1/);
   assert.match(doc, /http:\/\/127\.0\.0\.1:3000\/display\/2/);
   assert.match(doc, /http:\/\/\[::1\]:3000\/display\/3/);
+  assert.match(kiosk, /disable-gpu-video-decode/);
+  assert.match(kiosk, /disable-accelerated-video-decode/);
+  assert.match(kiosk, /softwareDecode/);
+  assert.match(launcher, /softwareVideoDecode/);
+  assert.match(launcher, /disable-gpu-video-decode/);
+  assert.match(launcher, /disable-accelerated-video-decode/);
+  assert.match(doc, /disable-gpu-video-decode/);
+  assert.match(doc, /disable-accelerated-video-decode/);
   const control = fs.readFileSync(path.join(__dirname, "..", "public", "control.js"), "utf8");
   assert.match(control, /Show photo on wall/);
   assert.match(control, /Remove photo/);

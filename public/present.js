@@ -48,6 +48,7 @@ function connectSocket() {
     });
   });
   socket.addEventListener("message", (event) => {
+    try {
     const message = JSON.parse(event.data);
     if (message.type === "present-viewer-ready") {
       publishOffer().catch((err) => setStatus(err.message || "Could not start the share"));
@@ -55,6 +56,9 @@ function connectSocket() {
       signalChain = signalChain.then(() => acceptSignal(message.payload)).catch(() => {});
     } else if (message.type === "present-error") {
       setStatus(message.error || "Share was rejected");
+    }
+    } catch (err) {
+      setStatus(err.message || "Share message was ignored");
     }
   });
   socket.addEventListener("close", () => {

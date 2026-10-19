@@ -11,6 +11,25 @@ $flags = @(
   "--disable-background-media-suspend",
   "--disable-features=CalculateNativeWinOcclusion,BackgroundMediaSuspend,IntensiveWakeUpThrottling,OnBeginFrameThrottleVideo"
 )
+try {
+  $healthUrl = "http://127.0.0.1:$Port/api/health"
+  $raw = $null
+  $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+  if ($curl) {
+    $raw = & curl.exe -fsS --max-time 3 $healthUrl
+    if ($LASTEXITCODE -ne 0) { $raw = $null }
+  }
+  if (-not $raw) {
+    $raw = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 3 -Method GET | ConvertTo-Json -Compress -Depth 4
+  }
+  $health = $raw | ConvertFrom-Json
+  if ($health.softwareVideoDecode -eq $true) {
+    $flags += "--disable-gpu-video-decode"
+    $flags += "--disable-accelerated-video-decode"
+  }
+} catch {
+  # Chrome still launches when health is down or software decode is off.
+}
 $candidates = @(
   "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
   "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"

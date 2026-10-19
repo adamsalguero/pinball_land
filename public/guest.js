@@ -9,6 +9,7 @@ const scores = document.getElementById("scores");
 const picker = document.getElementById("machine-picker");
 
 let blob = null;
+let previewUrl = "";
 let boards = [];
 
 function tap() {
@@ -36,8 +37,10 @@ function showTab(name) {
 }
 
 function useBlob(next) {
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
   blob = next;
-  still.src = next ? URL.createObjectURL(next) : "";
+  previewUrl = next ? URL.createObjectURL(next) : "";
+  still.src = previewUrl;
   still.hidden = !next;
   post.disabled = !next;
 }
@@ -115,7 +118,9 @@ function when(stamp) {
 }
 
 async function loadFeed() {
+  try {
   const res = await fetch("/api/guest-photos/feed");
+  if (!res.ok) return;
   const data = await res.json();
   feed.replaceChildren();
   const photos = data.photos || [];
@@ -131,6 +136,9 @@ async function loadFeed() {
     img.addEventListener("click", () => openPhotoLightbox(photo.url, `${photo.id}.jpg`));
     card.append(img, copy);
     feed.append(card);
+  }
+  } catch (err) {
+    console.error(err);
   }
 }
 
@@ -252,6 +260,7 @@ function applyGuestAccess(data) {
 async function watchTheme() {
   try {
     const res = await fetch("/api/guest");
+    if (!res.ok) return;
     const data = await res.json();
     applyGuestAccess(data);
     applyTheme(data.state?.theme);

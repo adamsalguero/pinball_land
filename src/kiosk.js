@@ -19,6 +19,16 @@ const { mapDisplaysToSlots, windowLayoutKey } = require("./displays");
 const { placementDecision, expectedMonitorCount, monitorSignature } = require("./watchdog");
 const { defaultDataDir, dataLayout } = require("./paths");
 const { buildPlacementScript } = require("./airplay");
+
+try {
+  const saved = loadConfig(dataLayout(defaultDataDir()).config);
+  if (saved.media && saved.media.softwareDecode === true) {
+    app.commandLine.appendSwitch("disable-gpu-video-decode");
+    app.commandLine.appendSwitch("disable-accelerated-video-decode");
+  }
+} catch (err) {
+  console.error(err);
+}
 const { bootPlan } = require("./kiosk-boot");
 const { discoverDisplayOrigins } = require("./display-origins");
 

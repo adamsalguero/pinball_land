@@ -129,6 +129,8 @@ chrome.exe --app=http://[::1]:3000/display/3 --window-position=160,120 --window-
 
 The Electron kiosk sets the same switches, `backgroundThrottling: false`, and the same three origins. Displays stay on HTTP/1.1. Browser HTTP/2 needs TLS, and the bounded media ranges plus separate origins are what keep the connection pool free.
 
+After three stall timeouts or give-ups, the server turns on software video decode. The next launch of `scripts\open-wall-chrome.ps1` or the Electron kiosk adds `--disable-gpu-video-decode` and `--disable-accelerated-video-decode`.
+
 ---
 
 ## 5. Displays (1, 2, or 3)
