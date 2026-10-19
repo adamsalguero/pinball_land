@@ -8,6 +8,7 @@
   or active-hours write is a warning and does not stop firewall, power, or startup.
   -AutoLogonUser sets AutoAdminLogon for a local passwordless account (for example Admin).
   -DryRun applies the same machine setup except AutoAdminLogon, and is what CI runs.
+  -DryRun does not download Google Chrome. -Kiosk installs it when this is not a dry run.
   Boot tasks are registered only with -Kiosk, or when an interactive console answers yes.
   Dev and test PCs should leave -Kiosk off. scripts\enable-autostart.ps1 registers them later.
 .PARAMETER AutoLogonUser
@@ -411,6 +412,15 @@ function Write-KioskVerifySummary {
     Add-Row "Electron binary" "FAIL" "missing $electronExe"
   }
 
+  $chromePath = Find-PinballChrome
+  if ($chromePath) {
+    Add-Row "Google Chrome" "OK" $chromePath
+  } elseif ($DryRun) {
+    Add-Row "Google Chrome" "WARN" "not installed; winget install Google.Chrome runs when this is not a dry run"
+  } else {
+    Add-Row "Google Chrome" "FAIL" "not installed"
+  }
+
   $profiles = @()
   try {
     $profiles = @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { $_ })
@@ -513,6 +523,8 @@ function Write-KioskVerifySummary {
   return -not $failed
 }
 
+. (Join-Path $PSScriptRoot "install-chrome.ps1")
+
 if ($Verify) {
   $passed = Write-KioskVerifySummary -AutoLogonUser $AutoLogonUser -DryRun:$DryRun -RequireTasks:$Kiosk
   if ($passed) {
@@ -544,6 +556,10 @@ try {
 }
 
 Install-ElectronIfMissing
+
+if ($Kiosk) {
+  Install-PinballChrome -DryRun:$DryRun | Out-Null
+}
 
 Write-Host "Letting Users modify the Pinball Land data folder..."
 try {
