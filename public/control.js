@@ -1668,8 +1668,9 @@ function renderAccess() {
   const cloudflare = document.getElementById("public-cloudflare");
   if (cloudflare && document.activeElement !== cloudflare) cloudflare.checked = access.cloudflare === true;
   const url = access.url ? access.url : "";
+  const detail = access.detail || "";
   status.textContent = access.enabled
-    ? (url ? `${access.detail || "Public"} · ${url}` : (access.detail || "Waiting for Tailscale Funnel."))
+    ? (detail || (url ? `Public link ${url}` : "Public access is on. The guest link is not ready yet."))
     : "Off. Guests use the venue WiFi.";
 }
 

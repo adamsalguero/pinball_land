@@ -2,16 +2,15 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { blobWatchdog, STALL_SKIP_MS } = require("../public/playback");
+const { blobWatchdog, STALL_NUDGE_MS } = require("../public/playback");
 
-test("a frozen picture replays the blob once, then moves to the next clip", () => {
-  assert.equal(STALL_SKIP_MS, 20000);
-  assert.equal(blobWatchdog({ quietMs: 3000, paused: false }), "wait");
-  assert.equal(blobWatchdog({ quietMs: 19000, paused: false, failures: 0 }), "wait");
-  assert.equal(blobWatchdog({ quietMs: 20000, paused: true, failures: 0 }), "wait");
-  assert.equal(blobWatchdog({ quietMs: 20000, ended: true }), "ended");
-  assert.equal(blobWatchdog({ quietMs: 20000, paused: false, failures: 0 }), "replay");
-  assert.equal(blobWatchdog({ quietMs: 20000, paused: false, failures: 1 }), "next");
+test("a frozen picture seeks forward once, then moves to the next clip", () => {
+  assert.equal(STALL_NUDGE_MS, 2000);
+  assert.equal(blobWatchdog({ quietMs: 1000, paused: false }), "wait");
+  assert.equal(blobWatchdog({ quietMs: 2000, paused: true }), "wait");
+  assert.equal(blobWatchdog({ quietMs: 2000, ended: true }), "ended");
+  assert.equal(blobWatchdog({ quietMs: 2000, paused: false, nudged: false }), "nudge");
+  assert.equal(blobWatchdog({ quietMs: 2000, paused: false, nudged: true }), "next");
 });
 
 test("wall scripts do not reuse the same top-level name", () => {
@@ -41,6 +40,9 @@ test("the wall player uses one blob per screen and does not nudge a waiting elem
   assert.match(fs.readFileSync(path.join(__dirname, "..", "src", "playlist.js"), "utf8"), /logoPhaseKey/);
   assert.match(display, /preloadUpcoming/);
   assert.match(display, /blobWatchdog/);
+  assert.match(display, /seekPastStall/);
+  assert.match(display, /now \+ 0\.5/);
+  assert.match(display, /earlierSlotHasClip/);
   assert.match(display, /createObjectURL/);
   assert.match(display, /blob-loaded/);
   assert.match(display, /play-start/);

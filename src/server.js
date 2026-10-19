@@ -11,6 +11,7 @@ const { slotLabel } = require("./displays");
 const { defaultDataDir, dataLayout, migrateData, resolveDataDir } = require("./paths");
 const { displayOrigins } = require("./display-origins");
 const { guestPortFor } = require("./tunnel");
+const { createGuestListener } = require("./guest-listener");
 
 const KEEP_ALIVE_MS = 5000;
 const HEADERS_TIMEOUT_MS = 20000;
@@ -189,7 +190,8 @@ async function launchServer() {
   const config = configStore.get();
   const store = await Store.load(paths.state);
   let httpsReady = false;
-  const { app, guestApp, attachWebSocket } = createApp({
+  const guests = createGuestListener({ logFile: path.join(paths.logs, "tunnel.log") });
+  const { app, attachWebSocket, accessReady } = createApp({
     store,
     pin: config.pin,
     publicDir: path.join(root, "public"),
@@ -208,6 +210,7 @@ async function launchServer() {
     clipCache: process.env.PINBALL_CLIP_CACHE !== "0",
     configStore,
     isHttpsReady: () => httpsReady,
+    ensureGuestListener: (listener, port) => guests.ensure(listener, port),
   });
 
   let bound;
@@ -219,14 +222,12 @@ async function launchServer() {
   }
   const server = bound.servers[0];
   const guestPort = guestPortFor(config.port);
-  const guestServer = http.createServer(guestApp);
-  tuneServer(guestServer);
-  try {
-    await listen(guestServer, guestPort, "0.0.0.0");
-    bound.servers.push(guestServer);
-  } catch (err) {
-    console.warn(`Guest tunnel port ${guestPort} did not start (${err.message}). Point Funnel and Cloudflare at that port only after it is listening. Do not point them at ${config.port}.`);
-    await closeQuiet(guestServer);
+  await accessReady;
+  const guest = guests.status();
+  if (guest.server) bound.servers.push(guest.server);
+  if (config.publicAccess?.enabled && !guest.listening) {
+    const message = guest.error || `Guest port ${guestPort} is not listening. Public guests cannot connect until this port is open.`;
+    console.error(message);
   }
 
   try {
@@ -246,10 +247,16 @@ async function launchServer() {
     server,
     servers: bound.servers,
     port: config.port,
+    guestPort,
+    guestListening: Boolean(guest.listening),
+    guestError: guest.error || "",
     config,
     httpsReady,
     displayOrigins: bound.displayOrigins,
     ipv6: bound.ipv6,
+    async close() {
+      await Promise.all(bound.servers.map((item) => closeQuiet(item)));
+    },
   };
 }
 
@@ -268,10 +275,16 @@ async function startServer() {
   }
 }
 
+const retainedServers = [];
+
 if (require.main === module) {
-  startServer().catch(() => {
-    process.exit(1);
-  });
+  startServer()
+    .then((started) => {
+      retainedServers.push(started);
+    })
+    .catch(() => {
+      process.exit(1);
+    });
 }
 
 module.exports = {

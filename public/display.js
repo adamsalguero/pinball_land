@@ -690,6 +690,13 @@ function resolveCard() {
         failedClipIds = new Set();
       }
     }
+    if (planned?.type === "video" && earlierSlotHasClip(planned)) {
+      const fallback = window.PinballRotation.replacementFor(payload.rotationPlan, SLOT, payload.playlist, {
+        failedIds: [planned.id],
+        salt: `${SLOT}:duplicate`,
+      });
+      return { ...(fallback || { type: "clock", id: "clock" }), span: false };
+    }
     if (planned) return { ...planned, span: false };
     return { type: "off" };
   }
@@ -945,6 +952,18 @@ function clearStall() {
   wallVideo.onpause = null;
 }
 
+function earlierSlotHasClip(card) {
+  if (!card || card.type !== "video" || !card.url) return false;
+  const plan = payload?.rotationPlan || {};
+  for (const slot of ["1", "2", "3"]) {
+    if (Number(slot) >= Number(SLOT)) break;
+    const other = plan[slot];
+    if (!other || other.type !== "video") continue;
+    if (other.id === card.id || (other.url && other.url === card.url)) return true;
+  }
+  return false;
+}
+
 function otherScreenClipIds() {
   const ids = new Set();
   const plan = payload?.rotationPlan || {};
@@ -1064,9 +1083,13 @@ function onClipEnded(card) {
 }
 
 let stallGeneration = 0;
+let stallNudged = false;
+let ignoreSeekSample = false;
 
 function armStall(card) {
   clearStall();
+  stallNudged = false;
+  ignoreSeekSample = false;
   const generation = stallGeneration;
   let lastSample = wallVideo.currentTime || 0;
   let lastMove = Date.now();
@@ -1085,9 +1108,16 @@ function armStall(card) {
       lastMove = Date.now();
       return;
     }
+    if (ignoreSeekSample) {
+      ignoreSeekSample = false;
+      lastSample = time;
+      lastMove = Date.now();
+      return;
+    }
     if (Math.abs(time - lastSample) >= 0.5) {
       lastSample = time;
       lastMove = Date.now();
+      stallNudged = false;
       blobFailures = 0;
     }
   };
@@ -1119,11 +1149,11 @@ function armStall(card) {
       quietMs: quiet,
       paused: wallVideo.paused,
       ended: wallVideo.ended,
-      failures: blobFailures,
+      nudged: stallNudged,
     });
     screen.dataset.quiet = String(Math.round(quiet));
     screen.dataset.stall = action;
-    if (action === "replay") replayBlob(card, wallVideo.currentTime);
+    if (action === "nudge") seekPastStall(card);
     else if (action === "next") failClip(card, "stall-timeout");
   };
   stallTimer = setInterval(check, 1000);
@@ -1191,6 +1221,22 @@ function armClip(card, { playToken, startAt, onReady }) {
     if (swapping || wallVideo.dataset.playId !== playToken) return;
     failClip(card, "error");
   };
+}
+
+function seekPastStall(card) {
+  if (stallNudged) return;
+  stallNudged = true;
+  ignoreSeekSample = true;
+  const duration = Number(wallVideo.duration) || 0;
+  const now = Number(wallVideo.currentTime) || 0;
+  const ceiling = duration > 0.5 ? duration - 0.25 : now + 0.5;
+  const target = Math.min(ceiling, now + 0.5);
+  reportVideo(card, "nudge", { offset: target });
+  try {
+    wallVideo.currentTime = target;
+  } catch {
+    failClip(card, "stall-timeout");
+  }
 }
 
 function replayBlob(card, atTime) {
@@ -1325,9 +1371,14 @@ function preloadUpcoming() {
   });
   const next = plan?.[SLOT] || plan?.[String(SLOT)];
   if (next?.type === "logo") warmAsset(logos[next.key]);
+  const busy = new Set();
+  for (const slot of ["1", "2", "3"]) {
+    const card = payload.rotationPlan?.[slot];
+    if (card?.type === "video" && card.url) busy.add(card.url);
+  }
   const keep = new Set();
   if (wallVideo.dataset.mediaUrl) keep.add(wallVideo.dataset.mediaUrl);
-  if (next?.type === "video" && next.url && !next.empty) {
+  if (next?.type === "video" && next.url && !next.empty && !busy.has(next.url)) {
     keep.add(next.url);
     loadClipBlob(next.url).then((entry) => noteBlob(next, entry)).catch(() => {});
   }

@@ -1,14 +1,14 @@
-const crypto = require("crypto");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { chromium } = require("@playwright/test");
-const ffmpeg = require("ffmpeg-static");
 const { createApp } = require("../src/app");
 const { Store } = require("../src/store");
 const { bindDisplayServers } = require("../src/server");
+const { loadCatalog } = require("../src/catalog");
+const { createClipCache } = require("../src/clip-cache");
 
 const FLAGS = [
   "--autoplay-policy=no-user-gesture-required",
@@ -44,19 +44,6 @@ function chromePath() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || "";
 }
 
-function run(bin, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) reject(new Error(stderr.split("\n").filter(Boolean).slice(-6).join(" ") || `${bin} ${code}`));
-      else resolve();
-    });
-  });
-}
-
 async function waitFor(url, attempts = 40) {
   let last = null;
   for (let i = 0; i < attempts; i += 1) {
@@ -71,54 +58,41 @@ async function waitFor(url, attempts = 40) {
   throw last || new Error(`timed out waiting for ${url}`);
 }
 
-async function makeClip(dest) {
-  await run(ffmpeg, [
-    "-y", "-hide_banner", "-loglevel", "error",
-    "-f", "lavfi", "-i", "color=c=black:s=426x240:r=12:d=16,noise=alls=40:allf=t+u",
-    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-crf", "18",
-    "-an", "-movflags", "+faststart",
-    dest,
-  ]);
-  const size = fs.statSync(dest).size;
-  if (size < 4 * 1024 * 1024) throw new Error(`clip ${dest} is ${size} bytes, need more than 4 MB`);
-}
-
 function killChild(child) {
   if (!child || !child.pid) return;
   if (process.platform === "win32") {
-    spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
-    return;
+    const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
+    if (typeof killer.unref === "function") killer.unref();
+  } else {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
   }
-  try { child.kill("SIGKILL"); } catch { /* already gone */ }
+  if (typeof child.unref === "function") child.unref();
 }
 
 async function runBlobSoak() {
-  const durationMs = Number(process.env.PINBALL_BLOB_SOAK_MS || 21 * 60 * 1000);
+  const durationMs = Number(process.env.PINBALL_BLOB_SOAK_MS || 20 * 60 * 1000);
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pinball-blob-"));
   const media = path.join(dir, "media");
-  const library = path.join(media, "library");
-  await fsp.mkdir(library, { recursive: true });
-  const items = [];
-  for (let i = 0; i < 3; i += 1) {
-    const id = crypto.randomUUID();
-    const file = path.join(library, `${id}.mp4`);
-    note(`encoding clip ${i + 1}`);
-    await makeClip(file);
-    items.push({
-      id,
-      title: `Clip ${i + 1}`,
-      file: `${id}.mp4`,
-      folder: "library",
-      tags: [],
-      allAges: true,
-      inRotation: true,
-      loop: false,
-      bytes: fs.statSync(file).size,
-      durationSec: 16,
-      addedAt: Date.now(),
-    });
+  const cacheDir = path.join(media, "cache");
+  await fsp.mkdir(cacheDir, { recursive: true });
+  const catalog = loadCatalog(path.join(__dirname, "..", "media", "catalog.json"))
+    .filter((item) => item.id === "skeleton-dance-1929" || item.id === "christmas-comes-1936");
+  if (catalog.length !== 2) throw new Error(`expected both starter clips, found ${catalog.map((item) => item.id).join(",")}`);
+  note(`transcoding ${catalog.map((item) => item.id).join(" and ")}`);
+  const clips = createClipCache({
+    items: catalog,
+    cacheDir,
+    logFile: path.join(dir, "logs", "video.log"),
+  });
+  const prepared = await clips.runOnce();
+  if (prepared.some((row) => !row.ready)) {
+    throw new Error(`starter transcode failed: ${JSON.stringify(prepared)}`);
   }
-  await fsp.writeFile(path.join(media, "library.json"), JSON.stringify({ items }));
+  for (const item of catalog) {
+    const size = fs.statSync(clips.readyPath(item.id)).size;
+    note(`ready ${item.id} bytes=${size}`);
+  }
+  process.env.PINBALL_STARTER_THEMES = "halloween,christmas";
   const store = await Store.load(path.join(dir, "state.json"));
   const root = path.join(__dirname, "..");
   const { app, attachWebSocket } = createApp({
@@ -131,7 +105,8 @@ async function runBlobSoak() {
     mediaDir: media,
     mediaCatalog: path.join(media, "library.json"),
     dataDir: dir,
-    clipCache: false,
+    clipCache: true,
+    catalogPath: path.join(__dirname, "..", "media", "catalog.json"),
   });
   const bound = await bindDisplayServers(app, { port: 0, attach: attachWebSocket });
   const origins = bound.displayOrigins;
@@ -151,10 +126,10 @@ async function runBlobSoak() {
         enabled: true,
         intervalSec: 120,
         items: {
-          logoPinnacle: false,
-          logoEntertainment: false,
-          amenities: false,
-          clock: false,
+          logoPinnacle: true,
+          logoEntertainment: true,
+          amenities: true,
+          clock: true,
           pinboard: false,
         },
       }),
@@ -201,44 +176,89 @@ async function runBlobSoak() {
     const hosts = new Set(slots.map((slot) => new URL(bySlot[slot].url()).host));
     if (hosts.size !== 3) throw new Error(`expected 3 origins, got ${[...hosts].join(" ")}`);
     const tracks = {
-      1: { last: null, moved: Date.now() },
-      2: { last: null, moved: Date.now() },
-      3: { last: null, moved: Date.now() },
+      1: { last: null, moved: Date.now(), media: "", began: 0, checked: false },
+      2: { last: null, moved: Date.now(), media: "", began: 0, checked: false },
+      3: { last: null, moved: Date.now(), media: "", began: 0, checked: false },
     };
+    const seen = new Set();
     const started = Date.now();
     while (Date.now() - started < durationMs) {
+      const samples = {};
       for (const slot of slots) {
-        const sample = await bySlot[slot].evaluate(() => {
+        samples[slot] = await bySlot[slot].evaluate(() => {
           const video = document.getElementById("wall-video");
+          const screen = document.getElementById("screen");
           return {
             time: Number(video?.currentTime) || 0,
-            ready: Number(video?.readyState) || 0,
+            duration: Number(video?.duration) || 0,
+            readyState: Number(video?.readyState) || 0,
+            armed: video?.dataset?.ready || "",
             paused: Boolean(video?.paused),
-            mode: document.getElementById("screen")?.dataset?.mode || "",
+            mode: screen?.dataset?.mode || "",
             src: video?.currentSrc || "",
             media: video?.dataset?.mediaUrl || "",
           };
         });
+      }
+      const playing = slots.map((slot) => (samples[slot].mode === "video" ? samples[slot].media : "")).filter(Boolean);
+      if (new Set(playing).size !== playing.length) {
+        throw new Error(`two screens loaded the same clip: ${playing.join(" ")}`);
+      }
+      for (const slot of slots) {
+        const sample = samples[slot];
         const track = tracks[slot];
-        const grace = Date.now() - started < 45000 || Date.now() < (track.graceUntil || 0);
-        if (sample.mode === "video" && sample.src.startsWith("blob:") && sample.time > (track.last || 0) + 0.3) {
+        if (sample.mode !== "video") {
+          track.media = "";
+          track.checked = false;
+          track.last = null;
+          continue;
+        }
+        if (!sample.src.startsWith("blob:")) {
+          if (track.began && Date.now() - track.began > 20000) {
+            throw new Error(`display ${slot} is not playing a blob (${sample.src.slice(0, 80)})`);
+          }
+          if (!track.began) track.began = Date.now();
+          continue;
+        }
+        if (track.media !== sample.media) {
+          track.media = sample.media;
+          track.began = Date.now();
+          track.checked = false;
+          track.last = sample.time;
           track.moved = Date.now();
         }
-        if (track.last != null && sample.time + 0.5 < track.last) track.moved = Date.now();
-        track.last = sample.time;
-        track.src = sample.src;
-        if (!grace && !sample.src.startsWith("blob:")) {
-          throw new Error(`display ${slot} is not playing a blob (${sample.src.slice(0, 80)})`);
+        if (!track.checked) {
+          if (sample.armed === "1" && sample.duration > 1 && sample.time > 1) {
+            const fraction = sample.time / sample.duration;
+            if (fraction < 0.4 || fraction > 0.65) {
+              throw new Error(`display ${slot} started at ${sample.time.toFixed(2)} of ${sample.duration.toFixed(2)}, outside 40-60%`);
+            }
+            track.checked = true;
+            track.last = sample.time;
+            track.moved = Date.now();
+            seen.add(sample.media);
+          } else if (Date.now() - track.began > 20000) {
+            throw new Error(`display ${slot} never reached the 40-60% start (${sample.media})`);
+          }
+          continue;
         }
-        if (!grace && Date.now() - track.moved > 25000) {
-          throw new Error(`display ${slot} stopped advancing at ${sample.time.toFixed(2)} ready=${sample.ready} paused=${sample.paused} mode=${sample.mode}`);
+        if (sample.time > (track.last || 0) + 0.3) {
+          track.last = sample.time;
+          track.moved = Date.now();
+        }
+        if (track.last != null && sample.time + 0.5 < track.last) {
+          track.last = sample.time;
+          track.moved = Date.now();
+        }
+        if (Date.now() - track.moved > 5000) {
+          throw new Error(`display ${slot} stopped advancing at ${sample.time.toFixed(2)} ready=${sample.readyState} paused=${sample.paused} mode=${sample.mode}`);
         }
       }
       const elapsed = Math.round((Date.now() - started) / 1000);
       if (elapsed % 60 < 3) {
-        note(`t=${elapsed}s times=${slots.map((slot) => tracks[slot].last?.toFixed(1)).join(",")} blobs=${slots.map((slot) => (tracks[slot].src || "").startsWith("blob:") ? "yes" : "no").join(",")}`);
+        note(`t=${elapsed}s times=${slots.map((slot) => tracks[slot].last?.toFixed(1)).join(",")} blobs=${slots.map((slot) => (samples[slot].src || "").startsWith("blob:") ? "yes" : "no").join(",")} modes=${slots.map((slot) => samples[slot].mode || "-").join(",")}`);
       }
-      await sleep(2000);
+      await sleep(1000);
     }
     const logPath = path.join(dir, "logs", "video.log");
     const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
@@ -251,8 +271,11 @@ async function runBlobSoak() {
     if (durationMs >= 70000 && !wanted.some((line) => line.includes("event=progress"))) {
       throw new Error("video.log has no progress heartbeat");
     }
-    note(`done ms=${durationMs} lines=${wanted.length}`);
-    return { ms: durationMs, lines: wanted.length };
+    if (durationMs >= 10 * 60 * 1000 && seen.size < 2) {
+      throw new Error(`both starter clips were not played: ${[...seen].join(" ")}`);
+    }
+    note(`done ms=${durationMs} lines=${wanted.length} clips=${[...seen].join(" ")}`);
+    return { ms: durationMs, lines: wanted.length, clips: [...seen] };
   } finally {
     if (browser) await browser.close().catch(() => {});
     for (const child of children) killChild(child);
@@ -264,7 +287,7 @@ module.exports = { runBlobSoak };
 
 if (require.main === module) {
   runBlobSoak().then((result) => {
-    console.log(JSON.stringify(result));
+    process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
   }).catch((err) => {
     console.error(err);
     process.exit(1);

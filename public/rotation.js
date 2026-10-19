@@ -97,8 +97,22 @@ function clipCard(card, salt) {
   };
 }
 
+function reserveClip(used, card) {
+  const key = rotationKey(card);
+  if (key) used.add(key);
+  if (card && card.type === "video" && card.url) used.add(`url:${card.url}`);
+}
+
+function clipTaken(used, card) {
+  if (!card) return true;
+  const key = rotationKey(card);
+  if (!key || used.has(key)) return true;
+  if (card.type === "video" && card.url && used.has(`url:${card.url}`)) return true;
+  return false;
+}
+
 function pickDistinctVideo(videos, salt, used) {
-  const pool = (videos || []).filter((card) => card && card.url && !card.empty && !used.has(rotationKey(card)));
+  const pool = (videos || []).filter((card) => card && card.url && !card.empty && !clipTaken(used, card));
   if (!pool.length) return null;
   return pool[hash32(String(salt)) % pool.length];
 }
@@ -137,10 +151,9 @@ function replacementFor(plan, slot, playlist, options = {}) {
   const used = new Set();
   for (const [other, card] of Object.entries(plan || {})) {
     if (String(other) === String(slot) || !card) continue;
-    const key = rotationKey(card);
-    if (key) used.add(key);
+    reserveClip(used, card);
   }
-  const videos = openVideos(playlist).filter((card) => !failed.has(card.id));
+  const videos = openVideos(playlist).filter((card) => !failed.has(card.id) && !used.has(`url:${card.url}`));
   const salt = options.salt || `${slot}:retry`;
   const chosen = pickDistinctVideo(videos, salt, used);
   if (chosen) return clipCard(chosen, salt);
@@ -174,42 +187,61 @@ function planRotation(playlist, options = {}) {
           if (fresh) chosen = clipCard(fresh, salt);
         }
         if (chosen) {
-          const key = rotationKey(chosen);
-          if (key) used.add(key);
+          reserveClip(used, chosen);
           slots[slot] = prepare(chosen, slot);
         } else if (!videos.length) {
           slots[slot] = prepare(emptyVideo(), slot);
         } else {
           slots[slot] = prepare(nonVideoReplacement(list, used), slot);
-          const key = rotationKey(slots[slot]);
-          if (key) used.add(key);
+          reserveClip(used, slots[slot]);
         }
         continue;
       }
       const card = prepare(manualCard(content, layout[slot].leaderboardId, list), slot);
-      const key = rotationKey(card);
-      if (key) used.add(key);
+      reserveClip(used, card);
       slots[slot] = withVideoStart(card, tick);
     }
   }
+  const rotationSlots = [];
   for (let i = 1; i <= 3; i += 1) {
     const slot = String(i);
     if (slots[slot]) continue;
     if (i > screens || layout[slot]?.enabled === false) continue;
-    const n = list.length;
-    const slotIndex = i - 1;
+    rotationSlots.push(slot);
+  }
+  const n = list.length;
+  const inWindow = new Set();
+  for (let offset = 0; offset < rotationSlots.length && n; offset += 1) {
+    inWindow.add((((tick + offset) % n) + n) % n);
+  }
+  // A clip stays on the screen that owns it. The next dwell must not slide it
+  // onto a neighbor while this screen is still showing the old frame.
+  for (const index of inWindow) {
+    const source = list[index];
+    if (!source || source.type !== "video" || !source.url || source.blocked || source.empty) continue;
+    const owner = rotationSlots[index % rotationSlots.length];
+    if (!owner || slots[owner] || clipTaken(used, source)) continue;
+    const chosen = withVideoStart(prepare(source, owner), tick);
+    reserveClip(used, chosen);
+    slots[owner] = chosen;
+  }
+  rotationSlots.forEach((slot, slotIndex) => {
+    if (slots[slot]) return;
     let chosen = null;
     for (let step = 0; step < n; step += 1) {
       const candidate = prepare(cardForSlot(list, tick, slotIndex + step), slot);
-      if (candidate?.type === "video" && candidate.blocked) continue;
-      const key = rotationKey(candidate);
-      if (!key || used.has(key)) continue;
+      if (candidate?.type === "video") continue;
+      if (clipTaken(used, candidate)) continue;
       chosen = candidate;
-      used.add(key);
+      reserveClip(used, chosen);
       break;
     }
-    slots[slot] = withVideoStart(chosen, tick);
-  }
+    if (!chosen) {
+      chosen = nonVideoReplacement(list, used);
+      reserveClip(used, chosen);
+    }
+    slots[slot] = chosen;
+  });
   return slots;
 }
 
