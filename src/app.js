@@ -469,9 +469,13 @@ function createApp({
         autoApprove: config.photos.autoApprove !== false,
         pinboard: config.photos.pinboard !== false,
         paused: config.photos.paused === true,
+        scoreUrl: scoreEntryUrl() || null,
         qrDay: guestDay(clockNow()),
         photos: album.feed(),
         events: album.events.map((event) => ({ id: event.id, name: event.name, createdAt: event.createdAt })),
+      },
+      scores: {
+        autoApprove: config.scores?.autoApprove === true,
       },
       updates: updateFields(config),
       kiosk: {
@@ -842,6 +846,36 @@ function createApp({
     const host = getLanIPv4s()[0];
     if (host) return `http://${host}:${config.port}/app`;
     return "";
+  }
+
+  function isShareableGuestUrl(value) {
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return false;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname;
+    if (!host || host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+    if (host.includes(":")) return false;
+    return true;
+  }
+
+  function scoreEntryUrl() {
+    const entry = entryUrl();
+    return isShareableGuestUrl(entry) ? entry : "";
+  }
+
+  function scoreGuestUrl(entry, boardId) {
+    if (!isShareableGuestUrl(entry)) return "";
+    const url = new URL(entry);
+    url.searchParams.set("tab", "scores");
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(boardId || ""))) {
+      url.searchParams.set("board", String(boardId));
+    }
+    return url.toString();
   }
 
   function guestGate(req) {
@@ -2005,6 +2039,25 @@ function createApp({
     }
   });
 
+  app.get("/api/score-qr", async (req, res, next) => {
+    try {
+      if (isPublicRequest(req) && !isAuthed(req)) return res.status(404).end();
+      const target = scoreGuestUrl(scoreEntryUrl(), req.query.board);
+      if (!target) return res.status(404).end();
+      const QRCode = require("qrcode");
+      const png = await QRCode.toBuffer(target, {
+        margin: 1,
+        width: 480,
+        color: { dark: "#1a1916", light: "#f8f8f5" },
+      });
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "no-store");
+      res.send(png);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   const proofDir = path.join(dataDir || path.dirname(store.filePath), "score-proofs");
 
   async function saveScoreProof(buffer) {
@@ -2056,6 +2109,7 @@ function createApp({
         score,
         proofFile,
         ip: req.socket?.remoteAddress || "",
+        autoApprove: currentConfig().scores?.autoApprove === true,
       });
       broadcast();
       sendJson(res, 200, {
@@ -2072,6 +2126,16 @@ function createApp({
       next(err);
     }
   }
+
+  app.put("/api/scores/settings", requirePin, async (req, res, next) => {
+    try {
+      await localStore.update({ scores: { autoApprove: req.body?.autoApprove === true } });
+      broadcast();
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
 
   app.post("/api/scores/:id/approve", requirePin, async (req, res, next) => {
     try {

@@ -615,6 +615,41 @@ test("approving a guest score updates the matching player", async () => {
   assert.equal(removed.showOnWall, false);
 });
 
+test("auto-approved guest scores post immediately and the default stays pending", async () => {
+  const store = await Store.load(filePath);
+  const boardId = await addMachine(store);
+  const waiting = await store.submitScore({ boardId, name: "Casey", score: "4200", ip: "10.2.0.1", now: 1000 });
+  assert.equal(waiting.status, "pending");
+  assert.equal(store.getState().leaderboards[0].rows.length, 0);
+  const posted = await store.submitScore({
+    boardId,
+    name: "Drew",
+    score: "8800",
+    ip: "10.2.0.2",
+    now: 2000,
+    autoApprove: true,
+  });
+  assert.equal(posted.status, "approved");
+  let rows = store.getState().leaderboards[0].rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].name, "Drew");
+  assert.equal(rows[0].score, 8800);
+  const higher = await store.submitScore({
+    boardId,
+    name: "drew",
+    score: 9000,
+    ip: "10.2.0.3",
+    now: 3000,
+    autoApprove: true,
+  });
+  assert.equal(higher.status, "approved");
+  rows = store.getState().leaderboards[0].rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].score, 9000);
+  await store.reviewScore(waiting.id, "approved");
+  assert.equal(store.getState().leaderboards[0].rows.some((row) => row.name === "Casey"), true);
+});
+
 test("guest scores wait for approval and are rate limited", async () => {
   const store = await Store.load(filePath);
   const boardId = await addMachine(store);

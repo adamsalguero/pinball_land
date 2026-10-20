@@ -1501,6 +1501,17 @@ function renderScoreQueue() {
   const root = document.getElementById("score-queue");
   if (!root) return;
   root.replaceChildren();
+  const on = current.scores?.autoApprove === true;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = `btn${on ? " active" : ""}`;
+  toggle.textContent = `Auto-approve leaderboard scores: ${on ? "On" : "Off"}`;
+  toggle.addEventListener("click", async () => {
+    const next = !on;
+    applyPayload(await api("/api/scores/settings", { method: "PUT", body: { autoApprove: next } }));
+    toast(next ? "Guest scores post right away" : "Guest scores wait for approval");
+  });
+  root.append(toggle);
   const pending = (current.state?.scoreSubmissions || []).filter((row) => row.status === "pending");
   if (!pending.length) {
     const empty = document.createElement("p");

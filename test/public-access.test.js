@@ -499,6 +499,129 @@ test("a public host and the guest port hide admin, state, and displays", async (
   }
 });
 
+test("score QR deep-links the public guest app and scores stay pending until auto-approve", async () => {
+  const { loadConfig, normalizeScores, normalizePhotos } = require("../src/config");
+  assert.equal(normalizeScores(undefined).autoApprove, false);
+  assert.equal(normalizeScores({}).autoApprove, false);
+  assert.equal(normalizeScores({ autoApprove: "yes" }).autoApprove, false);
+  assert.equal(normalizeScores({ autoApprove: true }).autoApprove, true);
+  assert.equal(normalizePhotos({}).autoApprove, true);
+  const bareDir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-scores-"));
+  const barePath = path.join(bareDir, "config.json");
+  await fs.writeFile(barePath, `${JSON.stringify({ pin: "2224", port: 3000 })}\n`);
+  const bare = loadConfig(barePath);
+  assert.equal(bare.scores.autoApprove, false);
+  assert.equal(bare.photos.autoApprove, true);
+
+  const started = await startServer({
+    publicProbe: async () => ({ url: "https://pinball.example.ts.net", source: "tailscale" }),
+  });
+  const qrcode = require("qrcode");
+  const original = qrcode.toBuffer;
+  const encoded = [];
+  qrcode.toBuffer = async (text, options) => {
+    encoded.push(text);
+    return original.call(qrcode, text, options);
+  };
+  const boardToken = "11111111-1111-4111-8111-111111111111";
+  try {
+    const hidden = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
+    assert.equal(hidden.status, 404);
+    assert.equal(await hidden.text(), "");
+    const initial = await json(started.origin, "/api/state", { headers: { "x-pin": "2224" } });
+    assert.equal(initial.data.scores.autoApprove, false);
+    assert.equal(initial.data.guest.autoApprove, true);
+    assert.equal(initial.data.guest.scoreUrl || null, null);
+
+    await json(started.origin, "/api/guest-photos/settings", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { publicBaseUrl: "http://10.0.0.8:3010" },
+    });
+    const lanQr = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
+    assert.equal(lanQr.status, 404);
+    assert.equal(await lanQr.text(), "");
+    assert.equal(encoded.length, 0);
+
+    await json(started.origin, "/api/guest-photos/settings", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { publicBaseUrl: "https://guests.example.com" },
+    });
+    const baseQr = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
+    assert.equal(baseQr.status, 200);
+    assert.match(baseQr.headers.get("content-type") || "", /image\/png/);
+    assert.ok((await baseQr.arrayBuffer()).byteLength > 80);
+    assert.equal(encoded.at(-1), `https://guests.example.com/app?tab=scores&board=${boardToken}`);
+
+    const enabled = await json(started.origin, "/api/public-access", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { enabled: true },
+    });
+    assert.match(enabled.data.guest.scoreUrl, /^https:\/\/pinball\.example\.ts\.net\/\?k=/);
+    assert.equal(String(enabled.data.guest.scoreUrl).includes("127.0.0.1"), false);
+    const funnelQr = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
+    assert.equal(funnelQr.status, 200);
+    const link = new URL(encoded.at(-1));
+    assert.equal(link.origin, "https://pinball.example.ts.net");
+    assert.equal(link.searchParams.get("tab"), "scores");
+    assert.equal(link.searchParams.get("board"), boardToken);
+    assert.ok(link.searchParams.get("k"));
+    assert.equal(encoded.at(-1).includes("127.0.0.1"), false);
+    assert.equal(encoded.at(-1).includes(String(started.port)), false);
+    const beforeRemote = encoded.length;
+    const remote = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`, {
+      headers: { "x-forwarded-for": "8.8.8.8" },
+    });
+    assert.equal(remote.status, 404);
+    assert.equal(encoded.length, beforeRemote);
+
+    const added = await json(started.origin, "/api/machines", {
+      method: "POST",
+      headers: { "x-pin": "2224" },
+      body: { name: "QR Machine", opdbId: "GTEST-QR" },
+    });
+    assert.equal(added.res.status, 200, JSON.stringify(added.data));
+    const machine = added.data.state.leaderboards.at(-1);
+    const pending = await json(started.origin, "/api/scores", {
+      method: "POST",
+      body: { boardId: machine.id, name: "Casey", score: "4200" },
+    });
+    assert.equal(pending.res.status, 200);
+    assert.equal(pending.data.submission.status, "pending");
+    const waiting = await json(started.origin, "/api/state", { headers: { "x-pin": "2224" } });
+    const waitingBoard = waiting.data.state.leaderboards.find((item) => item.id === machine.id);
+    assert.equal(waitingBoard.rows.length, 0);
+    assert.equal(waiting.data.state.scoreSubmissions.some((row) => row.name === "Casey" && row.status === "pending"), true);
+    assert.equal(waiting.data.guest.autoApprove, true);
+
+    const turnedOn = await json(started.origin, "/api/scores/settings", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { autoApprove: true },
+    });
+    assert.equal(turnedOn.data.scores.autoApprove, true);
+    assert.equal(turnedOn.data.guest.autoApprove, true);
+    const posted = await json(started.origin, "/api/scores", {
+      method: "POST",
+      body: { boardId: machine.id, name: "Drew", score: "8800" },
+    });
+    assert.equal(posted.data.submission.status, "approved");
+    const live = await json(started.origin, "/api/state", { headers: { "x-pin": "2224" } });
+    const liveBoard = live.data.state.leaderboards.find((item) => item.id === machine.id);
+    assert.equal(liveBoard.rows.some((row) => row.name === "Drew" && row.score === 8800), true);
+    assert.equal(live.data.state.scoreSubmissions.some((row) => row.name === "Drew" && row.status === "pending"), false);
+    assert.equal(live.data.guest.autoApprove, true);
+    const saved = JSON.parse(await fs.readFile(started.configPath, "utf8"));
+    assert.equal(saved.scores.autoApprove, true);
+    assert.equal(saved.photos.autoApprove, true);
+  } finally {
+    qrcode.toBuffer = original;
+    started.server.close();
+  }
+});
+
 test("enable-public-access script installs Tailscale and keeps Funnel in the background", async () => {
   const text = await fs.readFile(path.join(__dirname, "..", "scripts", "enable-public-access.ps1"), "utf8");
   assert.match(text, /winget/);

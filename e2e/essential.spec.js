@@ -356,3 +356,77 @@ test("adding a score leaves existing scores collapsed", async ({ page, request }
     }
   }
 });
+
+test("leaderboard QR opens the score form and auto-approve posts or holds", async ({ page, request }) => {
+  let boardId = "";
+  try {
+    const created = await request.post("/api/machines", {
+      headers: { "x-pin": "2224" },
+      data: { name: "QR Machine", opdbId: "GTEST-QR" },
+    });
+    expect(created.ok()).toBeTruthy();
+    const createdBody = await created.json();
+    const board = createdBody.state.leaderboards.find((item) => item.opdbId === "GTEST-QR");
+    expect(board?.id).toBeTruthy();
+    boardId = board.id;
+    await page.goto("/display/1?preview=board&shot=1");
+    await expect(page.locator("#board-title")).toBeVisible();
+    await expect(page.locator("#board-score-qr")).toBeHidden();
+    expect((await page.locator("#board-score-qr-img").getAttribute("src")) || "").toBe("");
+    const boardText = await page.locator("#board").innerText();
+    expect(boardText.toLowerCase()).not.toContain("error");
+
+    await page.goto(`/?tab=scores&board=${board.id}`);
+    await expect(page.locator("#panel-scores")).toBeVisible();
+    await expect(page.locator("#panel-camera")).toBeHidden();
+    await expect(page.locator("#machine-picker")).toHaveValue(board.id);
+    await expect(page.locator("#score-form")).toBeVisible();
+    await page.locator("#score-name").fill("Casey");
+    await page.locator("#score-value").fill("4200");
+    await page.locator("#score-form").getByRole("button", { name: "Submit score" }).click();
+    await expect(page.locator("#score-status")).toHaveText("Sent. It shows on the board after the host approves it.");
+
+    await unlock(page);
+    await page.getByRole("button", { name: "Boards", exact: true }).click();
+    const toggle = page.getByRole("button", { name: "Auto-approve leaderboard scores: Off" });
+    await expect(toggle).toBeVisible();
+    await expect(page.locator("#score-queue")).toContainText("Casey");
+    const waiting = await request.get("/api/state", { headers: { "x-pin": "2224" } });
+    const waitingBody = await waiting.json();
+    const waitingBoard = waitingBody.state.leaderboards.find((item) => item.id === board.id);
+    expect(waitingBoard.rows.some((row) => row.name === "Casey")).toBeFalsy();
+    expect(waitingBody.scores.autoApprove).toBe(false);
+
+    await toggle.click();
+    await expect(page.getByRole("button", { name: "Auto-approve leaderboard scores: On" })).toBeVisible();
+    await expect(page.locator("#toast")).toHaveText("Guest scores post right away");
+
+    await page.goto(`/?tab=scores&board=${board.id}`);
+    await expect(page.locator("#machine-picker")).toHaveValue(board.id);
+    await page.locator("#score-name").fill("Drew");
+    await page.locator("#score-value").fill("8800");
+    await page.locator("#score-form").getByRole("button", { name: "Submit score" }).click();
+    await expect(page.locator("#score-status")).toHaveText("Sent. It's on the board.");
+
+    await page.goto("/admin");
+    await expect(page.locator("#app")).toBeVisible();
+    await page.getByRole("button", { name: "Boards", exact: true }).click();
+    await expect(page.locator("#score-queue")).not.toContainText("Drew");
+    const live = await request.get("/api/state", { headers: { "x-pin": "2224" } });
+    const liveBody = await live.json();
+    const liveBoard = liveBody.state.leaderboards.find((item) => item.id === board.id);
+    expect(liveBoard.rows.some((row) => row.name === "Drew" && row.score === 8800)).toBeTruthy();
+    expect(liveBody.scores.autoApprove).toBe(true);
+
+    await page.getByRole("button", { name: "Photos", exact: true }).click();
+    const photoToggle = page.locator("#photos-root").getByRole("button", { name: /^Auto-approve (on|off)$/ });
+    await expect(photoToggle).toBeVisible();
+    await expect(photoToggle).not.toHaveText(/leaderboard/i);
+  } finally {
+    await request.put("/api/scores/settings", {
+      headers: { "x-pin": "2224" },
+      data: { autoApprove: false },
+    });
+    if (boardId) await request.delete(`/api/leaderboards/${boardId}`, { headers: { "x-pin": "2224" } });
+  }
+});

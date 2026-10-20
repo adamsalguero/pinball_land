@@ -751,7 +751,7 @@ class Store {
     return true;
   }
 
-  async submitScore({ boardId, name, score, proofFile, ip, now } = {}) {
+  async submitScore({ boardId, name, score, proofFile, ip, now, autoApprove = false } = {}) {
     if (!this.allowScore(ip, now)) {
       throw Object.assign(new Error("Too many scores from this phone. Wait a few minutes."), { status: 429 });
     }
@@ -770,15 +770,39 @@ class Store {
       name: cleanName,
       score: parsed,
       proofFile: proofFile || null,
-      status: "pending",
+      status: autoApprove ? "approved" : "pending",
       createdAt: now || Date.now(),
     });
     this.state.scoreSubmissions.push(submission);
     if (this.state.scoreSubmissions.length > 300) {
       this.state.scoreSubmissions = this.state.scoreSubmissions.slice(-300);
     }
+    if (autoApprove) this.placeApprovedScore(submission, { showPhoto: true });
     await this.commit();
     return submission;
+  }
+
+  placeApprovedScore(item, options = {}) {
+    const board = this.findBoard(item.boardId);
+    if (!board) throw Object.assign(new Error("That machine is no longer on a board"), { status: 404 });
+    const key = playerKey(item.name);
+    const existing = board.rows.find((row) => playerKey(row.name) === key);
+    const showPhoto = options.showPhoto !== false;
+    if (existing) {
+      if (item.score > existing.score) existing.score = item.score;
+      if (item.proofFile) existing.proofFile = item.proofFile;
+      existing.showOnWall = Boolean(existing.proofFile) && showPhoto;
+      existing.createdAt = item.createdAt || Date.now();
+    } else {
+      board.rows.push(normalizeRow({
+        name: item.name,
+        score: item.score,
+        proofFile: item.proofFile,
+        showOnWall: showPhoto,
+        createdAt: item.createdAt,
+      }));
+    }
+    board.rows = sortRows(board.rows);
   }
 
   async reviewScore(submissionId, status, options = {}) {
@@ -791,28 +815,7 @@ class Store {
       throw Object.assign(new Error("Status must be approved or rejected"), { status: 400 });
     }
     item.status = status;
-    if (status === "approved") {
-      const board = this.findBoard(item.boardId);
-      if (!board) throw Object.assign(new Error("That machine is no longer on a board"), { status: 404 });
-      const key = playerKey(item.name);
-      const existing = board.rows.find((row) => playerKey(row.name) === key);
-      const showPhoto = options.showPhoto !== false;
-      if (existing) {
-        if (item.score > existing.score) existing.score = item.score;
-        if (item.proofFile) existing.proofFile = item.proofFile;
-        existing.showOnWall = Boolean(existing.proofFile) && showPhoto;
-        existing.createdAt = item.createdAt || Date.now();
-      } else {
-        board.rows.push(normalizeRow({
-          name: item.name,
-          score: item.score,
-          proofFile: item.proofFile,
-          showOnWall: showPhoto,
-          createdAt: item.createdAt,
-        }));
-      }
-      board.rows = sortRows(board.rows);
-    }
+    if (status === "approved") this.placeApprovedScore(item, options);
     return this.commit();
   }
 }
