@@ -47,6 +47,7 @@ let current = {
   opdb: { configured: false },
 };
 let selectedBoardId = null;
+let scoreEditorOpenFor = null;
 let presentSlot = "1";
 let toastTimer = null;
 let searchTimer = null;
@@ -251,6 +252,39 @@ function renderBoardEditor() {
     boardEditor.textContent = "Create an event or add a machine to start a leaderboard.";
     return;
   }
+  if (scoreEditorOpenFor !== board.id || !board.rows.length) scoreEditorOpenFor = null;
+
+  const add = document.createElement("form");
+  add.className = "add-row add-score";
+  const addName = document.createElement("input");
+  addName.placeholder = "New player";
+  addName.required = true;
+  addName.setAttribute("aria-label", "New player");
+  const addScore = document.createElement("input");
+  addScore.placeholder = "Score";
+  addScore.inputMode = "numeric";
+  addScore.setAttribute("aria-label", "New score");
+  const addBtn = document.createElement("button");
+  addBtn.className = "btn primary";
+  addBtn.textContent = "Add score";
+  add.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    scoreEditorOpenFor = null;
+    applyPayload(
+      await api(`/api/leaderboards/${board.id}/rows`, {
+        method: "POST",
+        body: { name: addName.value, score: addScore.value.replace(/,/g, "") },
+      })
+    );
+    toast("Score added");
+  });
+  add.append(addName, addScore, addBtn);
+  boardEditor.append(add);
+
+  const orderHint = document.createElement("p");
+  orderHint.className = "muted";
+  orderHint.textContent = "Scores sort highest first when you enter a name and score.";
+  boardEditor.append(orderHint);
 
   const nameLabel = document.createElement("label");
   nameLabel.textContent = "Machine name";
@@ -286,11 +320,6 @@ function renderBoardEditor() {
     boardEditor.append(meta);
   }
 
-  const orderHint = document.createElement("p");
-  orderHint.className = "muted";
-  orderHint.textContent = "Scores sort highest first when you enter a name and score.";
-  boardEditor.append(orderHint);
-
   const actions = document.createElement("div");
   actions.className = "row-actions";
   const clearBtn = document.createElement("button");
@@ -320,6 +349,21 @@ function renderBoardEditor() {
   });
   actions.append(clearBtn, archiveBtn, deleteBtn);
   boardEditor.append(actions);
+
+  let scoreList = null;
+  if (board.rows.length) {
+    const details = document.createElement("details");
+    details.className = "score-edit";
+    if (scoreEditorOpenFor === board.id) details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Edit existing scores";
+    details.append(summary);
+    details.addEventListener("toggle", () => {
+      scoreEditorOpenFor = details.open ? board.id : null;
+    });
+    scoreList = details;
+    boardEditor.append(details);
+  }
 
   for (const row of board.rows) {
     const wrap = document.createElement("div");
@@ -386,32 +430,8 @@ function renderBoardEditor() {
     });
     icons.append(remove);
     wrap.append(fields, icons);
-    boardEditor.append(wrap);
+    scoreList.append(wrap);
   }
-
-  const add = document.createElement("form");
-  add.className = "add-row";
-  const addName = document.createElement("input");
-  addName.placeholder = "New player";
-  addName.required = true;
-  const addScore = document.createElement("input");
-  addScore.placeholder = "Score";
-  addScore.inputMode = "numeric";
-  const addBtn = document.createElement("button");
-  addBtn.className = "btn primary";
-  addBtn.textContent = "Add score";
-  add.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    applyPayload(
-      await api(`/api/leaderboards/${board.id}/rows`, {
-        method: "POST",
-        body: { name: addName.value, score: addScore.value.replace(/,/g, "") },
-      })
-    );
-    toast("Score added");
-  });
-  add.append(addName, addScore, addBtn);
-  boardEditor.append(add);
 }
 
 function displayLabel(slot, count) {
@@ -1392,6 +1412,7 @@ document.getElementById("guest-back")?.addEventListener("click", () => {
 
 boardSelect.addEventListener("change", () => {
   selectedBoardId = boardSelect.value;
+  scoreEditorOpenFor = null;
   render();
 });
 
@@ -1480,6 +1501,17 @@ function renderScoreQueue() {
   const root = document.getElementById("score-queue");
   if (!root) return;
   root.replaceChildren();
+  const on = current.scores?.autoApprove === true;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = `btn${on ? " active" : ""}`;
+  toggle.textContent = `Auto-approve leaderboard scores: ${on ? "On" : "Off"}`;
+  toggle.addEventListener("click", async () => {
+    const next = !on;
+    applyPayload(await api("/api/scores/settings", { method: "PUT", body: { autoApprove: next } }));
+    toast(next ? "Guest scores post right away" : "Guest scores wait for approval");
+  });
+  root.append(toggle);
   const pending = (current.state?.scoreSubmissions || []).filter((row) => row.status === "pending");
   if (!pending.length) {
     const empty = document.createElement("p");

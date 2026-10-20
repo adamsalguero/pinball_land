@@ -216,7 +216,6 @@ function releasePresentVideo() {
 
 function setMode(mode) {
   screen.dataset.mode = mode;
-  document.documentElement.classList.toggle("particles-under", mode === "pinboard");
   logoPanel.hidden = mode !== "logo";
   amenityPanel.hidden = mode !== "amenity";
   boardPanel.hidden = mode !== "board";
@@ -2006,6 +2005,42 @@ function placePhotos(target, card) {
 }
 
 let qrShownKey = null;
+let scoreQrKey = "";
+
+function refreshScoreQr() {
+  const wrap = document.querySelector("#board-score-qr");
+  const img = document.querySelector("#board-score-qr-img");
+  if (!wrap || !img) return;
+  if (!img.dataset.scoreQrBound) {
+    img.dataset.scoreQrBound = "1";
+    img.addEventListener("load", () => {
+      if (scoreQrKey) wrap.hidden = false;
+    });
+    img.addEventListener("error", () => {
+      wrap.hidden = true;
+    });
+  }
+  const publicUrl = payload?.guest?.scoreUrl || "";
+  const boardId = shownBoard?.id || "";
+  if (screen.dataset.mode !== "board" || !publicUrl || !boardId) {
+    wrap.hidden = true;
+    scoreQrKey = "";
+    return;
+  }
+  const day = payload?.guest?.qrDay || "";
+  const key = `${day}|${publicUrl}|${boardId}`;
+  if (key === scoreQrKey) return;
+  scoreQrKey = key;
+  wrap.hidden = true;
+  const params = new URLSearchParams();
+  if (day) params.set("d", day);
+  params.set("u", publicUrl);
+  params.set("board", boardId);
+  img.alt = "";
+  const next = `/api/score-qr?${params}`;
+  if (img.getAttribute("src") !== next) img.src = next;
+  else if (img.complete && img.naturalWidth > 0) wrap.hidden = false;
+}
 
 function refreshGuestQr() {
   const qr = document.querySelector("#pin-qr");
@@ -2201,6 +2236,7 @@ function tick() {
     refreshGuestQr();
     preloadUpcoming();
     renderCard(resolveCard());
+    refreshScoreQr();
     if (screen.dataset.mode === "board") paintBoardArt();
     if (screen.dataset.mode === "clock") paintClock();
     if (!themeAllowsVideo() && wallVideo) stopWallVideo();

@@ -89,6 +89,58 @@ test("sprite sheet draws a spider and a bat", async ({ page }) => {
   await page.screenshot({ path: "e2e/artifacts/sprites-spider-bat.png" });
 });
 
+test("decorations sit above every wall card", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const cards = [
+    ["halloween", "board", "board"],
+    ["halloween", "pinboard", "pinboard"],
+    ["halloween", "video", "video"],
+    ["christmas", "clock", "clock"],
+    ["pinnacle", "logo", "logo"],
+    ["pinnacle", "amenity&amenity=arcade", "amenity"],
+  ];
+  for (const [theme, preview, mode] of cards) {
+    await page.goto(`/display/1?preview=${preview}&theme=${theme}&shot=1`);
+    await expect(page.locator(".screen")).toHaveAttribute("data-mode", mode);
+    const order = await page.evaluate(() => {
+      const screen = document.querySelector(".screen");
+      const motion = document.querySelector("#motion");
+      const probe = document.createElement("div");
+      probe.style.cssText = "position:absolute;z-index:9999;inset:24px;transform:translate3d(0,0,0);opacity:0.4;";
+      screen.append(probe);
+      const trapped = [];
+      const styleOf = (el) => getComputedStyle(el);
+      const traps = (style) => style.transform !== "none"
+        || Number(style.opacity) < 1
+        || style.isolation === "isolate"
+        || style.filter !== "none"
+        || style.willChange.split(",").some((part) => /transform|opacity|filter/.test(part));
+      let node = motion.parentElement;
+      while (node) {
+        if (traps(styleOf(node))) trapped.push(node.nodeName);
+        node = node.parentElement;
+      }
+      motion.style.pointerEvents = "auto";
+      const top = document.elementsFromPoint(window.innerWidth / 2, window.innerHeight / 2)[0];
+      motion.style.pointerEvents = "";
+      probe.remove();
+      const motionStyle = styleOf(motion);
+      const screenStyle = styleOf(screen);
+      return {
+        topIsMotion: top === motion,
+        motionZ: Number(motionStyle.zIndex),
+        screenZ: Number(screenStyle.zIndex),
+        pointerEvents: motionStyle.pointerEvents,
+        trapped,
+      };
+    });
+    expect(order.topIsMotion, `${theme} ${preview}`).toBe(true);
+    expect(order.motionZ, `${theme} ${preview}`).toBeGreaterThan(order.screenZ);
+    expect(order.pointerEvents, `${theme} ${preview}`).toBe("none");
+    expect(order.trapped, `${theme} ${preview}`).toEqual([]);
+  }
+});
+
 test("leaderboard podium fits full names at 1080p", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/display/1?preview=board&fixture=long&art=1&theme=halloween&shot=1");
@@ -122,7 +174,7 @@ test("leaderboard podium fits full names at 1080p", async ({ page }) => {
       problems: problems.slice(0, 6),
       podiumAboveRows: podium.getBoundingClientRect().top < rows.getBoundingClientRect().top,
       firstTaller: first.getBoundingClientRect().height > second.getBoundingClientRect().height,
-      textAboveParticles: Number(getComputedStyle(board).zIndex) > Number(getComputedStyle(document.querySelector("#motion")).zIndex),
+      decorationsAboveBoard: Number(getComputedStyle(document.querySelector("#motion")).zIndex) > Number(getComputedStyle(document.querySelector(".screen")).zIndex),
     };
   });
   expect(report.text.toLowerCase()).toContain("the wizard of oz (75th anniversary edition)");
@@ -132,7 +184,7 @@ test("leaderboard podium fits full names at 1080p", async ({ page }) => {
   expect(report.problems, JSON.stringify(report.problems)).toEqual([]);
   expect(report.podiumAboveRows).toBe(true);
   expect(report.firstTaller).toBe(true);
-  expect(report.textAboveParticles).toBe(true);
+  expect(report.decorationsAboveBoard).toBe(true);
   const order = await page.evaluate(() => {
     const read = (selector) => Number((document.querySelector(selector)?.textContent || "").replace(/[^0-9]/g, ""));
     const rowScores = [...document.querySelectorAll(".board-row .score")].map((el) => Number(el.textContent.replace(/[^0-9]/g, "")));

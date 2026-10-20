@@ -220,13 +220,31 @@ function renderPicker() {
   picker.hidden = boards.length === 0;
 }
 
+function scoreBoardFromUrl() {
+  const id = new URLSearchParams(location.search).get("board") || "";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : "";
+}
+
+let scoreFormScrolled = false;
+
+function maybeScrollScoreForm() {
+  if (scoreFormScrolled) return;
+  const params = new URLSearchParams(location.search);
+  if (params.get("tab") !== "scores" && !params.get("board")) return;
+  scoreFormScrolled = true;
+  document.getElementById("score-form")?.scrollIntoView({ block: "nearest" });
+}
+
 async function loadScores() {
   const res = await fetch("/api/guest");
   const data = await res.json();
   applyTheme(data.state?.theme);
   boards = (data.state?.leaderboards || []).filter((board) => board.kind === "machine");
   renderPicker();
+  const wanted = scoreBoardFromUrl();
+  if (wanted && boards.some((board) => board.id === wanted)) picker.value = wanted;
   renderScores();
+  maybeScrollScoreForm();
 }
 
 picker.addEventListener("change", renderScores);
@@ -265,8 +283,11 @@ document.getElementById("score-form").addEventListener("submit", async (event) =
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Could not send that score");
-    note.textContent = "Sent. It shows on the board after the host approves it.";
+    note.textContent = data.submission?.status === "approved"
+      ? "Sent. It's on the board."
+      : "Sent. It shows on the board after the host approves it.";
     event.target.reset();
+    if (data.submission?.status === "approved") loadScores();
   } catch (err) {
     note.textContent = err.message;
   }
@@ -317,3 +338,6 @@ loadFeed();
 watchTheme();
 setInterval(loadFeed, 8000);
 setInterval(watchTheme, 8000);
+
+const guestParams = new URLSearchParams(location.search);
+if (guestParams.get("tab") === "scores" || guestParams.get("board")) showTab("scores");

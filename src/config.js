@@ -118,6 +118,13 @@ function normalizePhotos(raw) {
   };
 }
 
+function normalizeScores(raw) {
+  const incoming = raw && typeof raw === "object" ? raw : {};
+  return {
+    autoApprove: incoming.autoApprove === true,
+  };
+}
+
 function normalizePublicAccess(raw) {
   const incoming = raw && typeof raw === "object" ? raw : {};
   return {
@@ -192,6 +199,7 @@ function loadConfig(configPath = path.join(__dirname, "..", "config.json")) {
     media: normalizeMediaSettings(fileConfig.media),
     motion: normalizeMotion(fileConfig.motion),
     photos: normalizePhotos(fileConfig.photos),
+    scores: normalizeScores(fileConfig.scores),
     publicAccess: normalizePublicAccess(fileConfig.publicAccess),
     admin: normalizeAdminAccess(fileConfig.admin),
     guestSecret: typeof fileConfig.guestSecret === "string" && fileConfig.guestSecret.length >= 16 ? fileConfig.guestSecret : "",
@@ -292,6 +300,9 @@ function createConfigStore(configPath) {
       if (patch.photos) {
         raw.photos = normalizePhotos({ ...normalizePhotos(raw.photos), ...patch.photos });
       }
+      if (patch.scores) {
+        raw.scores = normalizeScores({ ...normalizeScores(raw.scores), ...patch.scores });
+      }
       if (patch.publicAccess) {
         raw.publicAccess = normalizePublicAccess({ ...normalizePublicAccess(raw.publicAccess), ...patch.publicAccess });
       }
@@ -335,6 +346,7 @@ module.exports = {
   normalizeMediaSettings,
   normalizeMotion,
   normalizePhotos,
+  normalizeScores,
   normalizePublicAccess,
   normalizeAdminAccess,
   ensureGuestSecret,
