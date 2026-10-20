@@ -216,7 +216,6 @@ function releasePresentVideo() {
 
 function setMode(mode) {
   screen.dataset.mode = mode;
-  document.documentElement.classList.toggle("particles-under", mode === "pinboard");
   logoPanel.hidden = mode !== "logo";
   amenityPanel.hidden = mode !== "amenity";
   boardPanel.hidden = mode !== "board";

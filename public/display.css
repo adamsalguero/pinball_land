@@ -88,6 +88,7 @@ body,
 
 .screen {
   position: relative;
+  z-index: 0;
   display: grid;
   place-items: stretch;
 }

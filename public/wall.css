@@ -187,13 +187,7 @@ html, body, .screen {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 4;
-}
-html.particles-under #motion { z-index: 0; }
-html.particles-under .screen {
-  position: relative;
-  z-index: 1;
-  background: transparent;
+  z-index: 2;
 }
 .is-shot .panel,
 .is-shot .amenity-photo,
