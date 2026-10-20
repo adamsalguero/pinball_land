@@ -303,6 +303,30 @@ select {
   margin-top: 8px;
 }
 
+.add-score {
+  margin-top: 0;
+}
+
+.add-score .btn.primary {
+  width: 100%;
+  min-height: 56px;
+  font-size: 20px;
+}
+
+.score-edit {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.score-edit summary {
+  min-height: 52px;
+  padding: 14px 8px;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
 .theme-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;

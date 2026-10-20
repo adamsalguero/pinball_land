@@ -294,3 +294,65 @@ test("every wall card stays inside 1080p and 720p, including long text", async (
     await page.screenshot({ path: `e2e/artifacts/amenity-${id}-1080.png`, fullPage: false });
   }
 });
+
+test("adding a score leaves existing scores collapsed", async ({ page, request }) => {
+  const created = [];
+  try {
+    for (const [name, opdbId] of [["Adder Machine", "GTEST-ADD"], ["Other Machine", "GTEST-OTH"]]) {
+      const res = await request.post("/api/machines", {
+        headers: { "x-pin": "2224" },
+        data: { name, opdbId },
+      });
+      expect(res.ok()).toBeTruthy();
+      const body = await res.json();
+      const board = body.state.leaderboards.find((item) => item.opdbId === opdbId);
+      expect(board).toBeTruthy();
+      created.push(board.id);
+    }
+    await unlock(page);
+    await page.getByRole("button", { name: "Boards", exact: true }).click();
+    const editor = page.locator("#board-editor");
+    const addForm = editor.locator("form.add-score");
+    await expect(addForm.getByRole("button", { name: "Add score" })).toBeVisible();
+    await expect(editor.locator(".score-edit")).toHaveCount(0);
+    const order = await editor.evaluate((root) => ({
+      add: root.innerText.indexOf("Add score"),
+      name: root.innerText.indexOf("Machine name"),
+    }));
+    expect(order.add).toBeGreaterThanOrEqual(0);
+    expect(order.add).toBeLessThan(order.name);
+
+    await addForm.getByLabel("New player").fill("Ada");
+    await addForm.getByLabel("New score").fill("1000");
+    await addForm.getByRole("button", { name: "Add score" }).click();
+    await expect(page.locator("#toast")).toHaveText("Score added");
+    const edit = editor.locator("summary", { hasText: "Edit existing scores" });
+    await expect(edit).toBeVisible();
+    await expect(editor.locator(".score-edit")).toHaveJSProperty("open", false);
+    await expect(editor.locator(".player-fields")).toBeHidden();
+
+    await edit.click();
+    await expect(editor.locator(".score-edit")).toHaveJSProperty("open", true);
+    await page.locator("#board-select").selectOption({ label: "Other Machine (machine)" });
+    await expect(editor.locator(".score-edit")).toHaveCount(0);
+    await page.locator("#board-select").selectOption({ label: "Adder Machine (machine)" });
+    await expect(editor.locator(".score-edit")).toHaveJSProperty("open", false);
+    await expect(editor.locator(".player-fields")).toBeHidden();
+
+    await editor.locator("summary", { hasText: "Edit existing scores" }).click();
+    const player = editor.locator(".player-fields input").first();
+    await expect(player).toBeVisible();
+    await expect(player).toHaveValue("Ada");
+    await player.fill("Bea");
+    await player.blur();
+    await expect(editor.locator(".player-fields input").first()).toHaveValue("Bea");
+    await expect(editor.locator(".score-edit")).toHaveJSProperty("open", true);
+    await editor.locator(".score-edit").getByRole("button", { name: "Delete" }).click();
+    await expect(editor.locator(".score-edit")).toHaveCount(0);
+    await expect(addForm.getByRole("button", { name: "Add score" })).toBeVisible();
+  } finally {
+    for (const id of created) {
+      await request.delete(`/api/leaderboards/${id}`, { headers: { "x-pin": "2224" } });
+    }
+  }
+});
