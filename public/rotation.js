@@ -160,6 +160,171 @@ function replacementFor(plan, slot, playlist, options = {}) {
   return nonVideoReplacement(playlist, used);
 }
 
+function planSlots(plan) {
+  return {
+    1: plan?.[1] || plan?.["1"] || null,
+    2: plan?.[2] || plan?.["2"] || null,
+    3: plan?.[3] || plan?.["3"] || null,
+  };
+}
+
+function videoUrl(card) {
+  if (!card || card.type !== "video" || card.empty || !card.url) return "";
+  return String(card.url);
+}
+
+function slotsHolding(plan, url) {
+  if (!url) return [];
+  return ["1", "2", "3"].filter((slot) => videoUrl(plan?.[slot]) === url);
+}
+
+function heldReplacement(plan, slot, playlist) {
+  const used = new Set();
+  for (const other of ["1", "2", "3"]) {
+    if (other === String(slot)) continue;
+    reserveClip(used, plan[other]);
+  }
+  const picked = nonVideoReplacement(playlist, used);
+  if (picked && picked.type !== "video") {
+    const key = rotationKey(picked);
+    if (key && !used.has(key)) return { ...picked };
+  }
+  const fallbacks = [
+    { type: "clock", id: "clock" },
+    { type: "amenity", id: "arcade" },
+    { type: "amenity", id: "oasis" },
+    { type: "amenity", id: "events" },
+    { type: "pinboard", id: "pinboard", span: false },
+    { type: "logo", key: "pinnacle" },
+    { type: "logo", key: "pinball-land" },
+  ];
+  for (const candidate of fallbacks) {
+    const key = rotationKey(candidate);
+    if (key && !used.has(key)) return { ...candidate };
+  }
+  return { type: "clock", id: "clock" };
+}
+
+function stripUrl(plan, url, playlist) {
+  for (const slot of slotsHolding(plan, url)) {
+    plan[slot] = heldReplacement(plan, slot, playlist);
+  }
+}
+
+function uniqueCards(plan, playlist) {
+  const seenUrls = new Set();
+  const seenKeys = new Set();
+  for (const slot of ["1", "2", "3"]) {
+    const url = videoUrl(plan[slot]);
+    const key = rotationKey(plan[slot]);
+    const duplicate = (url && seenUrls.has(url)) || (key && seenKeys.has(key));
+    if (duplicate) plan[slot] = heldReplacement(plan, slot, playlist);
+    const nextUrl = videoUrl(plan[slot]);
+    const nextKey = rotationKey(plan[slot]);
+    if (nextUrl) seenUrls.add(nextUrl);
+    if (nextKey) seenKeys.add(nextKey);
+  }
+}
+
+// The planner already gives a holiday clip to one screen per dwell. Displays
+// apply that plan on their own sockets, so the screen it is walking onto can
+// stage it before the screen it is leaving has stopped. Hold the clip back
+// until the previous screen releases it. The served plan then has the file on
+// nobody, and the next plan must not advertise it either.
+function applyClipHandoff(desired, nextDesired, handoff, playlist) {
+  const granted = { ...(handoff?.granted || {}) };
+  const released = { ...(handoff?.released || {}) };
+  const plan = planSlots(desired);
+  const nextPlan = planSlots(nextDesired);
+  const urls = new Set();
+  for (const slot of ["1", "2", "3"]) {
+    const current = videoUrl(plan[slot]);
+    const upcoming = videoUrl(nextPlan[slot]);
+    if (current) urls.add(current);
+    if (upcoming) urls.add(upcoming);
+  }
+  for (const url of Object.keys(granted)) urls.add(url);
+  for (const url of urls) {
+    const owners = slotsHolding(plan, url);
+    for (const extra of owners.slice(1)) plan[extra] = heldReplacement(plan, extra, playlist);
+    const desiredOwner = owners[0] || "";
+    const prev = granted[url] || "";
+    if (!desiredOwner) {
+      if (prev && released[url] !== prev) stripUrl(nextPlan, url, playlist);
+      else {
+        delete granted[url];
+        delete released[url];
+      }
+      continue;
+    }
+    if (!prev || prev === desiredOwner) {
+      granted[url] = desiredOwner;
+      if (released[url] === desiredOwner) delete released[url];
+      continue;
+    }
+    if (released[url] === prev) {
+      granted[url] = desiredOwner;
+      delete released[url];
+      continue;
+    }
+    plan[desiredOwner] = heldReplacement(plan, desiredOwner, playlist);
+    stripUrl(nextPlan, url, playlist);
+  }
+  uniqueCards(plan, playlist);
+  uniqueCards(nextPlan, playlist);
+  return { plan, nextPlan, handoff: { granted, released } };
+}
+
+function noteClipRelease(handoff, url, slot) {
+  const granted = { ...(handoff?.granted || {}) };
+  const released = { ...(handoff?.released || {}) };
+  const clip = String(url || "");
+  const owner = String(slot || "");
+  if (!clip || !granted[clip] || granted[clip] !== owner) {
+    return { granted, released, changed: false };
+  }
+  if (released[clip] === owner) return { granted, released, changed: false };
+  released[clip] = owner;
+  return { granted, released, changed: true };
+}
+
+function noteClipIdle(handoff, slot) {
+  const granted = { ...(handoff?.granted || {}) };
+  const released = { ...(handoff?.released || {}) };
+  const owner = String(slot || "");
+  let changed = false;
+  if (!["1", "2", "3"].includes(owner)) return { granted, released, changed: false };
+  for (const [url, holder] of Object.entries(granted)) {
+    if (holder !== owner || released[url] === owner) continue;
+    released[url] = owner;
+    changed = true;
+  }
+  return { granted, released, changed };
+}
+
+function slotMayPlay(plan, nextPlan, slot, url) {
+  const clip = String(url || "");
+  const mine = String(slot || "");
+  if (!clip) return false;
+  const owners = slotsHolding(plan, clip);
+  if (owners.length) return owners[0] === mine;
+  if (slotsHolding(nextPlan, clip).length) return false;
+  return true;
+}
+
+function clipsToRelease(previousPlan, nextPlan, slot, showingUrl) {
+  const id = String(slot || "");
+  const prev = previousPlan?.[id];
+  const mine = nextPlan?.[id];
+  const keep = videoUrl(mine);
+  const drop = new Set();
+  const prevUrl = videoUrl(prev);
+  if (prevUrl && prevUrl !== keep) drop.add(prevUrl);
+  const showing = String(showingUrl || "");
+  if (showing && showing !== keep) drop.add(showing);
+  return [...drop];
+}
+
 function planRotation(playlist, options = {}) {
   const list = Array.isArray(playlist) ? playlist : [];
   const screens = Math.max(1, Math.min(3, Number(options.screenCount) || 3));
@@ -303,6 +468,11 @@ const rotationApi = {
   pickDistinctVideo,
   replacementFor,
   openVideos,
+  applyClipHandoff,
+  noteClipRelease,
+  noteClipIdle,
+  slotMayPlay,
+  clipsToRelease,
 };
 
 if (typeof module !== "undefined" && module.exports) module.exports = rotationApi;

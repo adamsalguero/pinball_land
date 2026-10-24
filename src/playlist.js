@@ -208,4 +208,9 @@ module.exports = {
   rotationKey,
   planRotation,
   replacementFor: rotationApi.replacementFor,
+  applyClipHandoff: rotationApi.applyClipHandoff,
+  noteClipRelease: rotationApi.noteClipRelease,
+  noteClipIdle: rotationApi.noteClipIdle,
+  slotMayPlay: rotationApi.slotMayPlay,
+  clipsToRelease: rotationApi.clipsToRelease,
 };

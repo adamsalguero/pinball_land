@@ -39,6 +39,8 @@ const podium = document.getElementById("podium");
 
 let payload = null;
 let lastKey = "";
+const releasedClipUrls = new Set();
+let clipIdleSent = false;
 let socket = null;
 let pc = null;
 let iceQueue = [];
@@ -1106,22 +1108,13 @@ function otherScreenClipIds() {
   return ids;
 }
 
-function clipAssignedSlot(url) {
-  if (!url) return "";
-  for (const plan of [payload?.rotationPlan, payload?.nextRotationPlan]) {
-    for (const slot of ["1", "2", "3"]) {
-      const card = plan?.[slot];
-      if (card?.type === "video" && card.url === url) return String(slot);
-    }
-  }
-  return "";
-}
-
 function thisSlotMayPlay(url) {
-  const mine = payload?.rotationPlan?.[SLOT] || payload?.rotationPlan?.[String(SLOT)];
-  if (mine?.type === "video" && mine.url === url) return true;
-  const owner = clipAssignedSlot(url);
-  return !owner || owner === String(SLOT);
+  return window.PinballRotation.slotMayPlay(
+    payload?.rotationPlan,
+    payload?.nextRotationPlan,
+    SLOT,
+    url,
+  );
 }
 
 function holdClip(card) {
@@ -1405,6 +1398,7 @@ async function showVideo(card, onReady) {
     return;
   }
   if (card?.url && !thisSlotMayPlay(card.url)) {
+    if (wallVideo?.dataset?.mediaUrl === card.url) stopWallVideo();
     if (onReady) onReady();
     return;
   }
@@ -1446,6 +1440,10 @@ async function showVideo(card, onReady) {
     return;
   }
   if (!entry || token !== showToken || !wallVideo || wallVideo.dataset.playId !== playToken) return;
+  if (card?.url && !thisSlotMayPlay(card.url)) {
+    stopWallVideo();
+    return;
+  }
   noteBlob(card, entry);
   swapping = true;
   wallVideo.onloadedmetadata = null;
@@ -1513,7 +1511,7 @@ function preloadUpcoming() {
     && !next.empty
     && next.url !== wallVideo.dataset.mediaUrl
     && !busy.has(next.url)
-    && thisSlotMayPlay(next.url)
+    && !otherScreenClaimsClip(next.url)
   ) {
     keep.add(next.url);
     loadClipBlob(next.url).then((entry) => noteBlob(next, entry)).catch(() => {});
@@ -1527,6 +1525,37 @@ function shareLines() {
   const host = share.hosts?.[0] || location.hostname;
   const protocol = share.secure ? "https" : "http";
   return `${protocol}://${host}:${share.port}${share.path || "/present"}`;
+}
+
+function otherScreenClaimsClip(url) {
+  if (!url) return false;
+  for (const slot of ["1", "2", "3"]) {
+    if (String(slot) === String(SLOT)) continue;
+    for (const plan of [payload?.rotationPlan, payload?.nextRotationPlan]) {
+      const card = plan?.[slot];
+      if (card?.type === "video" && card.url === url && !card.empty) return true;
+    }
+  }
+  return false;
+}
+
+function releaseClip(url) {
+  if (!url || releasedClipUrls.has(url)) return;
+  releasedClipUrls.add(url);
+  sendSocket({ type: "clip-release", url, slot: String(SLOT) });
+}
+
+function sendClipIdle() {
+  const mine = payload?.rotationPlan?.[SLOT] || payload?.rotationPlan?.[String(SLOT)];
+  const holding = Boolean(mine?.type === "video" && mine.url && !mine.empty);
+  const showing = screen.dataset.mode === "video" && Boolean(wallVideo?.dataset?.mediaUrl);
+  if (holding || showing) {
+    clipIdleSent = false;
+    return;
+  }
+  if (clipIdleSent) return;
+  clipIdleSent = true;
+  sendSocket({ type: "clip-idle", slot: String(SLOT) });
 }
 
 function sendSocket(message) {
@@ -2248,9 +2277,24 @@ function tick() {
 }
 
 function applyPayload(next) {
+  const showing = wallVideo?.dataset?.mediaUrl || "";
+  const drop = window.PinballRotation.clipsToRelease(
+    payload?.rotationPlan,
+    next?.rotationPlan,
+    SLOT,
+    showing,
+  );
   payload = next;
   clockSkew = Date.now() - (Number(next?.serverNow) || Date.now());
-  tick();
+  const mine = next?.rotationPlan?.[SLOT] || next?.rotationPlan?.[String(SLOT)];
+  if (mine?.type === "video" && mine.url) releasedClipUrls.delete(mine.url);
+  if (drop.length) stopWallVideo();
+  try {
+    tick();
+  } finally {
+    for (const url of drop) releaseClip(url);
+    sendClipIdle();
+  }
 }
 
 if (new URLSearchParams(location.search).has("shot")) {

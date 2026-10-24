@@ -7,7 +7,15 @@ const express = require("express");
 const { WebSocketServer } = require("ws");
 const { resolveLogos, resolvePhotos, LOGO_KEYS, PHOTO_KEYS } = require("./logos");
 const { AMENITIES } = require("./amenities");
-const { buildPlaylist, planRotation, currentTick, replacementFor } = require("./playlist");
+const {
+  buildPlaylist,
+  planRotation,
+  currentTick,
+  replacementFor,
+  applyClipHandoff,
+  noteClipRelease,
+  noteClipIdle,
+} = require("./playlist");
 const { createOpdb, manufacturerName, manufactureYear, safeId, BUILTIN_OPDB_API_KEY } = require("./opdb");
 const { createMediaTracker } = require("./media-range");
 const { createConfigStore, ensureGuestSecret } = require("./config");
@@ -157,6 +165,7 @@ function createApp({
   appRoot = path.join(__dirname, ".."),
   clipCache = false,
   clipIdList = null,
+  readyClipIds = null,
   publicProbe = null,
   ensureGuestListener = null,
 }) {
@@ -184,6 +193,7 @@ function createApp({
     3: { gen: 0, id: "" },
   };
   const slotFallback = {};
+  let clipHandoff = { granted: {}, released: {} };
   const seenVideoLog = new Set();
   let stallStrikes = 0;
   let decodePersist = null;
@@ -253,6 +263,11 @@ function createApp({
   const clipIds = Array.isArray(clipIdList) && clipIdList.length
     ? clipIdList
     : String(process.env.PINBALL_CLIP_IDS || "").split(",").map((id) => id.trim()).filter(Boolean);
+  const readyOverride = new Set(
+    (Array.isArray(readyClipIds) ? readyClipIds : [])
+      .map((id) => String(id || "").replace(/^starter:/, ""))
+      .filter(Boolean),
+  );
   const clips = createClipCache({
     items: catalogItems,
     cacheDir: path.join(mediaRoot, "cache"),
@@ -366,7 +381,7 @@ function createApp({
         allAges: config.media.allAges,
         urlFor: (id) => `/media/cache/${id}`,
         disabledIds: config.media.disabledIds,
-        isReady: (id) => clips.isReady(id),
+        isReady: (id) => readyOverride.has(id) || clips.isReady(id),
       })),
       youtube: config.youtube?.[state.theme] || [],
     });
@@ -402,6 +417,8 @@ function createApp({
       now: clockNow() + Math.max(1, Number(timing.intervalSec) || 30) * 1000,
       videoMemory,
     });
+    const leased = applyClipHandoff(rotationPlan, nextRotationPlan, clipHandoff, playlist);
+    clipHandoff = leased.handoff;
     return {
       state: {
         ...state,
@@ -412,8 +429,8 @@ function createApp({
       photos: urlsFor(resolvePhotos(photosDir)),
       amenities: AMENITIES,
       playlist,
-      rotationPlan,
-      nextRotationPlan,
+      rotationPlan: leased.plan,
+      nextRotationPlan: leased.nextPlan,
       opdb: { configured: opdb.configured },
       displays,
       layout,
@@ -521,17 +538,20 @@ function createApp({
     };
   }
 
-  function stateFor(trusted) {
-    const full = payload();
+  function stateFor(trusted, full = payload()) {
     return trusted ? full : publicPayload(full);
   }
 
-  broadcast = () => {
+  function publish(full = payload()) {
+    const trustedMessage = JSON.stringify({ type: "state", ...full });
+    const publicMessage = JSON.stringify({ type: "state", ...publicPayload(full) });
     for (const client of clients) {
       if (client.readyState !== 1) continue;
-      client.send(JSON.stringify({ type: "state", ...stateFor(client.trusted !== false) }));
+      client.send(client.trusted !== false ? trustedMessage : publicMessage);
     }
-  };
+  }
+
+  broadcast = () => publish();
 
   function wallLayout(displays) {
     const layout = layoutForDisplays(displays || currentConfig().displays);
@@ -2891,6 +2911,35 @@ function createApp({
     }
     if (!message || typeof message !== "object") return;
 
+    if (message.type === "clip-release" || message.type === "clip-idle") {
+      if (!isLanAddress(socket.remoteAddress || "")) return;
+      const slot = ["1", "2", "3"].includes(String(message.slot || "")) ? String(message.slot) : "";
+      if (!slot) return;
+      const plan = payload().rotationPlan;
+      const assigned = plan?.[slot];
+      const assignedUrl = assigned?.type === "video" && assigned.url && !assigned.empty ? String(assigned.url) : "";
+      if (message.type === "clip-idle") {
+        if (assignedUrl) return;
+        const idle = noteClipIdle(clipHandoff, slot);
+        clipHandoff = idle;
+        if (idle.changed) {
+          appendVideoLog(`${new Date(clockNow()).toISOString()} event=clip-idle slot=${slot}`);
+          broadcast();
+        }
+        return;
+      }
+      const url = String(message.url || "");
+      if (!url.startsWith("/media/") || url.length > 180 || /[\s"]/.test(url)) return;
+      if (assignedUrl === url) return;
+      const released = noteClipRelease(clipHandoff, url, slot);
+      clipHandoff = released;
+      if (released.changed) {
+        appendVideoLog(`${new Date(clockNow()).toISOString()} event=clip-release slot=${slot} src=${url}`);
+        broadcast();
+      }
+      return;
+    }
+
     if (message.type === "media-failure" || message.type === "media-next") {
       if (!isLanAddress(socket.remoteAddress || "")) return;
       if (message.type === "media-next") {
@@ -2999,11 +3048,11 @@ function createApp({
   let rotationSignature = "";
   const rotationTimer = setInterval(() => {
     try {
-      const plan = payload().rotationPlan;
-      const signature = JSON.stringify(plan);
+      const full = payload();
+      const signature = JSON.stringify(full.rotationPlan);
       if (signature === rotationSignature) return;
       rotationSignature = signature;
-      broadcast();
+      publish(full);
     } catch (err) {
       console.error(err);
     }
