@@ -430,3 +430,123 @@ test("leaderboard QR opens the score form and auto-approve posts or holds", asyn
     if (boardId) await request.delete(`/api/leaderboards/${boardId}`, { headers: { "x-pin": "2224" } });
   }
 });
+
+test("guest search keeps the board picker and requests a cabinet", async ({ page, request }) => {
+  test.setTimeout(90000);
+  const created = new Set();
+  try {
+    const added = await request.post("/api/machines", {
+      headers: { "x-pin": "2224" },
+      data: { name: "Adder Machine", opdbId: "GTEST-ADD" },
+    });
+    expect(added.ok()).toBeTruthy();
+    const adder = (await added.json()).state.leaderboards.find((item) => item.opdbId === "GTEST-ADD");
+    expect(adder?.id).toBeTruthy();
+    created.add(adder.id);
+
+    await page.goto("/?tab=scores");
+    await expect(page.locator("#panel-scores")).toBeVisible();
+    const picker = page.locator("#machine-picker");
+    await expect(picker).toBeVisible();
+    await expect(picker.locator("option", { hasText: "Adder Machine" })).toHaveCount(1);
+    const searchFollowsPicker = await page.locator("#panel-scores").evaluate((root) => {
+      const select = root.querySelector("#machine-picker");
+      const button = root.querySelector("#machine-search-open");
+      if (!select || !button) return false;
+      return Boolean(select.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    expect(searchFollowsPicker).toBeTruthy();
+    await page.locator("#score-name").fill("Pat");
+    await page.locator("#score-value").fill("1500");
+    await page.locator("#score-form").getByRole("button", { name: "Submit score" }).click();
+    await expect(page.locator("#score-status")).toHaveText("Sent. It shows on the board after the host approves it.");
+    await expect(page.locator("#machine-gallery")).toBeHidden();
+
+    await page.getByRole("button", { name: "Don't see your machine? Search" }).click();
+    const gallery = page.locator("#machine-gallery");
+    await expect(gallery).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Close" })).toBeVisible();
+    await gallery.getByRole("searchbox", { name: "Search machines" }).fill("Jaws");
+    for (const label of [/JAWS \(Pro\)/, /JAWS \(Premium\)/, /JAWS \(LE\)/, /50th/]) {
+      await expect(gallery.getByRole("button", { name: label })).toBeVisible();
+    }
+    await expect(gallery).toContainText("Stern");
+    await expect(gallery).toContainText("2024");
+    await expect(gallery).toContainText("Pro edition");
+    const images = gallery.locator(".machine-gallery-tile img");
+    await expect.poll(async () => images.count()).toBeGreaterThanOrEqual(4);
+    const count = await images.count();
+    for (let i = 0; i < count; i += 1) {
+      const img = images.nth(i);
+      await expect(img).toHaveAttribute("src", /\/api\/opdb\/cabinet\//);
+      await expect.poll(async () => img.evaluate((node) => node.naturalWidth)).toBeGreaterThan(0);
+    }
+    expect((await gallery.innerText()).toLowerCase()).not.toContain("error");
+
+    await gallery.getByRole("button", { name: /JAWS \(Pro\)/ }).click();
+    await expect(gallery).toBeHidden();
+    await expect(page.locator("#requested-machine")).toHaveText("JAWS (Pro)");
+    await page.locator("#score-name").fill("Casey");
+    await page.locator("#score-value").fill("4200");
+    await page.locator("#score-form").getByRole("button", { name: "Submit score" }).click();
+    await expect(page.locator("#score-status")).toHaveText("Sent. It shows on the board after the host approves it.");
+    const held = await (await request.get("/api/state", { headers: { "x-pin": "2224" } })).json();
+    expect(held.state.leaderboards.some((item) => item.opdbId === "GLWll-MXr4N")).toBeFalsy();
+    expect(held.scores.autoApprove).toBe(false);
+    const photoAutoApprove = held.guest.autoApprove;
+
+    await unlock(page);
+    await page.getByRole("button", { name: "Boards", exact: true }).click();
+    await expect(page.locator("#score-queue")).toContainText("Casey");
+    await expect(page.locator("#score-queue")).toContainText("JAWS (Pro)");
+    await page.getByRole("button", { name: "Change machine" }).click();
+    await gallery.getByRole("searchbox", { name: "Search machines" }).fill("Jaws");
+    await gallery.getByRole("button", { name: /JAWS \(LE\)/ }).click();
+    await expect(page.locator("#score-queue")).toContainText("JAWS (LE)");
+
+    await page.getByRole("button", { name: "Auto-approve leaderboard scores: Off" }).click();
+    await expect(page.getByRole("button", { name: "Auto-approve leaderboard scores: On" })).toBeVisible();
+    await page.goto("/?tab=scores");
+    await page.getByRole("button", { name: "Don't see your machine? Search" }).click();
+    await gallery.getByRole("searchbox", { name: "Search machines" }).fill("Jaws");
+    await gallery.getByRole("button", { name: /JAWS \(Premium\)/ }).click();
+    await expect(page.locator("#machine-picker option:checked")).toHaveText("JAWS (Premium)");
+    await expect(page.locator("#requested-machine")).toBeHidden();
+    await page.locator("#score-name").fill("Drew");
+    await page.locator("#score-value").fill("8800");
+    await page.locator("#score-form").getByRole("button", { name: "Submit score" }).click();
+    await expect(page.locator("#score-status")).toHaveText("Sent. It's on the board.");
+
+    await page.goto("/admin");
+    await expect(page.locator("#app")).toBeVisible();
+    await page.getByRole("button", { name: "Boards", exact: true }).click();
+    await page.getByRole("button", { name: "Search machines" }).click();
+    await gallery.getByRole("searchbox", { name: "Search machines" }).fill("Beatles");
+    await gallery.getByRole("button", { name: /Beatles/ }).click();
+    await expect(page.locator("#toast")).toHaveText("The Beatles (Diamond) added");
+    await expect(page.locator("#board-select")).toContainText("The Beatles (Diamond)");
+    const after = await (await request.get("/api/state", { headers: { "x-pin": "2224" } })).json();
+    expect(after.guest.autoApprove).toBe(photoAutoApprove);
+    const premium = after.state.leaderboards.find((item) => item.opdbId === "GLWll-M1r8O-ARnV7");
+    expect(premium?.rows.some((row) => row.name === "Drew" && row.score === 8800)).toBeTruthy();
+  } finally {
+    await request.put("/api/scores/settings", {
+      headers: { "x-pin": "2224" },
+      data: { autoApprove: false },
+    });
+    const state = await (await request.get("/api/state", { headers: { "x-pin": "2224" } })).json();
+    for (const row of state.state?.scoreSubmissions || []) {
+      if (row.status === "pending" && (row.name === "Pat" || row.name === "Casey" || row.opdbId)) {
+        await request.post(`/api/scores/${row.id}/reject`, { headers: { "x-pin": "2224" } });
+      }
+    }
+    for (const board of state.state?.leaderboards || []) {
+      if (board.opdbId === "GTEST-ADD" || board.opdbId === "GTEST-CAB" || String(board.opdbId || "").startsWith("GLWll-")) {
+        created.add(board.id);
+      }
+    }
+    for (const id of created) {
+      await request.delete(`/api/leaderboards/${id}`, { headers: { "x-pin": "2224" } });
+    }
+  }
+});

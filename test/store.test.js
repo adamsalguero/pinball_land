@@ -666,3 +666,63 @@ test("guest scores wait for approval and are rate limited", async () => {
     (err) => err.status === 429
   );
 });
+
+test("a requested machine stays pending once, and reloads without a board", async () => {
+  const store = await Store.load(filePath);
+  const first = await store.requestMachineScore({
+    opdbId: "GLWll-MXr4N",
+    machineName: "JAWS (Pro)",
+    manufacturer: "Stern",
+    year: "2024",
+    edition: "Pro edition",
+    name: "Casey",
+    score: "4200",
+    ip: "10.4.0.1",
+    now: 1000,
+  });
+  const second = await store.requestMachineScore({
+    opdbId: "GLWll-MXr4N",
+    machineName: "JAWS (Pro)",
+    name: "Other",
+    score: "50",
+    ip: "10.4.0.2",
+    now: 2000,
+  });
+  assert.equal(second.id, first.id);
+  const other = await store.requestMachineScore({
+    opdbId: "GLWll-M1r8O-ARnV7",
+    machineName: "JAWS (Premium)",
+    name: "Drew",
+    score: "10",
+    ip: "10.4.0.3",
+    now: 3000,
+  });
+  assert.notEqual(other.id, first.id);
+  assert.equal(store.getState().leaderboards.length, 0);
+  assert.equal(store.getState().scoreSubmissions.filter((row) => row.status === "pending").length, 2);
+  const reloaded = await Store.load(filePath);
+  const pending = reloaded.getState().scoreSubmissions.filter((row) => row.status === "pending");
+  assert.equal(pending.length, 2);
+  assert.equal(pending.find((row) => row.id === first.id).machineName, "JAWS (Pro)");
+  assert.equal(pending.find((row) => row.id === first.id).boardId, "");
+  await reloaded.setSubmissionMachine(first.id, {
+    opdbId: "GLWll-M1r8O-A1kx7",
+    machineName: "JAWS (LE)",
+    manufacturer: "Stern",
+    year: "2024",
+    edition: "LE edition",
+  });
+  assert.equal(reloaded.getState().scoreSubmissions.find((row) => row.id === first.id).opdbId, "GLWll-M1r8O-A1kx7");
+  const created = await reloaded.createLeaderboard("JAWS (LE)", {
+    kind: "machine",
+    opdbId: "GLWll-M1r8O-A1kx7",
+    manufacturer: "Stern",
+    year: "2024",
+  });
+  const boardId = created.leaderboards.find((board) => board.opdbId === "GLWll-M1r8O-A1kx7").id;
+  await reloaded.assignSubmissionBoard(first.id, boardId);
+  await reloaded.reviewScore(first.id, "approved");
+  const board = reloaded.getState().leaderboards.find((item) => item.id === boardId);
+  assert.equal(board.rows[0].name, "Casey");
+  assert.equal(board.rows[0].score, 4200);
+});

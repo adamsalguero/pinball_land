@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="/design-tokens.css" />
     <link rel="stylesheet" href="/control.css" />
     <link rel="stylesheet" href="/admin.css" />
+    <link rel="stylesheet" href="/machine-gallery.css" />
   </head>
   <body>
     <div id="login" class="login">
@@ -67,11 +68,7 @@
           <section>
             <h2>Pinball collection</h2>
             <p id="opdb-help" class="muted"></p>
-            <label>
-              Search OPDB
-              <input id="machine-search" type="search" placeholder="The Addams Family" autocomplete="off" />
-            </label>
-            <div id="machine-results" class="stack"></div>
+            <button id="machine-search-open" class="btn" type="button">Search machines</button>
           </section>
           <section>
             <h2>Leaderboards</h2>
@@ -189,6 +186,7 @@
     </div>
 
     <p id="toast" class="toast" hidden></p>
+    <script src="/machine-gallery.js"></script>
     <script src="/control.js"></script>
   </body>
 </html>

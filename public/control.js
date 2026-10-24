@@ -9,8 +9,6 @@ const boardEditor = document.getElementById("board-editor");
 const toastEl = document.getElementById("toast");
 const rotationItemsEl = document.getElementById("rotation-items");
 const intervalInput = document.getElementById("interval");
-const machineSearch = document.getElementById("machine-search");
-const machineResults = document.getElementById("machine-results");
 const opdbHelp = document.getElementById("opdb-help");
 const manualScreens = document.getElementById("manual-screens");
 const SLOT_META = [
@@ -50,7 +48,6 @@ let selectedBoardId = null;
 let scoreEditorOpenFor = null;
 let presentSlot = "1";
 let toastTimer = null;
-let searchTimer = null;
 
 function toast(message) {
   toastEl.textContent = message;
@@ -1427,46 +1424,22 @@ document.getElementById("manual-machine")?.addEventListener("submit", async (eve
   toast(`${name} added`);
 });
 
-machineSearch.addEventListener("input", () => {
-  clearTimeout(searchTimer);
-  const q = machineSearch.value.trim();
-  if (q.length < 2) {
-    machineResults.replaceChildren();
-    return;
-  }
-  searchTimer = setTimeout(async () => {
-    try {
-      const data = await api(`/api/opdb/search?q=${encodeURIComponent(q)}`);
-      machineResults.replaceChildren();
-      if (!data.results?.length) {
-        const empty = document.createElement("p");
-        empty.className = "muted";
-        empty.textContent = "No matches. Add it by name below.";
-        machineResults.append(empty);
-        return;
-      }
-      for (const item of data.results.slice(0, 8)) {
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "btn search-hit";
-        row.textContent = item.detail ? `${item.name} — ${item.detail}` : item.name;
-        row.addEventListener("click", async () => {
-          const payload = await api("/api/machines", {
-            method: "POST",
-            body: { name: item.name, opdbId: item.opdbId },
-          });
-          selectedBoardId = payload.state.leaderboards.at(-1)?.id || selectedBoardId;
-          machineSearch.value = "";
-          machineResults.replaceChildren();
-          applyPayload(payload);
-          toast(`${item.name} added`);
+document.getElementById("machine-search-open")?.addEventListener("click", () => {
+  window.PinballGallery?.open({
+    onPick: async (item) => {
+      try {
+        const payload = await api("/api/machines", {
+          method: "POST",
+          body: { name: item.name, opdbId: item.opdbId },
         });
-        machineResults.append(row);
+        selectedBoardId = payload.state.leaderboards.at(-1)?.id || selectedBoardId;
+        applyPayload(payload);
+        toast(`${item.name} added`);
+      } catch {
+        // The gallery stays quiet when a machine cannot be added.
       }
-    } catch (err) {
-      machineResults.textContent = err.message || "Search failed";
-    }
-  }, 280);
+    },
+  });
 });
 
 function connect() {
@@ -1525,8 +1498,29 @@ function renderScoreQueue() {
     card.className = "card";
     const board = (current.state.leaderboards || []).find((item) => item.id === row.boardId);
     const copy = document.createElement("p");
-    copy.textContent = `${row.name} · ${Number(row.score).toLocaleString("en-US")} on ${board?.name || "a machine"}`;
+    copy.textContent = `${row.name} · ${Number(row.score).toLocaleString("en-US")} on ${board?.name || row.machineName || "a machine"}`;
     card.append(copy);
+    if (!board && row.opdbId) {
+      const change = document.createElement("button");
+      change.type = "button";
+      change.className = "btn";
+      change.textContent = "Change machine";
+      change.addEventListener("click", () => {
+        window.PinballGallery?.open({
+          onPick: async (item) => {
+            try {
+              applyPayload(await api(`/api/scores/${row.id}/machine`, {
+                method: "POST",
+                body: { opdbId: item.opdbId },
+              }));
+            } catch {
+              // Keep the pending request unchanged.
+            }
+          },
+        });
+      });
+      card.append(change);
+    }
     if (row.proofFile) {
       const img = document.createElement("img");
       img.src = `/media/score-proofs/${row.proofFile}`;
