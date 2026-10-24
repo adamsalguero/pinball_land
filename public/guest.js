@@ -11,6 +11,20 @@ const picker = document.getElementById("machine-picker");
 let blob = null;
 let previewUrl = "";
 let boards = [];
+let requestedMachine = null;
+
+function showRequested(machine) {
+  requestedMachine = machine || null;
+  const line = document.getElementById("requested-machine");
+  if (!line) return;
+  if (!requestedMachine) {
+    line.hidden = true;
+    line.textContent = "";
+    return;
+  }
+  line.hidden = false;
+  line.textContent = requestedMachine.name || "";
+}
 
 function tap() {
   if (navigator.vibrate) navigator.vibrate(10);
@@ -247,13 +261,54 @@ async function loadScores() {
   maybeScrollScoreForm();
 }
 
-picker.addEventListener("change", renderScores);
+picker.addEventListener("change", () => {
+  showRequested(null);
+  renderScores();
+});
+
+document.getElementById("machine-search-open")?.addEventListener("click", () => {
+  tap();
+  window.PinballGallery?.open({
+    onPick: async (item) => {
+      const existing = boards.find((board) => board.opdbId && board.opdbId === item.opdbId);
+      if (existing) {
+        showRequested(null);
+        picker.value = existing.id;
+        renderScores();
+        return;
+      }
+      try {
+        const res = await fetch("/api/opdb/boards", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ opdbId: item.opdbId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return;
+        if (data.board?.id) {
+          showRequested(null);
+          await loadScores();
+          if (boards.some((board) => board.id === data.board.id)) picker.value = data.board.id;
+          renderScores();
+          return;
+        }
+        showRequested({
+          opdbId: item.opdbId,
+          name: data.machine?.name || item.name || "",
+        });
+      } catch {
+        // Leave the score form as it was.
+      }
+    },
+  });
+});
 
 document.getElementById("score-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const note = document.getElementById("score-status");
   const board = selectedBoard();
-  if (!board) {
+  const requested = requestedMachine;
+  if (!requested && !board) {
     note.textContent = "Pick a machine first.";
     return;
   }
@@ -264,21 +319,22 @@ document.getElementById("score-form").addEventListener("submit", async (event) =
   try {
     let res;
     if (photo) {
-      res = await fetch("/api/scores", {
-        method: "POST",
-        headers: {
-          "content-type": photo.type || "image/jpeg",
-          "x-board-id": encodeURIComponent(board.id),
-          "x-name": encodeURIComponent(name),
-          "x-score": score,
-        },
-        body: photo,
-      });
+      const headers = {
+        "content-type": photo.type || "image/jpeg",
+        "x-name": encodeURIComponent(name),
+        "x-score": score,
+      };
+      if (requested) headers["x-opdb-id"] = encodeURIComponent(requested.opdbId);
+      else headers["x-board-id"] = encodeURIComponent(board.id);
+      res = await fetch("/api/scores", { method: "POST", headers, body: photo });
     } else {
+      const body = requested
+        ? { opdbId: requested.opdbId, name, score }
+        : { boardId: board.id, name, score };
       res = await fetch("/api/scores", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ boardId: board.id, name, score }),
+        body: JSON.stringify(body),
       });
     }
     const data = await res.json().catch(() => ({}));
@@ -287,6 +343,7 @@ document.getElementById("score-form").addEventListener("submit", async (event) =
       ? "Sent. It's on the board."
       : "Sent. It shows on the board after the host approves it.";
     event.target.reset();
+    showRequested(null);
     if (data.submission?.status === "approved") loadScores();
   } catch (err) {
     note.textContent = err.message;

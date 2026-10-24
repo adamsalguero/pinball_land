@@ -2,6 +2,10 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const OPDB_BASE = "https://opdb.org/api";
+const EXPORT_URL = "https://mp-data.sfo3.cdn.digitaloceanspaces.com/opdb-v2.json";
+const CATALOG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const sharedCatalogs = new Map();
+const sharedCatalogFlights = new Map();
 const USER_AGENT = "pinball-land-kiosk";
 // Adam's free OPDB token. config.json opdbApiKey and OPDB_API_KEY override it.
 const BUILTIN_OPDB_API_KEY = "f5NGaIVP6ojClmDXdbUwj8LPTTp69jGwYVaPtenJMOQhPNVO5GaqLcMNmKvy";
@@ -79,6 +83,45 @@ function pickPlayfieldUrl(machine) {
   return pickTypedUrl(machine, ["playfield"]);
 }
 
+function pickCabinetUrl(machine) {
+  for (const img of collectImages(machine)) {
+    const text = imageText(img);
+    if (!text.includes("cabinet")) continue;
+    if (text.includes("backglass") || text.includes("translite")) continue;
+    const url = imageUrl(img);
+    if (url && /^https?:\/\//i.test(url)) return url;
+  }
+  return null;
+}
+
+function editionFrom(machine) {
+  const features = Array.isArray(machine?.features) ? machine.features : [];
+  const names = [];
+  for (const feature of features) {
+    if (String(feature?.group || "").toLowerCase() !== "edition") continue;
+    const name = String(feature?.name || "").trim();
+    if (name) names.push(name);
+  }
+  if (names.length) return names.join(", ");
+  const match = String(machine?.name || "").match(/\(([^)]+)\)\s*$/);
+  return match ? match[1].trim() : "";
+}
+
+function isPhysicalMachine(item) {
+  if (!item || typeof item !== "object") return false;
+  const type = String(item.entryType || item.entry_type || item.type || "").toLowerCase();
+  if (type && type !== "machine") return false;
+  if (item.physicalMachine === false || item.physical_machine === false) return false;
+  if (item.physicalMachine === true || item.physical_machine === true) return true;
+  return type === "machine";
+}
+
+function entriesFrom(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.entries)) return data.entries;
+  return [];
+}
+
 function pickLogoUrl(machine) {
   return pickTypedUrl(machine, ["logo", "backglass logo", "manufacturer logo"]);
 }
@@ -144,6 +187,118 @@ function normalizeSearch(data) {
 function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
   const key = String(apiKey || "").trim();
   const fetchFn = fetchImpl || globalThis.fetch;
+  const cabinetMisses = new Set();
+  let catalogEntries = null;
+  let catalogAt = 0;
+  let catalogFlight = null;
+
+  async function refreshCatalog() {
+    const file = cacheDir ? path.join(cacheDir, "catalog.json") : null;
+    const source = String(process.env.PINBALL_OPDB_EXPORT || EXPORT_URL);
+    const localExport = !/^https?:\/\//i.test(source);
+    if (!localExport && file) {
+      try {
+        const stat = await fs.stat(file);
+        if (Date.now() - stat.mtimeMs < CATALOG_MAX_AGE_MS) {
+          const entries = entriesFrom(JSON.parse(await fs.readFile(file, "utf8")));
+          if (entries.length) {
+            catalogEntries = entries;
+            catalogAt = Date.now();
+            return catalogEntries;
+          }
+        }
+      } catch {
+        // Download a fresh catalog below.
+      }
+    }
+    try {
+      let parsed;
+      if (localExport) {
+        parsed = JSON.parse(await fs.readFile(source, "utf8"));
+      } else {
+        const res = await fetchFn(source, {
+          headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+          signal: AbortSignal.timeout(20000),
+        });
+        if (!res.ok) throw new Error("catalog");
+        parsed = await res.json();
+      }
+      const entries = entriesFrom(parsed);
+      if (!entries.length) throw new Error("catalog");
+      if (file && !localExport) {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, JSON.stringify({ entries }));
+      }
+      catalogEntries = entries;
+      catalogAt = Date.now();
+      return catalogEntries;
+    } catch {
+      if (catalogEntries?.length) return catalogEntries;
+      if (file) {
+        try {
+          const entries = entriesFrom(JSON.parse(await fs.readFile(file, "utf8")));
+          if (entries.length) {
+            catalogEntries = entries;
+            catalogAt = Date.now();
+            return catalogEntries;
+          }
+        } catch {
+          // No catalog yet.
+        }
+      }
+      return catalogEntries || [];
+    }
+  }
+
+  function loadCatalog() {
+    if (catalogEntries && Date.now() - catalogAt < CATALOG_MAX_AGE_MS) return Promise.resolve(catalogEntries);
+    if (catalogFlight) return catalogFlight;
+    const source = String(process.env.PINBALL_OPDB_EXPORT || EXPORT_URL);
+    const share = !fetchImpl && /^https?:\/\//i.test(source);
+    if (share) {
+      const cached = sharedCatalogs.get(source);
+      if (cached && Date.now() - cached.at < CATALOG_MAX_AGE_MS) {
+        catalogEntries = cached.entries;
+        catalogAt = cached.at;
+        return Promise.resolve(catalogEntries);
+      }
+      if (sharedCatalogFlights.has(source)) return sharedCatalogFlights.get(source);
+    }
+    catalogFlight = refreshCatalog().then((entries) => {
+      if (share && entries.length) sharedCatalogs.set(source, { entries, at: Date.now() });
+      return entries;
+    }).finally(() => {
+      catalogFlight = null;
+      if (share) sharedCatalogFlights.delete(source);
+    });
+    if (share) sharedCatalogFlights.set(source, catalogFlight);
+    return catalogFlight;
+  }
+
+  async function catalogMachine(opdbId) {
+    const id = safeId(opdbId);
+    if (!id) return null;
+    const entries = await loadCatalog();
+    return entries.find((item) => safeId(item.opdbId || item.opdb_id || item.id) === id) || null;
+  }
+
+  function compactMachine(item) {
+    const opdbId = safeId(item?.opdbId || item?.opdb_id || item?.id);
+    if (!opdbId) return null;
+    const name = String(item.name || "Unknown machine");
+    const manufacturer = manufacturerName(item);
+    const year = manufactureYear(item);
+    const edition = editionFrom(item);
+    return {
+      opdbId,
+      name,
+      manufacturer,
+      year,
+      edition,
+      cabinet: Boolean(pickCabinetUrl(item)),
+      detail: [manufacturer, year, edition].filter(Boolean).join(", "),
+    };
+  }
 
   async function getJson(urlPath, { auth = false } = {}) {
     const headers = {
@@ -158,7 +313,10 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
       }
       headers.Authorization = `Bearer ${key}`;
     }
-    const res = await fetchFn(`${OPDB_BASE}/${urlPath.replace(/^\//, "")}`, { headers });
+    const res = await fetchFn(`${OPDB_BASE}/${urlPath.replace(/^\//, "")}`, {
+      headers,
+      signal: AbortSignal.timeout(4000),
+    });
     if (!res.ok) {
       const err = new Error(`OPDB request failed (${res.status})`);
       err.status = 502;
@@ -172,19 +330,36 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
     configured: Boolean(key),
 
     async search(query) {
-      const q = String(query || "").trim();
+      const q = String(query || "").trim().toLowerCase();
       if (q.length < 2) return [];
-      if (key) {
-        try {
-          const data = await getJson(`search?q=${encodeURIComponent(q)}`, { auth: true });
-          const rows = normalizeSearch(data);
-          if (rows.length) return rows;
-        } catch {
-          // Typeahead still works without a token / if search is denied.
-        }
+      let entries = [];
+      try {
+        entries = await loadCatalog();
+      } catch {
+        return [];
       }
-      const data = await getJson(`search/typeahead?q=${encodeURIComponent(q)}`);
-      return normalizeTypeahead(data);
+      const results = [];
+      for (const item of entries) {
+        if (!isPhysicalMachine(item)) continue;
+        const row = compactMachine(item);
+        if (!row) continue;
+        const blob = [
+          row.name,
+          row.manufacturer,
+          row.edition,
+          item.shortname || item.shortName || "",
+          item.commonName || item.common_name || "",
+        ].join(" ").toLowerCase();
+        if (!blob.includes(q)) continue;
+        results.push(row);
+        if (results.length >= 24) break;
+      }
+      return results;
+    },
+
+    async lookup(opdbId) {
+      const machine = await catalogMachine(opdbId);
+      return machine ? compactMachine(machine) : null;
     },
 
     async getMachine(opdbId) {
@@ -193,22 +368,69 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
       return getJson(`machines/${encodeURIComponent(id)}`, { auth: true });
     },
 
+    async cabinetFile(opdbId) {
+      const id = safeId(opdbId);
+      if (!id || !cacheDir || cabinetMisses.has(id)) return null;
+      const dir = path.join(cacheDir, id);
+      try {
+        const names = await fs.readdir(dir);
+        const hit = names.find((name) => /^cabinet\.(png|jpe?g|webp|gif)$/i.test(name));
+        if (hit) return path.join(dir, hit);
+      } catch {
+        // Not cached yet.
+      }
+      const machine = await catalogMachine(id);
+      if (!machine) return null;
+      const url = pickCabinetUrl(machine);
+      if (!url) {
+        cabinetMisses.add(id);
+        return null;
+      }
+      try {
+        await fs.mkdir(dir, { recursive: true });
+        const res = await fetchFn(url, {
+          headers: { "User-Agent": USER_AGENT },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) {
+          cabinetMisses.add(id);
+          return null;
+        }
+        const ext = extFromUrl(url);
+        const dest = path.join(dir, `cabinet${ext}`);
+        await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+        return dest;
+      } catch {
+        cabinetMisses.add(id);
+        return null;
+      }
+    },
+
     async cacheMachine(opdbId) {
       const id = safeId(opdbId);
-      if (!id || !cacheDir || !key) {
-        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, imageFiles: [], videoUrl: null };
-      }
+      const empty = { machine: null, artFile: null, playfieldFile: null, logoFile: null, imageFiles: [], videoUrl: null, cabinetFile: null };
+      if (!id || !cacheDir) return empty;
       const dir = path.join(cacheDir, id);
       await fs.mkdir(dir, { recursive: true });
-      const machine = await this.getMachine(id);
-      if (!machine) {
-        return { machine: null, artFile: null, playfieldFile: null, logoFile: null, imageFiles: [], videoUrl: null };
+      let machine = null;
+      if (process.env.PINBALL_OPDB_EXPORT) machine = await catalogMachine(id);
+      if (!machine && key) {
+        try {
+          machine = await this.getMachine(id);
+        } catch {
+          machine = null;
+        }
       }
+      if (!machine) machine = await catalogMachine(id);
+      if (!machine) return empty;
       await fs.writeFile(path.join(dir, "machine.json"), JSON.stringify(machine, null, 2));
       async function saveNamed(url, stem) {
         if (!url) return null;
         try {
-          const res = await fetchFn(url, { headers: { "User-Agent": USER_AGENT } });
+          const res = await fetchFn(url, {
+            headers: { "User-Agent": USER_AGENT },
+            signal: AbortSignal.timeout(8000),
+          });
           if (!res.ok) return null;
           const ext = extFromUrl(url);
           const dest = path.join(dir, `${stem}${ext}`);
@@ -221,25 +443,29 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
       const artFile = await saveNamed(pickArtUrl(machine), "art");
       const playfieldFile = await saveNamed(pickPlayfieldUrl(machine), "playfield");
       const logoFile = await saveNamed(pickLogoUrl(machine), "logo");
+      const cabinetFile = await saveNamed(pickCabinetUrl(machine), "cabinet");
       const imageFiles = [];
       const images = collectImages(machine).slice(0, 12);
       for (let i = 0; i < images.length; i += 1) {
         const saved = await saveNamed(imageUrl(images[i]), `image-${i}`);
         if (saved) imageFiles.push(saved);
       }
-      return { machine, artFile, playfieldFile, logoFile, imageFiles, videoUrl: pickVideoUrl(machine) };
+      return { machine, artFile, playfieldFile, logoFile, imageFiles, videoUrl: pickVideoUrl(machine), cabinetFile };
     },
   };
 }
 
 module.exports = {
   OPDB_BASE,
+  EXPORT_URL,
   BUILTIN_OPDB_API_KEY,
   createOpdb,
   pickArtUrl,
+  pickCabinetUrl,
   pickPlayfieldUrl,
   pickLogoUrl,
   pickVideoUrl,
+  editionFrom,
   manufacturerName,
   manufactureYear,
   safeId,

@@ -1,0 +1,69 @@
+{
+  "entries": [
+    {
+      "opdbId": "GLWll-MXr4N",
+      "name": "JAWS (Pro)",
+      "year": 2024,
+      "physicalMachine": true,
+      "entryType": "machine",
+      "manufacturer": { "name": "Stern" },
+      "features": [{ "name": "Pro edition", "group": "edition" }],
+      "images": [{ "type": "backglass", "urls": { "medium": "http://127.0.0.1:9/jaws-pro-backglass.jpg" } }]
+    },
+    {
+      "opdbId": "GLWll-M1r8O-ARnV7",
+      "name": "JAWS (Premium)",
+      "year": 2024,
+      "physicalMachine": true,
+      "entryType": "machine",
+      "manufacturer": { "name": "Stern" },
+      "features": [{ "name": "Premium edition", "group": "edition" }],
+      "images": [
+        { "type": "backglass", "urls": { "medium": "http://127.0.0.1:9/jaws-prem-backglass.jpg" } },
+        { "type": "playfield", "urls": { "medium": "http://127.0.0.1:9/jaws-prem-playfield.jpg" } }
+      ]
+    },
+    {
+      "opdbId": "GLWll-M1r8O-A1kx7",
+      "name": "JAWS (LE)",
+      "year": 2024,
+      "physicalMachine": true,
+      "entryType": "machine",
+      "manufacturer": { "name": "Stern" },
+      "features": [{ "name": "LE edition", "group": "edition" }],
+      "images": [{ "type": "backglass", "urls": { "medium": "http://127.0.0.1:9/jaws-le-backglass.jpg" } }]
+    },
+    {
+      "opdbId": "GLWll-M1r8O-A1KkX",
+      "name": "Jaws (50th anniversary)",
+      "year": 2025,
+      "physicalMachine": true,
+      "entryType": "machine",
+      "manufacturer": { "name": "Stern" },
+      "features": [{ "name": "50th anniversary edition", "group": "edition" }],
+      "images": [{ "type": "backglass", "urls": { "medium": "http://127.0.0.1:9/jaws-50-backglass.jpg" } }]
+    },
+    {
+      "opdbId": "GRjaw-group",
+      "name": "JAWS",
+      "year": 2024,
+      "physicalMachine": false,
+      "entryType": "machineGroup",
+      "manufacturer": { "name": "Stern" },
+      "images": [{ "type": "backglass", "urls": { "medium": "http://127.0.0.1:9/jaws-group.jpg" } }]
+    },
+    {
+      "opdbId": "GTEST-CAB",
+      "name": "The Beatles (Diamond)",
+      "year": 2018,
+      "physicalMachine": true,
+      "entryType": "machine",
+      "manufacturer": { "name": "Stern" },
+      "features": [{ "name": "Diamond edition", "group": "edition" }],
+      "images": [
+        { "type": "backglass", "title": "Backglass", "urls": { "large": "http://127.0.0.1:9/beatles-backglass.png" } },
+        { "type": "cabinet", "title": "Cabinet", "urls": { "medium": "http://127.0.0.1:9/beatles-cabinet.png" } }
+      ]
+    }
+  ]
+}

@@ -259,12 +259,21 @@ function isMachineBoard(board) {
   return board?.kind === "machine" && Boolean(board.opdbId);
 }
 
+function cleanOpdbId(value) {
+  return String(value || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80);
+}
+
 function normalizeSubmission(row) {
   if (!row || typeof row !== "object") return null;
   const status = row.status === "approved" || row.status === "rejected" ? row.status : "pending";
   return {
     id: typeof row.id === "string" && row.id ? row.id : id(),
     boardId: row.boardId ? String(row.boardId) : "",
+    opdbId: cleanOpdbId(row.opdbId),
+    machineName: String(row.machineName || "").trim().slice(0, 80),
+    manufacturer: String(row.manufacturer || "").trim().slice(0, 80),
+    year: String(row.year || "").trim().slice(0, 8),
+    edition: String(row.edition || "").trim().slice(0, 80),
     name: String(row.name || "").trim().slice(0, 40),
     score: parseScore(row.score),
     proofFile: row.proofFile ? String(row.proofFile) : null,
@@ -332,7 +341,7 @@ function normalizeState(raw) {
   const rotation = normalizeRotation(incoming.rotation);
   if (incoming.blackout || slotWasBlack(incoming.slots)) rotation.enabled = true;
   const scoreSubmissions = Array.isArray(incoming.scoreSubmissions)
-    ? incoming.scoreSubmissions.map(normalizeSubmission).filter((row) => row && row.boardId && row.name)
+    ? incoming.scoreSubmissions.map(normalizeSubmission).filter((row) => row && row.name && (row.boardId || row.opdbId))
     : [];
   return {
     theme: normalizeTheme(incoming.theme ?? seeded.theme),
@@ -351,6 +360,7 @@ class Store {
     this.state = normalizeState(state);
     this.listeners = new Set();
     this.scoreHits = new Map();
+    this.machineHits = new Map();
     this.fsImpl = options.fsImpl || fs;
     this.sleepFn = options.sleepFn || sleep;
     this.renameDelays = options.renameDelays || RENAME_BACKOFF_MS;
@@ -739,15 +749,23 @@ class Store {
   }
 
   allowScore(ip, now = Date.now()) {
+    return this.allowHits(this.scoreHits, ip, now);
+  }
+
+  allowMachineRequest(ip, now = Date.now()) {
+    return this.allowHits(this.machineHits, ip, now);
+  }
+
+  allowHits(bucket, ip, now) {
     const key = String(ip || "unknown");
     const windowMs = 10 * 60 * 1000;
-    const recent = (this.scoreHits.get(key) || []).filter((stamp) => now - stamp < windowMs);
+    const recent = (bucket.get(key) || []).filter((stamp) => now - stamp < windowMs);
     if (recent.length >= 6) {
-      this.scoreHits.set(key, recent);
+      bucket.set(key, recent);
       return false;
     }
     recent.push(now);
-    this.scoreHits.set(key, recent);
+    bucket.set(key, recent);
     return true;
   }
 
@@ -780,6 +798,76 @@ class Store {
     if (autoApprove) this.placeApprovedScore(submission, { showPhoto: true });
     await this.commit();
     return submission;
+  }
+
+  async requestMachineScore({ opdbId, machineName, manufacturer, year, edition, name, score, proofFile, ip, now } = {}) {
+    if (!this.allowScore(ip, now)) {
+      throw Object.assign(new Error("Too many scores from this phone. Wait a few minutes."), { status: 429 });
+    }
+    const requestedId = cleanOpdbId(opdbId);
+    if (!requestedId) throw Object.assign(new Error("Pick a machine"), { status: 400 });
+    const cleanName = String(name || "").trim().slice(0, 40);
+    if (!cleanName) throw Object.assign(new Error("Enter a name"), { status: 400 });
+    const cleaned = String(score ?? "").replace(/[,_\s]/g, "");
+    const parsed = parseScore(score);
+    if (!/^\d+$/.test(cleaned) || parsed > 999999999) {
+      throw Object.assign(new Error("Enter a score"), { status: 400 });
+    }
+    const existing = this.state.scoreSubmissions.find((row) => row.status === "pending" && row.opdbId === requestedId && !row.boardId);
+    if (existing) return existing;
+    const submission = normalizeSubmission({
+      id: id(),
+      boardId: "",
+      opdbId: requestedId,
+      machineName: machineName || "",
+      manufacturer: manufacturer || "",
+      year: year || "",
+      edition: edition || "",
+      name: cleanName,
+      score: parsed,
+      proofFile: proofFile || null,
+      status: "pending",
+      createdAt: now || Date.now(),
+    });
+    this.state.scoreSubmissions.push(submission);
+    if (this.state.scoreSubmissions.length > 300) {
+      this.state.scoreSubmissions = this.state.scoreSubmissions.slice(-300);
+    }
+    await this.commit();
+    return submission;
+  }
+
+  async assignSubmissionBoard(submissionId, boardId) {
+    const item = this.state.scoreSubmissions.find((row) => row.id === submissionId);
+    if (!item) throw Object.assign(new Error("Unknown submission"), { status: 404 });
+    if (item.status !== "pending") {
+      throw Object.assign(new Error("That score was already reviewed"), { status: 400 });
+    }
+    if (!this.findBoard(boardId)) {
+      throw Object.assign(new Error("That machine is no longer on a board"), { status: 404 });
+    }
+    item.boardId = boardId;
+    return this.commit();
+  }
+
+  async setSubmissionMachine(submissionId, machine = {}) {
+    const item = this.state.scoreSubmissions.find((row) => row.id === submissionId);
+    if (!item) throw Object.assign(new Error("Unknown submission"), { status: 404 });
+    if (item.status !== "pending") {
+      throw Object.assign(new Error("That score was already reviewed"), { status: 400 });
+    }
+    if (item.boardId && this.findBoard(item.boardId)) {
+      throw Object.assign(new Error("That score is already on a board"), { status: 400 });
+    }
+    const requestedId = cleanOpdbId(machine.opdbId);
+    if (!requestedId) throw Object.assign(new Error("Pick a machine"), { status: 400 });
+    item.opdbId = requestedId;
+    item.machineName = String(machine.machineName || machine.name || "").trim().slice(0, 80);
+    item.manufacturer = String(machine.manufacturer || "").trim().slice(0, 80);
+    item.year = String(machine.year || "").trim().slice(0, 8);
+    item.edition = String(machine.edition || "").trim().slice(0, 80);
+    item.boardId = "";
+    return this.commit();
   }
 
   placeApprovedScore(item, options = {}) {

@@ -283,6 +283,24 @@ test("OPDB search uses injected fetch and caches art when a token is present", a
   );
   const fetchImpl = async (url) => {
     const href = String(url);
+    if (href.includes("opdb-v2.json")) {
+      return {
+        ok: true,
+        json: async () => ({
+          entries: [
+            {
+              opdbId: "GTEST-M1",
+              name: "Medieval Madness",
+              physicalMachine: true,
+              entryType: "machine",
+              manufacturer: { manufacturer_name: "Williams" },
+              manufacture_date: "1997-01-01",
+              images: [{ type: "backglass", urls: { large: "https://example.test/mm.png" } }],
+            },
+          ],
+        }),
+      };
+    }
     if (href.includes("/search?")) {
       return {
         ok: true,
@@ -340,6 +358,137 @@ test("OPDB search uses injected fetch and caches art when a token is present", a
     const cached = await fs.readdir(path.join(dir, "opdb", "GTEST-M1"));
     assert.ok(cached.includes("machine.json"));
     assert.ok(cached.some((name) => name.startsWith("art")));
+  } finally {
+    server.close();
+  }
+});
+
+test("cabinet photos stay images, and a requested machine follows score auto-approve", async () => {
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  const catalog = JSON.parse(await fs.readFile(path.join(__dirname, "fixtures", "opdb-catalog.json"), "utf8"));
+  catalog.entries.push({
+    opdbId: "GTEST-PHOTO",
+    name: "Rush (Pro)",
+    year: 2022,
+    physicalMachine: true,
+    entryType: "machine",
+    manufacturer: { name: "Stern" },
+    features: [{ name: "Pro edition", group: "edition" }],
+    images: [
+      { type: "backglass", urls: { large: "https://example.test/rush-backglass.png" } },
+      { type: "cabinet", title: "Cabinet", urls: { medium: "https://example.test/rush-cabinet.png" } },
+    ],
+  });
+  const fetchImpl = async (url) => {
+    const href = String(url);
+    if (href.includes("opdb-v2.json")) return { ok: true, json: async () => catalog };
+    if (href.includes("rush-cabinet.png")) return { ok: true, arrayBuffer: async () => png };
+    if (href.includes("127.0.0.1:9") || href.includes("example.test")) {
+      return { ok: false, status: 404, arrayBuffer: async () => Buffer.alloc(0), json: async () => ({}) };
+    }
+    throw new Error(`unexpected fetch ${href}`);
+  };
+  const { server, origin } = await startServer({ opdbApiKey: "", fetchImpl });
+  try {
+    const search = await json(origin, "/api/opdb/search?q=Jaws");
+    assert.equal(search.res.status, 200);
+    const names = search.data.results.map((item) => item.name);
+    for (const name of ["JAWS (Pro)", "JAWS (Premium)", "JAWS (LE)", "Jaws (50th anniversary)"]) {
+      assert.ok(names.includes(name), names.join(", "));
+    }
+    assert.equal(names.includes("JAWS"), false);
+    const pro = search.data.results.find((item) => item.name === "JAWS (Pro)");
+    assert.equal(pro.manufacturer, "Stern");
+    assert.equal(pro.year, "2024");
+    assert.equal(pro.edition, "Pro edition");
+    assert.equal(pro.cabinet, false);
+    const photo = search.data.results.find((item) => item.opdbId === "GTEST-PHOTO");
+    assert.equal(photo, undefined);
+
+    const rush = await json(origin, "/api/opdb/search?q=Rush");
+    assert.equal(rush.data.results[0].cabinet, true);
+    const cabinet = await fetch(`${origin}/api/opdb/cabinet/GTEST-PHOTO`);
+    assert.equal(cabinet.status, 200);
+    assert.match(cabinet.headers.get("content-type") || "", /^image\//);
+    assert.deepEqual(Buffer.from(await cabinet.arrayBuffer()), png);
+
+    const missing = await fetch(`${origin}/api/opdb/cabinet/${pro.opdbId}`);
+    assert.equal(missing.status, 200);
+    assert.match(missing.headers.get("content-type") || "", /image\/png/);
+    const missingBytes = Buffer.from(await missing.arrayBuffer());
+    assert.notDeepEqual(missingBytes, png);
+    assert.equal(missingBytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+    assert.equal(missingBytes.includes(Buffer.from("Not found")), false);
+    assert.equal(missingBytes.includes(Buffer.from("error")), false);
+
+    const held = await json(origin, "/api/opdb/boards", { method: "POST", body: { opdbId: pro.opdbId } });
+    assert.equal(held.data.pending, true);
+    assert.equal(held.data.board, undefined);
+    const before = await json(origin, "/api/state", { headers: { "x-pin": "2224" } });
+    assert.equal(before.data.state.leaderboards.some((board) => board.opdbId === pro.opdbId), false);
+    assert.equal(before.data.scores.autoApprove, false);
+    assert.equal(before.data.guest.autoApprove, true);
+
+    const first = await json(origin, "/api/scores", {
+      method: "POST",
+      body: { opdbId: pro.opdbId, name: "Casey", score: "4200" },
+    });
+    assert.equal(first.res.status, 200);
+    assert.equal(first.data.submission.status, "pending");
+    const second = await json(origin, "/api/scores", {
+      method: "POST",
+      body: { opdbId: pro.opdbId, name: "Someone else", score: "100" },
+    });
+    assert.equal(second.data.submission.id, first.data.submission.id);
+    const queued = await json(origin, "/api/state", { headers: { "x-pin": "2224" } });
+    const pending = queued.data.state.scoreSubmissions.filter((row) => row.opdbId === pro.opdbId && row.status === "pending");
+    assert.equal(pending.length, 1);
+    assert.equal(queued.data.state.leaderboards.some((board) => board.opdbId === pro.opdbId), false);
+
+    const swapped = await json(origin, `/api/scores/${first.data.submission.id}/machine`, {
+      method: "POST",
+      headers: { "x-pin": "2224" },
+      body: { opdbId: "GLWll-M1r8O-A1kx7" },
+    });
+    assert.equal(swapped.res.status, 200);
+    const swappedRow = swapped.data.state.scoreSubmissions.find((row) => row.id === first.data.submission.id);
+    assert.equal(swappedRow.opdbId, "GLWll-M1r8O-A1kx7");
+    assert.match(swappedRow.machineName, /LE/);
+
+    const ok = await json(origin, `/api/scores/${first.data.submission.id}/approve`, {
+      method: "POST",
+      headers: { "x-pin": "2224" },
+      body: { showPhoto: true },
+    });
+    assert.equal(ok.res.status, 200);
+    const le = ok.data.state.leaderboards.find((board) => board.opdbId === "GLWll-M1r8O-A1kx7");
+    assert.ok(le);
+    assert.equal(le.rows.some((row) => row.name === "Casey" && row.score === 4200), true);
+    assert.equal(ok.data.guest.autoApprove, true);
+
+    await json(origin, "/api/scores/settings", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { autoApprove: true },
+    });
+    const instant = await json(origin, "/api/opdb/boards", {
+      method: "POST",
+      body: { opdbId: "GLWll-M1r8O-ARnV7" },
+    });
+    assert.equal(instant.res.status, 200);
+    assert.equal(instant.data.board.name, "JAWS (Premium)");
+    const posted = await json(origin, "/api/scores", {
+      method: "POST",
+      body: { boardId: instant.data.board.id, name: "Drew", score: "8800" },
+    });
+    assert.equal(posted.data.submission.status, "approved");
+    const live = await json(origin, "/api/state", { headers: { "x-pin": "2224" } });
+    const premium = live.data.state.leaderboards.find((board) => board.id === instant.data.board.id);
+    assert.equal(premium.rows.some((row) => row.name === "Drew" && row.score === 8800), true);
+    assert.equal(live.data.guest.autoApprove, true);
   } finally {
     server.close();
   }

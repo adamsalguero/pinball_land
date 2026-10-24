@@ -1171,11 +1171,116 @@ function createApp({
     }
   });
 
-  app.get("/api/opdb/search", requirePin, async (req, res, next) => {
+  const catalogSearchHits = new Map();
+
+  function allowCatalogSearch(ip, now = Date.now()) {
+    const key = String(ip || "unknown");
+    const recent = (catalogSearchHits.get(key) || []).filter((stamp) => now - stamp < 10 * 60 * 1000);
+    if (recent.length >= 40) {
+      catalogSearchHits.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    catalogSearchHits.set(key, recent);
+    return true;
+  }
+
+  function sendCabinetPlaceholder(res) {
+    const file = path.join(publicDir, "cabinet-placeholder.png");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.type("png");
+    if (fs.existsSync(file)) return res.status(200).sendFile(file);
+    return res.status(200).end();
+  }
+
+  app.get("/api/opdb/search", requireGuest, async (req, res) => {
     try {
-      const q = String(req.query.q || "");
-      const results = await opdb.search(q);
+      if (!allowCatalogSearch(req.socket?.remoteAddress || "")) {
+        return sendJson(res, 200, { configured: opdb.configured, results: [] });
+      }
+      const results = await opdb.search(String(req.query.q || ""));
       sendJson(res, 200, { configured: opdb.configured, results });
+    } catch {
+      sendJson(res, 200, { configured: opdb.configured, results: [] });
+    }
+  });
+
+  app.get("/api/opdb/cabinet/:opdbId", requireGuest, async (req, res) => {
+    try {
+      const file = await opdb.cabinetFile(req.params.opdbId);
+      if (file && fs.existsSync(file)) {
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.status(200).sendFile(file);
+      }
+    } catch {
+      // A missing cabinet photo is a placeholder, not an error.
+    }
+    return sendCabinetPlaceholder(res);
+  });
+
+  async function ensureMachineBoard({ opdbId, name, manufacturer, year } = {}) {
+    const id = safeId(opdbId);
+    if (!id) throw Object.assign(new Error("Pick a machine"), { status: 400 });
+    const live = store.getState().leaderboards.find((board) => board.opdbId === id);
+    if (live) return live;
+    const archived = (store.getState().archivedLeaderboards || []).find((board) => board.opdbId === id);
+    if (archived) {
+      await store.restoreLeaderboard(archived.id);
+      return store.findBoard(archived.id);
+    }
+    let extra = {
+      kind: "machine",
+      inRotation: true,
+      opdbId: id,
+      name: name || id,
+      manufacturer: manufacturer || "",
+      year: year || "",
+    };
+    try {
+      const cached = await opdb.cacheMachine(id);
+      if (cached.machine) {
+        extra = {
+          ...extra,
+          name: name || cached.machine.name || id,
+          manufacturer: manufacturer || manufacturerName(cached.machine),
+          year: year || manufactureYear(cached.machine),
+          artFile: cached.artFile,
+          playfieldFile: cached.playfieldFile,
+          logoFile: cached.logoFile,
+          imageFiles: cached.imageFiles || [],
+          videoUrl: cached.videoUrl,
+        };
+      }
+    } catch {
+      extra.name = name || id;
+    }
+    const snapshot = await store.createLeaderboard(extra.name, extra);
+    return snapshot.leaderboards.find((board) => board.opdbId === id);
+  }
+
+  app.post("/api/opdb/boards", requireGuest, async (req, res, next) => {
+    try {
+      const opdbId = safeId(req.body?.opdbId || "");
+      if (!opdbId) return sendJson(res, 200, { pending: true });
+      const existing = store.getState().leaderboards.find((board) => board.opdbId === opdbId);
+      if (existing) return sendJson(res, 200, { board: { id: existing.id, name: existing.name } });
+      const info = await opdb.lookup(opdbId);
+      const machine = {
+        opdbId,
+        name: info?.name || "",
+        manufacturer: info?.manufacturer || "",
+        year: info?.year || "",
+        edition: info?.edition || "",
+      };
+      if (currentConfig().scores?.autoApprove !== true) {
+        return sendJson(res, 200, { pending: true, machine });
+      }
+      if (!store.allowMachineRequest(req.socket?.remoteAddress || "")) {
+        return sendJson(res, 429, { error: "Too many machine requests. Wait a few minutes." });
+      }
+      const board = await ensureMachineBoard(machine);
+      broadcast();
+      sendJson(res, 200, { board: { id: board.id, name: board.name } });
     } catch (err) {
       next(err);
     }
@@ -2088,6 +2193,7 @@ function createApp({
       let boardId;
       let name;
       let score;
+      let opdbId = "";
       let proofFile = null;
       if (withPhoto) {
         const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
@@ -2095,22 +2201,57 @@ function createApp({
           return sendJson(res, 400, { error: "Upload a JPEG, PNG, or WEBP of the score." });
         }
         boardId = safeHeader(req.get("x-board-id"));
+        opdbId = safeId(safeHeader(req.get("x-opdb-id")));
         name = maskProfanity(safeHeader(req.get("x-name")));
         score = safeHeader(req.get("x-score"));
         proofFile = await saveScoreProof(req.body);
       } else {
         boardId = req.body?.boardId;
+        opdbId = safeId(req.body?.opdbId || "");
         name = maskProfanity(req.body?.name);
         score = req.body?.score;
       }
-      const submission = await store.submitScore({
-        boardId,
-        name,
-        score,
-        proofFile,
-        ip: req.socket?.remoteAddress || "",
-        autoApprove: currentConfig().scores?.autoApprove === true,
-      });
+      const autoApprove = currentConfig().scores?.autoApprove === true;
+      const ip = req.socket?.remoteAddress || "";
+      let submission;
+      const boardExists = boardId && store.findBoard(boardId);
+      if (opdbId && !boardExists) {
+        const existing = store.getState().leaderboards.find((board) => board.opdbId === opdbId);
+        if (existing) {
+          submission = await store.submitScore({ boardId: existing.id, name, score, proofFile, ip, autoApprove });
+        } else if (autoApprove) {
+          const info = await opdb.lookup(opdbId);
+          const board = await ensureMachineBoard({
+            opdbId,
+            name: info?.name || "",
+            manufacturer: info?.manufacturer || "",
+            year: info?.year || "",
+          });
+          submission = await store.submitScore({
+            boardId: board.id,
+            name,
+            score,
+            proofFile,
+            ip,
+            autoApprove: true,
+          });
+        } else {
+          const info = await opdb.lookup(opdbId);
+          submission = await store.requestMachineScore({
+            opdbId,
+            machineName: info?.name || opdbId,
+            manufacturer: info?.manufacturer || "",
+            year: info?.year || "",
+            edition: info?.edition || "",
+            name,
+            score,
+            proofFile,
+            ip,
+          });
+        }
+      } else {
+        submission = await store.submitScore({ boardId, name, score, proofFile, ip, autoApprove });
+      }
       broadcast();
       sendJson(res, 200, {
         submission: {
@@ -2137,9 +2278,40 @@ function createApp({
     }
   });
 
+  async function ensureSubmissionBoard(submissionId) {
+    const item = store.getState().scoreSubmissions.find((row) => row.id === submissionId);
+    if (!item || item.status !== "pending" || !item.opdbId) return;
+    if (item.boardId && store.findBoard(item.boardId)) return;
+    const board = await ensureMachineBoard({
+      opdbId: item.opdbId,
+      name: item.machineName,
+      manufacturer: item.manufacturer,
+      year: item.year,
+    });
+    await store.assignSubmissionBoard(item.id, board.id);
+  }
+
   app.post("/api/scores/:id/approve", requirePin, async (req, res, next) => {
     try {
+      await ensureSubmissionBoard(req.params.id);
       await store.reviewScore(req.params.id, "approved", { showPhoto: req.body?.showPhoto !== false });
+      sendJson(res, 200, payload());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/scores/:id/machine", requirePin, async (req, res, next) => {
+    try {
+      const opdbId = safeId(req.body?.opdbId || "");
+      const info = opdbId ? await opdb.lookup(opdbId) : null;
+      await store.setSubmissionMachine(req.params.id, {
+        opdbId,
+        machineName: info?.name || req.body?.name || opdbId,
+        manufacturer: info?.manufacturer || "",
+        year: info?.year || "",
+        edition: info?.edition || "",
+      });
       sendJson(res, 200, payload());
     } catch (err) {
       next(err);
@@ -2254,6 +2426,7 @@ function createApp({
         id: board.id,
         name: board.name,
         kind: board.kind,
+        opdbId: board.opdbId || "",
         rows: (board.rows || []).map((row) => ({ name: row.name, score: row.score })),
       }));
     sendJson(res, 200, {

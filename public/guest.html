@@ -14,6 +14,7 @@
     <link rel="apple-touch-startup-image" href="/icons/guest-splash.png" />
     <link rel="stylesheet" href="/design-tokens.css" />
     <link rel="stylesheet" href="/guest.css" />
+    <link rel="stylesheet" href="/machine-gallery.css" />
   </head>
   <body>
     <header class="guest-top">
@@ -57,6 +58,8 @@
           Machine
           <select id="machine-picker"></select>
         </label>
+        <button id="machine-search-open" class="btn quiet machine-search-link" type="button">Don't see your machine? Search</button>
+        <p id="requested-machine" class="status" hidden></p>
         <div id="scores" class="scores"></div>
         <form id="score-form" class="score-form">
           <h2>Submit a score</h2>
@@ -82,6 +85,7 @@
       <img id="photo-lightbox-img" alt="" />
       <button id="photo-lightbox-download" class="btn download" type="button">Download</button>
     </div>
+    <script src="/machine-gallery.js"></script>
     <script src="/guest.js"></script>
   </body>
 </html>

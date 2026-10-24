@@ -5,6 +5,9 @@ const GUEST_PORT_OFFSET = 10;
 const GUEST_FILES = new Set([
   "/guest.css",
   "/guest.js",
+  "/machine-gallery.css",
+  "/machine-gallery.js",
+  "/cabinet-placeholder.png",
   "/design-tokens.css",
   "/manifest.webmanifest",
   "/sw.js",
@@ -62,6 +65,9 @@ function isGuestRoute(req) {
   if (method === "GET" && path === "/api/guest-photos/feed") return true;
   if (method === "POST" && path === "/api/guest-photos") return true;
   if (method === "POST" && path === "/api/scores") return true;
+  if (method === "GET" && path === "/api/opdb/search") return true;
+  if (method === "GET" && /^\/api\/opdb\/cabinet\/[A-Za-z0-9_-]+$/.test(path)) return true;
+  if (method === "POST" && path === "/api/opdb/boards") return true;
   if (method === "GET" && /^\/media\/guest\/[0-9a-f-]{36}\.jpg$/i.test(path)) return true;
   return false;
 }

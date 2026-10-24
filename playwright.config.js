@@ -1,3 +1,4 @@
+const path = require("path");
 const { defineConfig } = require("@playwright/test");
 
 module.exports = defineConfig({
@@ -23,6 +24,7 @@ module.exports = defineConfig({
       PINBALL_ROTATION_SEC: "1",
       PINBALL_CLIP_IDS: "skeleton-dance-1929",
       NODE_TEST_CONTEXT: "1",
+      PINBALL_OPDB_EXPORT: path.join(__dirname, "test", "fixtures", "opdb-catalog.json"),
     },
   },
 });

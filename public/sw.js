@@ -1,5 +1,5 @@
-const CACHE = "pinball-guest-v2";
-const SHELL = ["/", "/app", "/guest.css", "/guest.js", "/design-tokens.css", "/manifest.webmanifest", "/icons/guest-180.png", "/icons/guest-192.png", "/icons/guest-512.png"];
+const CACHE = "pinball-guest-v3";
+const SHELL = ["/", "/app", "/guest.css", "/guest.js", "/machine-gallery.css", "/machine-gallery.js", "/cabinet-placeholder.png", "/design-tokens.css", "/manifest.webmanifest", "/icons/guest-180.png", "/icons/guest-192.png", "/icons/guest-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
