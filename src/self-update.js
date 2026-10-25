@@ -9,6 +9,7 @@ const { dataLayout } = require("./paths");
 const { planRollback, swapInstall } = require("./updater");
 const {
   flushVolume,
+  quickScanInstall,
   recoverInterrupted,
   restorePreviousInstall,
   scanInstall,
@@ -16,8 +17,10 @@ const {
   swapDirectories,
   writeIntegrityStatus,
   writeMarker,
+  readMarker,
   clearMarker,
 } = require("./install-guard");
+const { checkUploadPath } = require("./upload-check");
 
 const LOG_MAX_BYTES = 512 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -217,10 +220,20 @@ async function pathExists(target) {
   }
 }
 
-async function inspectTree(root, run, timeoutMs) {
+async function inspectTree(root, run, timeoutMs, checkUpload = checkUploadPath) {
   const scanned = await scanInstall(root);
   if (!scanned.ok) return scanned;
-  return verifyRuntimeDeps(root, run, timeoutMs);
+  const deps = await verifyRuntimeDeps(root, run, timeoutMs);
+  if (!deps.ok) return deps;
+  const uploaded = await checkUpload(root);
+  if (!uploaded || uploaded.ok !== true) {
+    return { ok: false, detail: (uploaded && uploaded.detail) || "upload path failed" };
+  }
+  if (uploaded.skipped) return { ok: true, detail: deps.detail };
+  return {
+    ok: true,
+    detail: uploaded.detail && deps.detail ? `${deps.detail}. ${uploaded.detail}` : (uploaded.detail || deps.detail),
+  };
 }
 
 async function discardStaging(dataDir, paths) {
@@ -237,6 +250,7 @@ async function stageCommit({
   npmTimeoutMs,
   now,
   log = async () => {},
+  checkUpload = checkUploadPath,
 }) {
   const paths = stagePaths(appRoot);
   await fsp.rm(paths.staging, { recursive: true, force: true });
@@ -254,7 +268,7 @@ async function stageCommit({
   const electron = await ensureElectron(paths.staging, run, npmTimeoutMs);
   if (!electron.ok) return { ok: false, detail: electron.detail };
   await flushVolume(paths.staging, run);
-  let deps = await inspectTree(paths.staging, run, npmTimeoutMs);
+  let deps = await inspectTree(paths.staging, run, npmTimeoutMs, checkUpload);
   if (!deps.ok) {
     await log(`runtime dependencies failed to load (${deps.detail}). Running npm ci again.`);
     const again = await npmCi(paths.staging, run, npmTimeoutMs, npmBin);
@@ -263,7 +277,7 @@ async function stageCommit({
       return { ok: false, detail: why };
     }
     await flushVolume(paths.staging, run);
-    deps = await inspectTree(paths.staging, run, npmTimeoutMs);
+    deps = await inspectTree(paths.staging, run, npmTimeoutMs, checkUpload);
     if (!deps.ok) return { ok: false, detail: `runtime dependencies failed to load: ${deps.detail}` };
   }
   return { ok: true, detail: deps.detail || "staging install verified", paths };
@@ -277,6 +291,8 @@ async function repairInstall({
   npmTimeoutMs = NPM_TIMEOUT_MS,
   now = () => new Date(),
   scanOnly = false,
+  quick = false,
+  checkUpload = checkUploadPath,
 } = {}) {
   const paths = stagePaths(appRoot);
   const recovered = await recoverInterrupted(dataDir, paths);
@@ -292,15 +308,21 @@ async function repairInstall({
       recoveryDetail: (recovered && recovered.detail) || "",
     };
   }
-  const scanned = await inspectTree(appRoot, run, npmTimeoutMs);
+  let scanned;
+  if (quick) {
+    const files = await quickScanInstall(appRoot);
+    scanned = files.ok ? await verifyRuntimeDeps(appRoot, run, npmTimeoutMs) : files;
+  } else {
+    scanned = await inspectTree(appRoot, run, npmTimeoutMs, checkUpload);
+  }
   if (scanned.ok) return publish(true, scanned.detail || "install files are intact", "intact");
   if (scanOnly) return publish(false, scanned.detail, "needs-repair");
   if (await pathExists(paths.previous)) {
-    const prev = await inspectTree(paths.previous, run, npmTimeoutMs);
+    const prev = await inspectTree(paths.previous, run, npmTimeoutMs, checkUpload);
     if (prev.ok) {
       try {
         await restorePreviousInstall({ live: paths.live, previous: paths.previous, dataDir });
-        const again = await inspectTree(appRoot, run, npmTimeoutMs);
+        const again = await inspectTree(appRoot, run, npmTimeoutMs, checkUpload);
         if (again.ok) return publish(true, "restored the previous install", "rolled-back");
       } catch {
         // A failed swap falls through to a rebuild of the recorded commit.
@@ -310,7 +332,7 @@ async function repairInstall({
   const headResult = await run("git", ["rev-parse", "HEAD"], { cwd: appRoot, timeoutMs: 10000 });
   const head = String(headResult.stdout || "").trim();
   if (!headResult.ok || !isCommit(head)) return publish(false, scanned.detail, "needs-repair");
-  const staged = await stageCommit({ appRoot, dataDir, commit: head, run, npmBin, npmTimeoutMs, now });
+  const staged = await stageCommit({ appRoot, dataDir, commit: head, run, npmBin, npmTimeoutMs, now, checkUpload });
   if (!staged.ok) {
     await discardStaging(dataDir, paths);
     return publish(false, staged.detail || scanned.detail, "needs-repair");
@@ -513,6 +535,9 @@ async function runSelfUpdate({
   now = () => new Date(),
   npmBin = npmCommand(),
   recordOnly = false,
+  stageOnly = false,
+  swapOnly = false,
+  checkUpload = checkUploadPath,
 } = {}) {
   const logsDir = dataLayout(dataDir).logs;
   const pointerRoot = path.join(dataDir, "updates");
@@ -558,7 +583,7 @@ async function runSelfUpdate({
     });
   }
 
-  async function promote(commit, action, headCommit) {
+  async function promote(commit, action, headCommit, { holdSwap = false } = {}) {
     const staged = await stageCommit({
       appRoot,
       dataDir,
@@ -568,6 +593,7 @@ async function runSelfUpdate({
       npmTimeoutMs,
       now,
       log,
+      checkUpload,
     });
     if (!staged.ok) return abandon(headCommit, staged.detail);
     let smokeResult;
@@ -590,6 +616,25 @@ async function runSelfUpdate({
     if (tests && tests.ok === false && !tests.skipped) return abandon(headCommit, tests.detail);
     const kept = planRollback(true);
     if (kept !== "keep") return abandon(headCommit, "update plan asked to roll back");
+    const detail = tests && tests.detail ? `${smokeResult.detail}. ${tests.detail}` : smokeResult.detail;
+    if (holdSwap) {
+      await writeMarker(dataDir, {
+        phase: "ready",
+        commit,
+        previous: headCommit,
+        at: now().toISOString(),
+        detail: staged.detail || "",
+      });
+      return finish({
+        action: "staged",
+        commit,
+        previous: headCommit,
+        detail,
+        integrityAt: now().toISOString(),
+        integrityOk: true,
+        integrityDetail: staged.detail || "install files are intact",
+      });
+    }
     try {
       await swapDirectories({
         live: paths.live,
@@ -606,7 +651,6 @@ async function runSelfUpdate({
     } catch (err) {
       await log(`could not record ${commit}: ${err.message}`);
     }
-    const detail = tests && tests.detail ? `${smokeResult.detail}. ${tests.detail}` : smokeResult.detail;
     return finish({
       action,
       commit,
@@ -633,6 +677,50 @@ async function runSelfUpdate({
 
   const recovered = await recoverInterrupted(dataDir, paths);
   if (recovered.detail) await log(recovered.detail);
+
+  if (swapOnly) {
+    const marker = await readMarker(dataDir);
+    if (!marker || marker.phase !== "ready" || !isCommit(marker.commit)) {
+      return finish({ action: "skipped", detail: "no staged update is waiting" });
+    }
+    if (!(await pathExists(paths.staging))) {
+      await clearMarker(dataDir);
+      return finish({ action: "skipped", detail: "staged folder is missing" });
+    }
+    try {
+      await swapDirectories({
+        live: paths.live,
+        incoming: paths.staging,
+        outgoing: paths.previous,
+        dataDir,
+        prefer: "staging",
+      });
+    } catch (err) {
+      return finish({
+        action: "rolled-back",
+        commit: marker.previous || "",
+        previous: marker.previous || "",
+        detail: `could not switch to the staged install: ${err.message}`,
+        integrityAt: now().toISOString(),
+        integrityOk: false,
+        integrityDetail: err.message,
+      });
+    }
+    try {
+      await rememberVersion(pointerRoot, marker.commit);
+    } catch (err) {
+      await log(`could not record ${marker.commit}: ${err.message}`);
+    }
+    return finish({
+      action: "updated",
+      commit: marker.commit,
+      previous: marker.previous || "",
+      detail: "staged install swapped",
+      integrityAt: now().toISOString(),
+      integrityOk: true,
+      integrityDetail: marker.detail || "staged install swapped",
+    });
+  }
 
   const headResult = await run("git", ["rev-parse", "HEAD"], { cwd: appRoot, timeoutMs: 10000 });
   const head = String(headResult.stdout || "").trim();
@@ -685,7 +773,7 @@ async function runSelfUpdate({
     }, { persist: false });
   }
 
-  return promote(remote, "updated", head);
+  return promote(remote, "updated", head, { holdSwap: stageOnly === true });
 }
 
 module.exports = {

@@ -362,6 +362,45 @@ test("a partial staging folder is discarded and a good previous install is resto
   assert.equal(status.integrityOk, true);
 });
 
+test("a staged update waits to swap until the server can restart alone", async () => {
+  const ctx = await setup();
+  await fs.writeFile(path.join(ctx.appRoot, "live-marker.txt"), "live");
+  const script = scripted();
+  const staged = await update(ctx, script, { stageOnly: true });
+  assert.equal(staged.action, "staged");
+  assert.equal(staged.commit, NEXT);
+  assert.equal(await fs.readFile(path.join(ctx.appRoot, "live-marker.txt"), "utf8"), "live");
+  const marker = JSON.parse(await fs.readFile(path.join(ctx.dataDir, "updates", "staging.json"), "utf8"));
+  assert.equal(marker.phase, "ready");
+  assert.equal(marker.commit, NEXT);
+  const swapped = await update(ctx, script, { swapOnly: true });
+  assert.equal(swapped.action, "updated");
+  assert.equal(swapped.commit, NEXT);
+  await assert.rejects(() => fs.stat(path.join(ctx.appRoot, "live-marker.txt")));
+  await ctx.assertDataUntouched();
+});
+
+test("quickScanInstall ignores a zero-filled file under node_modules", async () => {
+  const { quickScanInstall } = require("../src/install-guard");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-quick-"));
+  const exe = process.platform === "win32" ? "electron.exe" : "electron";
+  await fs.mkdir(path.join(root, "node_modules", "electron", "dist"), { recursive: true });
+  await fs.mkdir(path.join(root, "src"), { recursive: true });
+  await fs.writeFile(path.join(root, "node_modules", "electron", "path.txt"), `dist/${exe}\n`);
+  await fs.writeFile(path.join(root, "node_modules", "electron", "dist", exe), "electron-binary");
+  await fs.writeFile(path.join(root, "src", "server.js"), "ok\n");
+  const buried = path.join(root, "node_modules", "sharp", "index.js");
+  await fs.mkdir(path.dirname(buried), { recursive: true });
+  await fs.writeFile(buried, Buffer.alloc(64, 0));
+  const quick = await quickScanInstall(root);
+  assert.equal(quick.ok, true);
+  const full = await scanInstall(root);
+  assert.equal(full.ok, false);
+  await fs.writeFile(path.join(root, "src", "server.js"), Buffer.alloc(64, 0));
+  const blocked = await quickScanInstall(root);
+  assert.equal(blocked.ok, false);
+});
+
 test("scanInstall names a zero-filled runtime file", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-zero-"));
   const file = path.join(root, "node_modules", "sharp", "index.js");

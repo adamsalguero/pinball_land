@@ -115,6 +115,7 @@ async function api(url, options = {}) {
 }
 
 function applyPayload(payload) {
+  if (window.PinballBuild?.watchBuild(payload?.build)) return;
   try {
     if (!payload?.state || !Array.isArray(payload.state.leaderboards)) return;
     current = payload;
@@ -1487,6 +1488,7 @@ function connect() {
         if (order && !typing) renderMonitorOrder(order);
         return;
       }
+      if (message.type === "state" && window.PinballBuild?.watchBuild(message.build)) return;
       if (message.type === "state" && !appEl.hidden) {
         const tag = document.activeElement?.tagName;
         if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {

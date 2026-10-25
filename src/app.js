@@ -544,6 +544,7 @@ function createApp({
         autoApprove: config.scores?.autoApprove === true,
       },
       updates: updateFields(config),
+      build: commitCache || "",
       photoProcessor: photoProcessorWarning,
       kiosk: {
         restartToken,
@@ -583,6 +584,7 @@ function createApp({
       },
       serverNow: full.serverNow,
       version: full.version,
+      build: full.build || "",
       motion: full.motion,
       slogans: full.slogans,
     };

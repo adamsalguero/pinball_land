@@ -11,15 +11,7 @@ if (!process.env.GITHUB_ACTIONS && process.env.PINBALL_BOOT_ORDER_TEST !== "1") 
   process.exit(0);
 }
 
-const root = path.join(__dirname, "..");
-const base = "C:\\pl-boot-order";
-const appRoot = path.join(base, "app");
-const origin = path.join(base, "origin.git");
-const dataDir = path.join(base, "data");
-const binDir = path.join(base, "bin");
-const dnsFile = path.join(base, "dns-ready");
-const kioskFile = path.join(dataDir, "kiosk-opened.txt");
-const port = 18766;
+const repo = path.join(__dirname, "..");
 const serverTask = "PinballLandServer";
 const kioskTask = "PinballLandKiosk";
 
@@ -52,32 +44,145 @@ function orderOf(log, phrases) {
   }
 }
 
-function registerTasks() {
-  const serverPs1 = path.join(base, "wall-server.ps1");
-  const kioskPs1 = path.join(base, "wall-kiosk.ps1");
-  const registerPs1 = path.join(base, "register-wall.ps1");
+function sharpStub() {
+  return [
+    "function sharp() {",
+    "  const api = {",
+    "    rotate() { return api; },",
+    "    resize() { return api; },",
+    "    jpeg() { return api; },",
+    "    metadata: async () => ({ width: 320, height: 240 }),",
+    "    toBuffer: async () => ({ data: Buffer.from([255, 216, 255, 217]), info: { width: 320, height: 240 } }),",
+    "  };",
+    "  return api;",
+    "}",
+    "module.exports = sharp;",
+    "",
+  ].join("\n");
+}
+
+function killFixtureProcesses() {
+  spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-Command",
+    "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'pl-boot-order' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+  ], { windowsHide: true, timeout: 20000 });
+}
+
+function cleanup() {
+  for (const name of [serverTask, kioskTask, "PinballLandUpdateRetry"]) {
+    schtasks(["/End", "/TN", name]);
+    schtasks(["/Delete", "/TN", name, "/F"]);
+  }
+  killFixtureProcesses();
+}
+
+function installRuntime(appRoot, binDir) {
+  const exe = "electron.exe";
+  fs.mkdirSync(path.join(appRoot, "node_modules", "electron", "dist"), { recursive: true });
+  fs.mkdirSync(path.join(appRoot, "node_modules", "sharp"), { recursive: true });
+  fs.writeFileSync(path.join(appRoot, "node_modules", "electron", "path.txt"), `dist/${exe}\n`);
+  fs.writeFileSync(path.join(appRoot, "node_modules", "electron", "dist", exe), "electron-binary");
+  fs.copyFileSync(path.join(binDir, "sharp-stub.js"), path.join(appRoot, "node_modules", "sharp", "index.js"));
+  fs.writeFileSync(path.join(appRoot, "node_modules", "sharp", "package.json"), "{\"name\":\"sharp\",\"version\":\"0.0.0\"}\n");
+}
+
+function buildFixture(ctx) {
+  fs.rmSync(ctx.base, { recursive: true, force: true });
+  fs.mkdirSync(ctx.appRoot, { recursive: true });
+  fs.mkdirSync(path.join(ctx.appRoot, "src"), { recursive: true });
+  fs.mkdirSync(path.join(ctx.appRoot, "test"), { recursive: true });
+  fs.mkdirSync(ctx.binDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.binDir, "sharp-stub.js"), sharpStub(), "utf8");
+  fs.writeFileSync(path.join(ctx.binDir, "sharp-package.json"), "{\"name\":\"sharp\",\"version\":\"0.0.0\"}\n", "utf8");
+  fs.writeFileSync(path.join(ctx.binDir, "npm.cmd"), [
+    "@echo off",
+    "if /I \"%~1\"==\"ci\" (",
+    "  if not exist node_modules\\electron\\dist mkdir node_modules\\electron\\dist",
+    "  if not exist node_modules\\sharp mkdir node_modules\\sharp",
+    "  echo dist\\electron.exe> node_modules\\electron\\path.txt",
+    "  echo electron-binary> node_modules\\electron\\dist\\electron.exe",
+    "  copy /Y \"%~dp0sharp-stub.js\" node_modules\\sharp\\index.js >nul",
+    "  copy /Y \"%~dp0sharp-package.json\" node_modules\\sharp\\package.json >nul",
+    "  exit /b 0",
+    ")",
+    "echo unexpected npm %*>&2",
+    "exit /b 1",
+    "",
+  ].join("\r\n"), "utf8");
+  fs.writeFileSync(path.join(ctx.appRoot, ".gitignore"), "node_modules\n", "utf8");
+  fs.writeFileSync(path.join(ctx.appRoot, "package.json"), `${JSON.stringify({
+    name: "pinball-boot-fixture",
+    private: true,
+    version: "1.0.0",
+    dependencies: { sharp: "0.0.0" },
+  })}\n`, "utf8");
+  for (const name of ["photos.js", "resolution.js", "text-filter.js"]) {
+    fs.copyFileSync(path.join(repo, "src", name), path.join(ctx.appRoot, "src", name));
+  }
+  fs.writeFileSync(path.join(ctx.appRoot, "src", "server.js"), [
+    "const http = require('http');",
+    "const port = Number(process.env.PORT) || 3010;",
+    "http.createServer((req, res) => {",
+    "  const url = req.url || '/';",
+    "  if (url.startsWith('/api/health') || url.startsWith('/display/')) {",
+    "    res.writeHead(200, { 'content-type': 'text/plain' });",
+    "    res.end('wall-open-A');",
+    "    return;",
+    "  }",
+    "  res.writeHead(404);",
+    "  res.end();",
+    "}).listen(port, '127.0.0.1');",
+    "",
+  ].join("\n"), "utf8");
+  fs.writeFileSync(path.join(ctx.appRoot, "test", "platform.test.js"), [
+    "const { test } = require('node:test');",
+    "test('fixture boots', () => {});",
+    "",
+  ].join("\n"), "utf8");
+  git(ctx.appRoot, ["init", "-b", "main"]);
+  git(ctx.appRoot, ["config", "user.email", "ci@example.com"]);
+  git(ctx.appRoot, ["config", "user.name", "CI"]);
+  git(ctx.base, ["init", "--bare", "-b", "main", ctx.origin]);
+  git(ctx.appRoot, ["remote", "add", "origin", ctx.origin]);
+  git(ctx.appRoot, ["add", "."]);
+  git(ctx.appRoot, ["commit", "-m", "A"]);
+  git(ctx.appRoot, ["push", "-u", "origin", "main"]);
+  if (ctx.update) {
+    const server = fs.readFileSync(path.join(ctx.appRoot, "src", "server.js"), "utf8").replace("wall-open-A", "wall-open-B");
+    fs.writeFileSync(path.join(ctx.appRoot, "src", "server.js"), server, "utf8");
+    git(ctx.appRoot, ["commit", "-am", "B"]);
+    git(ctx.appRoot, ["push", "origin", "main"]);
+    git(ctx.appRoot, ["reset", "--hard", "HEAD~1"]);
+  }
+  installRuntime(ctx.appRoot, ctx.binDir);
+  if (ctx.corrupt) {
+    fs.writeFileSync(path.join(ctx.appRoot, "node_modules", "electron", "path.txt"), Buffer.alloc(64, 0));
+  }
+}
+
+function registerTasks(ctx) {
+  const serverPs1 = path.join(ctx.base, "wall-server.ps1");
+  const kioskPs1 = path.join(ctx.base, "wall-kiosk.ps1");
+  const registerPs1 = path.join(ctx.base, "register-wall.ps1");
   fs.writeFileSync(serverPs1, [
     "$ErrorActionPreference = 'Continue'",
-    `$env:PORT = '${port}'`,
-    `& ${psQuote(process.execPath)} ${psQuote(path.join(appRoot, "src", "server.js"))}`,
+    `$env:PORT = '${ctx.port}'`,
+    `& ${psQuote(process.execPath)} ${psQuote(path.join(ctx.appRoot, "src", "server.js"))}`,
     "",
   ].join("\r\n"), "utf8");
   fs.writeFileSync(kioskPs1, [
     "$ErrorActionPreference = 'Continue'",
-    `Set-Content -LiteralPath ${psQuote(kioskFile)} -Value 'fullscreen kiosk' -Encoding UTF8`,
-    "exit 0",
+    `Add-Content -LiteralPath ${psQuote(ctx.kioskFile)} -Value 'fullscreen kiosk' -Encoding UTF8`,
+    "while ($true) { Start-Sleep -Seconds 30 }",
     "",
   ].join("\r\n"), "utf8");
-  const tasks = [
-    [serverTask, serverPs1],
-    [kioskTask, kioskPs1],
-  ];
   const lines = [
     "$ErrorActionPreference = 'Continue'",
     "$powershell = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'",
     "$user = $env:USERNAME",
   ];
-  for (const [name, file] of tasks) {
+  for (const [name, file] of [[serverTask, serverPs1], [kioskTask, kioskPs1]]) {
     lines.push(`$action = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ${psQuote(file)}"`);
     lines.push("$trigger = New-ScheduledTaskTrigger -Once -At ([datetime]::Parse('2035-01-01T00:00:00'))");
     lines.push("$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)");
@@ -104,80 +209,15 @@ function registerTasks() {
   });
 }
 
-function cleanup() {
-  for (const name of [serverTask, kioskTask]) {
-    schtasks(["/End", "/TN", name]);
-    schtasks(["/Delete", "/TN", name, "/F"]);
-  }
-}
-
-function buildFixture() {
-  fs.rmSync(base, { recursive: true, force: true });
-  fs.mkdirSync(appRoot, { recursive: true });
-  fs.mkdirSync(path.join(appRoot, "src"), { recursive: true });
-  fs.mkdirSync(path.join(appRoot, "test"), { recursive: true });
-  fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(path.join(appRoot, ".gitignore"), "node_modules\n", "utf8");
-  fs.writeFileSync(path.join(appRoot, "package.json"), `${JSON.stringify({ name: "pinball-boot-fixture", private: true, version: "1.0.0" })}\n`, "utf8");
-  fs.writeFileSync(path.join(appRoot, "src", "server.js"), [
-    "const http = require('http');",
-    "const port = Number(process.env.PORT) || 3010;",
-    "http.createServer((req, res) => {",
-    "  const url = req.url || '/';",
-    "  if (url.startsWith('/api/health') || url.startsWith('/display/')) {",
-    "    res.writeHead(200, { 'content-type': 'text/plain' });",
-    "    res.end('wall-open-A');",
-    "    return;",
-    "  }",
-    "  res.writeHead(404);",
-    "  res.end();",
-    "}).listen(port, '127.0.0.1');",
-    "",
-  ].join("\n"), "utf8");
-  fs.writeFileSync(path.join(appRoot, "test", "platform.test.js"), [
-    "const { test } = require('node:test');",
-    "test('fixture boots', () => {});",
-    "",
-  ].join("\n"), "utf8");
-  fs.writeFileSync(path.join(binDir, "npm.cmd"), [
-    "@echo off",
-    "if /I \"%~1\"==\"ci\" (",
-    "  if not exist node_modules\\electron\\dist mkdir node_modules\\electron\\dist",
-    "  echo dist\\electron.exe> node_modules\\electron\\path.txt",
-    "  echo electron-binary> node_modules\\electron\\dist\\electron.exe",
-    "  exit /b 0",
-    ")",
-    "echo unexpected npm %*>&2",
-    "exit /b 1",
-    "",
-  ].join("\r\n"), "utf8");
-  git(appRoot, ["init", "-b", "main"]);
-  git(appRoot, ["config", "user.email", "ci@example.com"]);
-  git(appRoot, ["config", "user.name", "CI"]);
-  git(base, ["init", "--bare", "-b", "main", origin]);
-  git(appRoot, ["remote", "add", "origin", origin]);
-  git(appRoot, ["add", "."]);
-  git(appRoot, ["commit", "-m", "A"]);
-  git(appRoot, ["push", "-u", "origin", "main"]);
-  const server = fs.readFileSync(path.join(appRoot, "src", "server.js"), "utf8").replace("wall-open-A", "wall-open-B");
-  fs.writeFileSync(path.join(appRoot, "src", "server.js"), server, "utf8");
-  git(appRoot, ["commit", "-am", "B"]);
-  git(appRoot, ["push", "origin", "main"]);
-  git(appRoot, ["reset", "--hard", "HEAD~1"]);
-  const zero = path.join(appRoot, "node_modules", "sharp", "index.js");
-  fs.mkdirSync(path.dirname(zero), { recursive: true });
-  fs.writeFileSync(zero, Buffer.alloc(128, 0));
-}
-
-function runBoot() {
+function runBoot(ctx) {
   const env = {
     ...process.env,
-    PATH: `${binDir};${process.env.PATH || ""}`,
-    PINBALL_DATA_DIR: dataDir,
-    PINBALL_APP_ROOT: appRoot,
-    PINBALL_DNS_FILE: dnsFile,
-    PINBALL_DNS_TIMEOUT_SEC: "90",
-    PINBALL_WALL_PAUSE_SEC: "1",
+    PATH: `${ctx.binDir};${process.env.PATH || ""}`,
+    PINBALL_DATA_DIR: ctx.dataDir,
+    PINBALL_APP_ROOT: ctx.appRoot,
+    PINBALL_DNS_FILE: ctx.dnsFile,
+    PINBALL_DNS_TIMEOUT_SEC: String(ctx.dnsTimeout),
+    PINBALL_WALL_PAUSE_SEC: "0",
   };
   delete env.PINBALL_UPDATE_OFFLINE;
   delete env.PINBALL_UPDATE_SMOKE;
@@ -187,120 +227,213 @@ function runBoot() {
       "-ExecutionPolicy",
       "Bypass",
       "-File",
-      path.join(root, "scripts", "invoke-update.ps1"),
+      path.join(repo, "scripts", "invoke-update.ps1"),
       "-Mode",
       "boot",
-    ], { env, windowsHide: true, cwd: base });
+    ], { env, windowsHide: true, cwd: ctx.base });
     let stdout = "";
     let stderr = "";
-    let opened = false;
+    const seen = [];
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    const logFile = path.join(dataDir, "logs", "update.log");
-    const timer = setInterval(() => {
-      if (opened) return;
-      const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "";
-      if (log.includes("waiting for github.com")) {
-        opened = true;
-        fs.writeFileSync(dnsFile, "ready\n");
+    const timer = setInterval(async () => {
+      const log = fs.existsSync(ctx.logFile) ? fs.readFileSync(ctx.logFile, "utf8") : "";
+      if (ctx.releaseDns && !fs.existsSync(ctx.dnsFile) && log.includes("waiting for github.com")) {
+        fs.writeFileSync(ctx.dnsFile, "ready\n");
       }
-    }, 200);
+      if (!ctx.sawPage) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${ctx.port}/display/1`);
+          const body = await res.text();
+          if (res.ok && body.includes("wall-open-")) {
+            seen.push(body.trim());
+            ctx.sawPage = body;
+          }
+        } catch {
+          // The server is not listening yet.
+        }
+      }
+    }, 150);
     const killTimer = setTimeout(() => {
       child.kill();
-      resolve({ code: null, stdout, stderr, timedOut: true, opened });
-    }, 180000);
+      resolve({ code: null, stdout, stderr, timedOut: true, seen });
+    }, ctx.killAfter);
     child.on("exit", (code) => {
       clearInterval(timer);
       clearTimeout(killTimer);
-      resolve({ code, stdout, stderr, timedOut: false, opened });
+      resolve({ code, stdout, stderr, timedOut: false, seen });
     });
   });
 }
 
-async function readDisplay() {
-  const deadline = Date.now() + 15000;
-  let last = "";
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/display/1`);
-      last = await res.text();
-      if (res.ok && last.includes("wall-open-B")) return last;
-    } catch (err) {
-      last = err.message;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 300));
+function wallMs(log) {
+  const match = log.match(/wall open at (\d+)ms/);
+  return match ? Number(match[1]) : null;
+}
+
+function zeroMs(log) {
+  const match = log.match(/zero-scan (\d+)ms/);
+  return match ? Number(match[1]) : null;
+}
+
+async function scenario(spec) {
+  const base = path.join("C:\\pl-boot-order", spec.name);
+  const ctx = {
+    ...spec,
+    base,
+    appRoot: path.join(base, "app"),
+    origin: path.join(base, "origin.git"),
+    dataDir: path.join(base, "data"),
+    binDir: path.join(base, "bin"),
+    dnsFile: path.join(base, "dns-ready"),
+    kioskFile: path.join(base, "data", "kiosk-opened.txt"),
+    logFile: path.join(base, "data", "logs", "update.log"),
+    sawPage: "",
+  };
+  cleanup();
+  buildFixture(ctx);
+  const created = registerTasks(ctx);
+  if (created.status !== 0) {
+    throw new Error(`Could not register the wall tasks.\n${created.stdout || ""}\n${created.stderr || ""}`);
   }
-  throw new Error(`wall did not serve the updated page: ${last}`);
+  const boot = await runBoot(ctx);
+  const log = fs.existsSync(ctx.logFile) ? fs.readFileSync(ctx.logFile, "utf8") : "";
+  if (boot.timedOut || boot.code !== 0) {
+    throw new Error(`Boot script did not finish (code ${boot.code}).\n${boot.stdout || ""}\n${boot.stderr || ""}\n${log}`);
+  }
+  orderOf(log, spec.order);
+  const opened = wallMs(log);
+  const scanned = zeroMs(log);
+  if (opened === null || scanned === null) throw new Error(`missing timings\n${log}`);
+  if (spec.maxWallMs && opened > spec.maxWallMs) {
+    throw new Error(`${spec.name} reached the wall in ${opened}ms, above ${spec.maxWallMs}ms\n${log}`);
+  }
+  const kiosk = fs.existsSync(ctx.kioskFile) ? fs.readFileSync(ctx.kioskFile, "utf8") : "";
+  const starts = kiosk.split(/\r?\n/).filter((line) => line.includes("fullscreen kiosk")).length;
+  if (starts !== 1) throw new Error(`${spec.name} started the kiosk ${starts} times\n${kiosk}\n${log}`);
+  const kioskPhases = log.split("phase wall-kiosk").length - 1;
+  if (kioskPhases !== 1) throw new Error(`${spec.name} logged phase wall-kiosk ${kioskPhases} times\n${log}`);
+  if (spec.page) {
+    const deadline = Date.now() + 10000;
+    let body = "";
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/display/1`);
+        body = await res.text();
+        if (body.includes(spec.page)) break;
+      } catch (err) {
+        body = err.message;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!body.includes(spec.page)) throw new Error(`${spec.name} page was ${body}`);
+  }
+  if (spec.sawFirst && !boot.seen.some((line) => String(line).includes(spec.sawFirst))) {
+    throw new Error(`${spec.name} never served ${spec.sawFirst} before the swap; saw ${boot.seen.join(", ") || "nothing"}`);
+  }
+  if (spec.serverOnly && !log.includes("restarted the server only")) {
+    throw new Error(`${spec.name} restarted more than the server\n${log}`);
+  }
+  if (spec.serverOnly && log.includes("kiosk was dead")) {
+    throw new Error(`${spec.name} restarted the kiosk windows\n${log}`);
+  }
+  if (spec.corrupt) {
+    const pathFile = path.join(ctx.appRoot, "node_modules", "electron", "path.txt");
+    const bytes = fs.readFileSync(pathFile);
+    if (bytes.length && bytes.every((byte) => byte === 0)) {
+      throw new Error("electron path.txt is still zero-filled");
+    }
+  }
+  return { name: spec.name, opened, scanned, log };
 }
 
 async function main() {
   cleanup();
+  const results = [];
   try {
-    buildFixture();
-    const created = registerTasks();
-    if (created.status !== 0) {
-      fail(`Could not register the wall tasks.\n${created.stdout || ""}\n${created.stderr || ""}`);
-      return;
-    }
-    console.log(String(created.stdout || "").trim());
-    const boot = await runBoot();
-    const logFile = path.join(dataDir, "logs", "update.log");
-    const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "";
-    if (boot.timedOut || boot.code !== 0) {
-      fail(`Boot script did not finish (code ${boot.code}).\n${boot.stdout || ""}\n${boot.stderr || ""}\n${log}`);
-      return;
-    }
-    if (!boot.opened) {
-      fail(`Network delay was not observed.\n${log}`);
-      return;
-    }
-    try {
-      orderOf(log, [
+    results.push(await scenario({
+      name: "healthy",
+      port: 18766,
+      dnsTimeout: 4,
+      killAfter: 60000,
+      maxWallMs: 15000,
+      releaseDns: false,
+      update: false,
+      corrupt: false,
+      page: "wall-open-A",
+      order: [
+        "phase quick-check",
+        "quick check ok",
+        "phase wall-server",
+        "phase wall-kiosk",
+        "wall open at",
+        "phase zero-scan",
+        "phase upload-check",
+        "upload check ok",
+        "phase dns-wait",
+        "waiting for github.com",
+        "phase update-skip",
+        "network unavailable; skipping the update",
+      ],
+    }));
+    results.push(await scenario({
+      name: "update",
+      port: 18767,
+      dnsTimeout: 30,
+      killAfter: 180000,
+      maxWallMs: 15000,
+      releaseDns: true,
+      update: true,
+      corrupt: false,
+      page: "wall-open-B",
+      sawFirst: "wall-open-A",
+      serverOnly: true,
+      order: [
+        "phase quick-check",
+        "quick check ok",
+        "phase wall-server",
+        "wall open at",
+        "phase upload-check",
+        "upload check ok",
         "phase dns-wait",
         "waiting for github.com",
         "github.com resolves",
         "phase update-plan",
-        "result=update-available",
         "update available",
-        "phase update-apply",
-        "result=updated",
-        "phase integrity",
-        "install integrity ok",
+        "phase update-stage",
+        "phase update-swap",
+        "restarted the server only",
+      ],
+    }));
+    results.push(await scenario({
+      name: "repair",
+      port: 18768,
+      dnsTimeout: 4,
+      killAfter: 180000,
+      releaseDns: false,
+      update: false,
+      corrupt: true,
+      page: "wall-open-A",
+      order: [
+        "phase quick-check",
+        "quick check failed; repairing before the wall",
         "phase wall-server",
-        "phase wall-kiosk",
-        "server and kiosk started",
-      ]);
-    } catch (err) {
-      fail(err.message);
-      return;
+        "wall open at",
+        "phase zero-scan",
+        "phase upload-check",
+        "upload check ok",
+        "phase dns-wait",
+      ],
+    }));
+    for (const result of results) {
+      console.log(`${result.name}: wall open at ${result.opened}ms; full zero-scan ${result.scanned}ms`);
     }
-    const zero = path.join(appRoot, "node_modules", "sharp", "index.js");
-    if (fs.existsSync(zero)) {
-      fail("The zero-filled file is still in the live install.");
-      return;
-    }
-    const page = fs.readFileSync(path.join(appRoot, "src", "server.js"), "utf8");
-    if (!page.includes("wall-open-B")) {
-      fail("The live install is not the updated commit.");
-      return;
-    }
-    const status = JSON.parse(fs.readFileSync(path.join(dataDir, "logs", "update-status.json"), "utf8"));
-    if (status.action !== "updated" || status.integrityOk !== true) {
-      fail(`Unexpected update status ${JSON.stringify(status)}`);
-      return;
-    }
-    const body = await readDisplay();
-    if (!body.includes("wall-open-B")) {
-      fail(`Wall page was ${body}`);
-      return;
-    }
-    const kiosk = fs.existsSync(kioskFile) ? fs.readFileSync(kioskFile, "utf8") : "";
-    if (!kiosk.includes("fullscreen kiosk")) {
-      fail(`Kiosk task did not open.\n${kiosk}`);
-      return;
-    }
-    console.log("Cold boot waited for the network, installed the update, repaired the corrupt tree, and opened the wall.");
+    console.log("Healthy boot opens the wall before DNS. A background update restarts only the server. A failed quick check repairs before the wall.");
+    console.log("The zero-scan figure is this small fixture. A full node_modules walk on the venue SER5 was about 66s, which is why it stays behind the open wall.");
   } catch (err) {
+    for (const result of results) {
+      console.log(`${result.name}: wall open at ${result.opened}ms; full zero-scan ${result.scanned}ms`);
+    }
     fail(err && err.stack ? err.stack : String(err));
   } finally {
     cleanup();

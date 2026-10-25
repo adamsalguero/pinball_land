@@ -92,10 +92,10 @@ async function walkFiles(root, onFile) {
   }
 }
 
-async function listZeroFilled(root) {
+async function listZeroFilled(root, { includeModules = true } = {}) {
   const found = [];
   const targets = [
-    path.join(root, "node_modules"),
+    ...(includeModules ? [path.join(root, "node_modules")] : []),
     path.join(root, "src"),
     path.join(root, "package.json"),
     path.join(root, "package-lock.json"),
@@ -144,13 +144,22 @@ async function checkElectron(root) {
   return { ok: true, detail: "electron is installed" };
 }
 
+function zeroFilledResult(zeros) {
+  const sample = zeros.slice(0, 5).join(", ");
+  return { ok: false, detail: `${zeros.length} zero-filled file${zeros.length === 1 ? "" : "s"}: ${sample}` };
+}
+
 async function scanInstall(root) {
   if (!(await exists(root))) return { ok: false, detail: "install folder is missing" };
   const zeros = await listZeroFilled(root);
-  if (zeros.length) {
-    const sample = zeros.slice(0, 5).join(", ");
-    return { ok: false, detail: `${zeros.length} zero-filled file${zeros.length === 1 ? "" : "s"}: ${sample}` };
-  }
+  if (zeros.length) return zeroFilledResult(zeros);
+  return checkElectron(root);
+}
+
+async function quickScanInstall(root) {
+  if (!(await exists(root))) return { ok: false, detail: "install folder is missing" };
+  const zeros = await listZeroFilled(root, { includeModules: false });
+  if (zeros.length) return zeroFilledResult(zeros);
   return checkElectron(root);
 }
 
@@ -276,6 +285,7 @@ async function writeIntegrityStatus(dataDir, integrity) {
 module.exports = {
   stagePaths,
   scanInstall,
+  quickScanInstall,
   fileIsZeroFilled,
   flushVolume,
   recoverInterrupted,
