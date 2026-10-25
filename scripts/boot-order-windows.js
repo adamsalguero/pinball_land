@@ -173,8 +173,10 @@ function registerTasks(ctx) {
   ].join("\r\n"), "utf8");
   fs.writeFileSync(kioskPs1, [
     "$ErrorActionPreference = 'Continue'",
+    `$dir = Split-Path -Parent ${psQuote(ctx.kioskFile)}`,
+    "if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }",
     `Add-Content -LiteralPath ${psQuote(ctx.kioskFile)} -Value 'fullscreen kiosk' -Encoding UTF8`,
-    "while ($true) { Start-Sleep -Seconds 30 }",
+    "while ($true) { Start-Sleep -Seconds 5 }",
     "",
   ].join("\r\n"), "utf8");
   const lines = [
@@ -183,7 +185,8 @@ function registerTasks(ctx) {
     "$user = $env:USERNAME",
   ];
   for (const [name, file] of [[serverTask, serverPs1], [kioskTask, kioskPs1]]) {
-    lines.push(`$action = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ${psQuote(file)}"`);
+    const taskFile = String(file).replace(/"/g, "");
+    lines.push(`$action = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"${taskFile}\`""`);
     lines.push("$trigger = New-ScheduledTaskTrigger -Once -At ([datetime]::Parse('2035-01-01T00:00:00'))");
     lines.push("$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)");
     lines.push("$ok = $false");
