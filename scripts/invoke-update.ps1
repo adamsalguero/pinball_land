@@ -85,17 +85,46 @@ function Start-PinballTask {
   param([Parameter(Mandatory = $true)][string]$Name)
   $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
   if (-not $task) {
+    Write-UpdateTrace "scheduled task $Name is not registered"
     Write-Warning "Scheduled task '$Name' is not registered."
-    return
+    return $false
   }
-  if ([string]$task.State -eq "Running") { return }
-  Start-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+  if ([string]$task.State -eq "Running") {
+    Write-UpdateTrace "$Name already running"
+    return $true
+  }
+  try {
+    Start-ScheduledTask -TaskName $Name -ErrorAction Stop
+    Write-UpdateTrace "started $Name"
+    return $true
+  } catch {
+    Write-UpdateTrace "Start-ScheduledTask $Name failed: $($_.Exception.Message)"
+    Write-Warning "Could not start '$Name': $($_.Exception.Message)"
+    return $false
+  }
+}
+
+function Start-HiddenLauncher {
+  param([Parameter(Mandatory = $true)][string]$Kind)
+  $vbs = Join-Path $PSScriptRoot "launch-hidden.vbs"
+  $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+  if (-not (Test-Path -LiteralPath $vbs) -or -not (Test-Path -LiteralPath $wscript)) {
+    Write-UpdateTrace "hidden launcher missing for $Kind"
+    return $false
+  }
+  Start-Process -FilePath $wscript -ArgumentList @("//B", "//Nologo", $vbs, $Kind) -WindowStyle Hidden
+  Write-UpdateTrace "started hidden $Kind"
+  return $true
 }
 
 function Start-Wall {
-  Start-PinballTask -Name $serverTask
+  if (-not (Start-PinballTask -Name $serverTask)) {
+    Start-HiddenLauncher -Kind server | Out-Null
+  }
   Start-Sleep -Seconds 5
-  Start-PinballTask -Name $kioskTask
+  if (-not (Start-PinballTask -Name $kioskTask)) {
+    Start-HiddenLauncher -Kind kiosk | Out-Null
+  }
 }
 
 function Test-GithubDns {
@@ -173,17 +202,18 @@ function Register-UpdateRetry {
   }
 }
 
+try {
 if ($Mode -eq "nightly" -and -not (Test-UpdatesEnabled)) {
   Write-UpdateTrace "skipped because automatic updates are off"
   Write-Host "Automatic updates are off. Nightly restart was not run."
-  exit 0
+  return
 }
 
 $incomingMode = $Mode
 if ($Mode -eq "retry") {
   if (-not (Wait-ForGithubDns -TimeoutSec 120)) {
     Write-UpdateTrace "retry gave up; github.com still does not resolve"
-    exit 0
+    return
   }
   $Mode = "now"
 }
@@ -217,7 +247,14 @@ if ($incomingMode -eq "boot" -and (Test-NetworkSkip (Read-UpdateStatus))) {
   Register-UpdateRetry
 }
 
-Write-Host "Starting the server and the kiosk."
-Start-Wall
-Write-UpdateTrace "server and kiosk started"
+} finally {
+  Write-Host "Starting the server and the kiosk."
+  try {
+    Start-Wall
+    Write-UpdateTrace "server and kiosk started"
+  } catch {
+    Write-UpdateTrace "Start-Wall failed: $($_.Exception.Message)"
+    Write-Warning "The wall did not start: $($_.Exception.Message)"
+  }
+}
 exit 0

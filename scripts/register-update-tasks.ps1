@@ -113,15 +113,20 @@ $kioskCmd = Join-Path $RepoRoot "scripts\start-kiosk.cmd"
 if (-not (Test-Path -LiteralPath $kioskCmd)) {
   throw "Missing $kioskCmd"
 }
+$hidden = Join-Path $PSScriptRoot "launch-hidden.vbs"
+if (-not (Test-Path -LiteralPath $hidden)) {
+  throw "Missing $hidden"
+}
 
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
-$powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
 $user = $env:USERNAME
+$hiddenArgs = "//B //Nologo `"$hidden`""
 
-$serverAction = New-ScheduledTaskAction -Execute $nodeExe -Argument "`"$RepoRoot\src\server.js`"" -WorkingDirectory $RepoRoot
-$kioskAction = New-ScheduledTaskAction -Execute $kioskCmd -WorkingDirectory $RepoRoot
-$bootAction = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -Mode boot" -WorkingDirectory $RepoRoot
-$nightlyAction = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -Mode nightly" -WorkingDirectory $RepoRoot
+$serverAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs server" -WorkingDirectory $RepoRoot
+$kioskAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs kiosk" -WorkingDirectory $RepoRoot
+$bootAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs boot" -WorkingDirectory $RepoRoot
+$nightlyAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs nightly" -WorkingDirectory $RepoRoot
 
 $clock = Get-NightlyClock -Root $RepoRoot
 $match = [regex]::Match($clock, '^(\d{1,2}):(\d{2})$')

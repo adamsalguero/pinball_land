@@ -9,6 +9,7 @@ const {
   mergeUxplayArguments,
   uxplayArgumentPaths,
   writeUxplayArguments,
+  airplayBackoffMs,
   AirplayController,
 } = require("../src/airplay");
 
@@ -68,6 +69,66 @@ test("uxplay arguments name the receiver Pinball Land and keep other flags", () 
   assert.match(files.get(paths[0]), /^-n "Pinball Land" -nh -dacp/);
   assert.doesNotMatch(files.get(paths[0]), /uxplay-windows/);
   assert.match(files.get(paths[1]), /^-n "Pinball Land" -nh\n?$/);
+});
+
+test("a locked ProgramData arguments file does not throw, and UxPlay backs off", () => {
+  const files = new Map();
+  const fsImpl = {
+    readFileSync(file) {
+      if (!files.has(file)) {
+        const err = new Error("missing");
+        err.code = "ENOENT";
+        throw err;
+      }
+      return files.get(file);
+    },
+    mkdirSync() {},
+    writeFileSync(file, body) {
+      if (String(file).includes("ProgramData")) {
+        const err = new Error("operation not permitted");
+        err.code = "EPERM";
+        throw err;
+      }
+      files.set(file, body);
+    },
+  };
+  const written = writeUxplayArguments({
+    platform: "win32",
+    env: { PROGRAMDATA: "C:\\ProgramData", APPDATA: "C:\\Users\\a\\AppData\\Roaming" },
+    fsImpl,
+  });
+  assert.equal(written.length, 1);
+  assert.match(written[0], /AppData/);
+  assert.equal(written.denied.length, 1);
+  assert.equal(airplayBackoffMs(0), 5000);
+  assert.equal(airplayBackoffMs(1), 10000);
+  assert.equal(airplayBackoffMs(8), 60000);
+
+  let spawned = 0;
+  const controller = new AirplayController({
+    platform: "win32",
+    root: "C:\\pinball-land",
+    exists: () => true,
+    alreadyRunning: () => false,
+    getAirplayConfig: () => ({
+      command: "C:\\pinball-land\\tools\\uxplay-windows\\uxplay-windows.exe",
+    }),
+    spawnImpl() {
+      spawned += 1;
+      const child = new EventEmitter();
+      child.pid = 7;
+      return child;
+    },
+  });
+  controller.rememberArguments = () => false;
+  const blocked = controller.ensureRunning();
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.error, /arguments/);
+  assert.equal(spawned, 0);
+  assert.ok(controller.argumentBackoffUntil > Date.now());
+  const again = controller.ensureRunning();
+  assert.match(again.error, /backing off/);
+  assert.equal(spawned, 0);
 });
 
 test("ensureRunning does not spawn when uxplay is already running", () => {
