@@ -1,8 +1,10 @@
 const fs = require("fs/promises");
 const path = require("path");
+const zlib = require("zlib");
 
 const OPDB_BASE = "https://opdb.org/api";
 const EXPORT_URL = "https://mp-data.sfo3.cdn.digitaloceanspaces.com/opdb-v2.json";
+const BUNDLED_CATALOG = path.join(__dirname, "..", "media", "opdb-catalog.json.gz");
 const CATALOG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const sharedCatalogs = new Map();
 const sharedCatalogFlights = new Map();
@@ -109,11 +111,12 @@ function editionFrom(machine) {
 
 function isPhysicalMachine(item) {
   if (!item || typeof item !== "object") return false;
-  const type = String(item.entryType || item.entry_type || item.type || "").toLowerCase();
-  if (type && type !== "machine") return false;
   if (item.physicalMachine === false || item.physical_machine === false) return false;
+  const type = String(item.entryType || item.entry_type || item.type || "").toLowerCase();
+  // Match Play stores Pro as a machine and Premium, LE, and anniversary editions as aliases.
+  if (type === "machinegroup" || type === "group") return false;
   if (item.physicalMachine === true || item.physical_machine === true) return true;
-  return type === "machine";
+  return type === "machine" || type === "alias" || type === "";
 }
 
 function entriesFrom(data) {
@@ -225,12 +228,16 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
       }
       const entries = entriesFrom(parsed);
       if (!entries.length) throw new Error("catalog");
-      if (file && !localExport) {
-        await fs.mkdir(path.dirname(file), { recursive: true });
-        await fs.writeFile(file, JSON.stringify({ entries }));
-      }
       catalogEntries = entries;
       catalogAt = Date.now();
+      if (file && !localExport) {
+        try {
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(file, JSON.stringify({ entries }));
+        } catch {
+          // A locked data dir must not hide a catalog that already loaded.
+        }
+      }
       return catalogEntries;
     } catch {
       if (catalogEntries?.length) return catalogEntries;
@@ -245,6 +252,17 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
         } catch {
           // No catalog yet.
         }
+      }
+      try {
+        const gz = await fs.readFile(BUNDLED_CATALOG);
+        const entries = entriesFrom(JSON.parse(zlib.gunzipSync(gz).toString("utf8")));
+        if (entries.length) {
+          catalogEntries = entries;
+          catalogAt = Date.now();
+          return catalogEntries;
+        }
+      } catch {
+        // The bundled export is missing.
       }
       return catalogEntries || [];
     }
@@ -412,8 +430,7 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
       if (!id || !cacheDir) return empty;
       const dir = path.join(cacheDir, id);
       await fs.mkdir(dir, { recursive: true });
-      let machine = null;
-      if (process.env.PINBALL_OPDB_EXPORT) machine = await catalogMachine(id);
+      let machine = await catalogMachine(id);
       if (!machine && key) {
         try {
           machine = await this.getMachine(id);
@@ -421,7 +438,6 @@ function createOpdb({ apiKey = "", cacheDir, fetchImpl } = {}) {
           machine = null;
         }
       }
-      if (!machine) machine = await catalogMachine(id);
       if (!machine) return empty;
       await fs.writeFile(path.join(dir, "machine.json"), JSON.stringify(machine, null, 2));
       async function saveNamed(url, stem) {

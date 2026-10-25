@@ -15,7 +15,7 @@
       "name": "JAWS (Premium)",
       "year": 2024,
       "physicalMachine": true,
-      "entryType": "machine",
+      "entryType": "alias",
       "manufacturer": { "name": "Stern" },
       "features": [{ "name": "Premium edition", "group": "edition" }],
       "images": [
@@ -28,7 +28,7 @@
       "name": "JAWS (LE)",
       "year": 2024,
       "physicalMachine": true,
-      "entryType": "machine",
+      "entryType": "alias",
       "manufacturer": { "name": "Stern" },
       "features": [{ "name": "LE edition", "group": "edition" }],
       "images": [{ "type": "backglass", "urls": { "medium": "http://127.0.0.1:9/jaws-le-backglass.jpg" } }]
@@ -38,7 +38,7 @@
       "name": "Jaws (50th anniversary)",
       "year": 2025,
       "physicalMachine": true,
-      "entryType": "machine",
+      "entryType": "alias",
       "manufacturer": { "name": "Stern" },
       "features": [{ "name": "50th anniversary edition", "group": "edition" }],
       "images": [{ "type": "backglass", "urls": { "medium": "http://127.0.0.1:9/jaws-50-backglass.jpg" } }]
