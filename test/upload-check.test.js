@@ -69,6 +69,48 @@ test("upload repair copies sharp from the backup tree and rechecks", async () =>
   assert.match(status.integrityDetail, /bad native binding|reinstalled sharp|upload path ok/);
 });
 
+test("a zero-filled file inside sharp fails the upload check and is repaired", async () => {
+  const live = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-upload-zero-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-upload-zero-data-"));
+  const paths = stagePaths(live);
+  await copyProcessor(live);
+  for (const name of ["sharp", "@img", "detect-libc"]) {
+    await fs.cp(path.join(root, "node_modules", name), path.join(live, "node_modules", name), { recursive: true, force: true });
+  }
+  await fs.cp(live, paths.previous, { recursive: true });
+  const nested = path.join(live, "node_modules", "sharp", "node_modules", "semver", "ranges", "valid.js");
+  await fs.writeFile(nested, Buffer.alloc(326, 0));
+  const failed = await checkUploadPath(live);
+  assert.equal(failed.ok, false);
+  assert.match(failed.detail, /upload path failed/);
+  assert.match(failed.detail, /unexpected token|Invalid or unexpected token/i);
+  const { GuestAlbum } = require("../src/photos");
+  const { createRequire } = require("module");
+  const guestDir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-upload-guest-"));
+  const album = new GuestAlbum({
+    root: guestDir,
+    sharpLoader() {
+      return createRequire(path.join(live, "package.json"))("sharp");
+    },
+  });
+  await assert.rejects(
+    () => album.ingest(Buffer.from("not-a-photo"), { ip: "guest-zero" }),
+    (err) => err.status === 503 && err.message === "photo processor unavailable"
+  );
+  const repaired = await repairUploadPath({ appRoot: live, dataDir });
+  assert.equal(repaired.ok, true);
+  assert.equal(repaired.action, "repaired");
+  assert.match(repaired.detail, /reinstalled sharp/);
+  assert.match(repaired.detail, /upload path ok/);
+  const restored = await fs.readFile(nested);
+  assert.equal(restored.every((byte) => byte === 0), false);
+  const again = await checkUploadPath(live);
+  assert.equal(again.ok, true);
+  const status = JSON.parse(await fs.readFile(path.join(dataDir, "logs", "update-status.json"), "utf8"));
+  assert.equal(status.integrityOk, true);
+  assert.match(status.integrityDetail, /upload path ok/);
+});
+
 test("upload repair rolls back when the package copy cannot fix the tree", async () => {
   const live = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-upload-roll-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-upload-roll-data-"));
