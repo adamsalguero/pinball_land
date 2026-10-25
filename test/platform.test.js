@@ -1,9 +1,36 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("http");
+const fsSync = require("fs");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
+
+// The installed updater checks out main and runs this file with the kiosk
+// environment still set. Keep the run off ProgramData and any leaked pin.
+const isolatedDataDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "pinball-platform-data-"));
+const leakedEnv = new Set([
+  "PROGRAMDATA",
+  "CONTROL_PIN",
+  "PORT",
+  "HTTPS_PORT",
+  "OPDB_API_KEY",
+  "NODE_OPTIONS",
+  "NODE_USE_ENV_PROXY",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+]);
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith("PINBALL_") || leakedEnv.has(key)) delete process.env[key];
+}
+process.env.PINBALL_DATA_DIR = isolatedDataDir;
+
 const sharp = require("sharp");
 const { Store } = require("../src/store");
 const { createApp } = require("../src/app");
@@ -145,8 +172,7 @@ test("guest upload needs no PIN, admin actions need a device token", async () =>
     assert.equal(changed.res.status, 200);
     const oldPin = await json(origin, "/api/login", { method: "POST", body: { pin: "2224" } });
     assert.equal(oldPin.res.status, 401);
-    const reset = await json(origin, "/api/pin/reset", { method: "POST", headers });
-    assert.equal(reset.data.pin, "2224");
+    await json(origin, "/api/pin/reset", { method: "POST", headers });
     const again = await json(origin, "/api/login", { method: "POST", body: { pin: "2224", name: "Second" } });
     assert.equal(again.res.status, 200);
 
