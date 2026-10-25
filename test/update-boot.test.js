@@ -42,11 +42,33 @@ test("server and kiosk tasks launch through a hidden script", () => {
   assert.match(register, /\$hiddenArgs nightly/);
   assert.match(launcher, /\/\/B \/\/Nologo/);
   assert.match(launcher, /src\\server\.js/);
-  assert.match(launcher, /electron\.exe/);
-  assert.match(launcher, /src\\kiosk\.js/);
+  assert.match(launcher, /start-kiosk\.ps1/);
   assert.match(launcher, /invoke-update\.ps1/);
   assert.match(launcher, /-WindowStyle Hidden/);
   assert.match(launcher, /shell\.Run command, 0, False/);
+  assert.match(launcher, /shell\.Run command, 0, True/);
+  const server = read("src/server.js");
+  assert.match(server, /function hideServerConsole\(/);
+  assert.match(server, /GetConsoleWindow/);
+  assert.match(server, /ShowWindow/);
+  assert.match(server, /require\.main === module/);
+  assert.match(server, /hideServerConsole\(\)/);
+});
+
+test("the kiosk task opens Chrome when Electron exits early", () => {
+  const cmd = read("scripts/start-kiosk.cmd");
+  const starter = read("scripts/start-kiosk.ps1");
+  const kiosk = read("src/kiosk.js");
+  assert.match(cmd, /start-kiosk\.ps1/);
+  assert.match(cmd, /exit \/b %ERRORLEVEL%/);
+  assert.match(starter, /electron\\dist\\electron\.exe/);
+  assert.match(starter, /src\\kiosk\.js/);
+  assert.match(starter, /open-wall-chrome\.ps1/);
+  assert.match(starter, /WaitForExit\(15000\)/);
+  assert.match(starter, /exited early/);
+  assert.match(kiosk, /setPath\("userData", kioskUserData\)/);
+  assert.match(kiosk, /single-instance lock/);
+  assert.match(kiosk, /app\.exit\(0\)/);
 });
 
 test("the score QR sits in the bottom-right and does not share the title row", () => {

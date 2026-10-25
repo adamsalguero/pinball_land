@@ -2,8 +2,9 @@
 ' Usage: wscript.exe //B //Nologo launch-hidden.vbs server|kiosk|boot|nightly|now|retry
 Option Explicit
 
-Dim mode, shell, fso, root, nodeExe, electronExe, command
+Dim mode, shell, fso, root, nodeExe, command, waitForCommand
 mode = ""
+waitForCommand = False
 If WScript.Arguments.Count >= 1 Then mode = LCase(WScript.Arguments(0))
 
 Set shell = CreateObject("WScript.Shell")
@@ -30,17 +31,22 @@ Function FindNode()
 End Function
 
 nodeExe = FindNode()
-electronExe = root & "\node_modules\electron\dist\electron.exe"
 
 If mode = "server" Then
   command = """" & nodeExe & """ """ & root & "\src\server.js"""
 ElseIf mode = "kiosk" Then
-  command = """" & electronExe & """ """ & root & "\src\kiosk.js"""
+  ' Wait so an early Electron exit can still open the wall in Chrome.
+  command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & root & "\scripts\start-kiosk.ps1"""
+  waitForCommand = True
 ElseIf mode = "boot" Or mode = "nightly" Or mode = "now" Or mode = "retry" Then
   command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & root & "\scripts\invoke-update.ps1"" -Mode " & mode
 Else
   WScript.Quit 1
 End If
 
-' 0 = hidden window. False = do not wait.
-shell.Run command, 0, False
+' 0 = hidden window. The kiosk script waits; the others return immediately.
+If waitForCommand Then
+  shell.Run command, 0, True
+Else
+  shell.Run command, 0, False
+End If
