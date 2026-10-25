@@ -74,7 +74,8 @@ async function startServer(extra = {}) {
     guestPhotosDir: path.join(dir, "guest-photos"),
     catalogPath: path.join(root, "media", "catalog.json"),
     clock: () => now,
-    publicProbe: extra.publicProbe || (async () => ({ url: "", source: "" })),
+    tunnelImpl: extra.tunnelImpl || null,
+    probeFetch: extra.probeFetch || null,
   });
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -199,25 +200,39 @@ test("internet guests need today's or yesterday's QR, then a 12 hour cookie", as
   }
 });
 
-test("public access uses the funnel URL in the QR and falls back when it is off", async () => {
-  const started = await startServer({
-    publicProbe: async () => ({ url: "https://pinball.example.ts.net", source: "tailscale" }),
-  });
+function assertNoPrivateGuestHost(value) {
+  const text = String(value || "");
+  assert.equal(/100\.\d+\.\d+\.\d+/.test(text), false, text);
+  assert.equal(/\.ts\.net/i.test(text), false, text);
+  assert.equal(/localhost|127\.0\.0\.1|\[::1\]/i.test(text), false, text);
+  assert.equal(/\b(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d+\.\d+\b/.test(text), false, text);
+}
+
+function fakeHeaders(map = {}) {
+  const lower = {};
+  for (const [key, value] of Object.entries(map)) lower[key.toLowerCase()] = value;
+  return { get(name) { return lower[String(name).toLowerCase()] || null; } };
+}
+
+test("public access stays off the wall until Cloudflare answers", async () => {
+  const started = await startServer();
   try {
     const off = await json(started.origin, "/api/state", { headers: { "x-pin": "2224" } });
     assert.equal(off.data.publicAccess.enabled, false);
-    assert.equal(String(off.data.guest.publicUrl || "").includes("?k="), false);
+    assert.equal(off.data.guest.publicUrl || null, null);
+    assert.equal(off.data.guest.scoreUrl || null, null);
     const on = await json(started.origin, "/api/public-access", {
       method: "PUT",
       headers: { "x-pin": "2224" },
       body: { enabled: true },
     });
     assert.equal(on.res.status, 200);
-    assert.equal(on.data.publicAccess.url, "https://pinball.example.ts.net");
-    assert.match(on.data.guest.publicUrl, /^https:\/\/pinball\.example\.ts\.net\/\?k=/);
-    const secret = JSON.parse(await fs.readFile(started.configPath, "utf8")).guestSecret;
-    const token = guestToken(secret, guestDay(started.now()));
-    assert.equal(on.data.guest.publicUrl, `https://pinball.example.ts.net/?k=${token}`);
+    assert.equal(on.data.publicAccess.url, "");
+    assert.equal(on.data.guest.publicUrl || null, null);
+    assert.equal(on.data.guest.scoreUrl || null, null);
+    assert.match(on.data.publicAccess.detail, /Cloudflare is off while tests are running/);
+    assertNoPrivateGuestHost(JSON.stringify(on.data.guest));
+    assertNoPrivateGuestHost(on.data.publicAccess.url);
     const hidden = await json(started.origin, "/api/state", { headers: { "x-forwarded-for": "1.1.1.1" } });
     assert.equal(hidden.res.status, 404);
   } finally {
@@ -225,30 +240,170 @@ test("public access uses the funnel URL in the QR and falls back when it is off"
   }
 });
 
-test("public access names an unapproved funnel instead of starting cloudflare", async () => {
-  const started = await startServer({
-    publicProbe: async () => ({
-      url: "",
-      source: "",
-      installed: true,
-      loggedIn: true,
-      funnel: false,
-      approvalUrl: "https://login.tailscale.com/f/funnel?node=n1",
-    }),
-  });
+test("wall QRs use only a verified Cloudflare URL and appear together", async () => {
+  let tunnelUrl = "";
+  let starts = 0;
+  const fetched = [];
+  let phase = "down";
+  const tunnelImpl = {
+    start() {
+      starts += 1;
+      if (!tunnelUrl) tunnelUrl = "https://pinball-guest.trycloudflare.com";
+    },
+    stop() {
+      tunnelUrl = "";
+    },
+    status() {
+      return {
+        url: tunnelUrl,
+        detail: tunnelUrl
+          ? `Cloudflare is up. Guests use ${tunnelUrl}`
+          : "Cloudflare is starting. The guest link will show here when it is ready.",
+      };
+    },
+  };
+  const probeFetch = async (url, options = {}) => {
+    const target = String(url);
+    fetched.push(target);
+    const parsed = new URL(target);
+    assert.equal(parsed.protocol, "https:");
+    assert.match(parsed.hostname, /^[a-z0-9-]+\.trycloudflare\.com$/);
+    assertNoPrivateGuestHost(target);
+    if (phase === "down") return { status: 503, headers: fakeHeaders() };
+    if (phase === "fail") return { status: 403, headers: fakeHeaders() };
+    const allowed = phase === "moved" ? "party-guest.trycloudflare.com" : "pinball-guest.trycloudflare.com";
+    if (parsed.hostname !== allowed) return { status: 502, headers: fakeHeaders() };
+    if (parsed.searchParams.get("k")) {
+      return {
+        status: 302,
+        headers: fakeHeaders({ location: "/", "set-cookie": "pl_guest=ok; Path=/" }),
+      };
+    }
+    const cookie = options.headers?.cookie || "";
+    if (cookie.includes("pl_guest=ok") && parsed.pathname === "/") {
+      return { status: 200, headers: fakeHeaders() };
+    }
+    return { status: 403, headers: fakeHeaders() };
+  };
+  const started = await startServer({ tunnelImpl, probeFetch });
+  const qrcode = require("qrcode");
+  const original = qrcode.toBuffer;
+  const encoded = [];
+  qrcode.toBuffer = async (text, options) => {
+    encoded.push(text);
+    return original.call(qrcode, text, options);
+  };
+  const boardToken = "11111111-1111-4111-8111-111111111111";
+  const forbidden = [
+    "http://100.117.20.93:3010",
+    "https://pinball.example.ts.net",
+    "http://127.0.0.1:3010",
+    "http://192.168.1.20:3010",
+    "http://10.0.0.8:3010",
+  ];
   try {
-    const on = await json(started.origin, "/api/public-access", {
+    const blocked = await json(started.origin, "/api/public-access", {
       method: "PUT",
       headers: { "x-pin": "2224" },
-      body: { enabled: true, cloudflare: true },
+      body: { enabled: true, cloudflare: false },
     });
-    assert.equal(on.res.status, 200);
-    assert.equal(on.data.publicAccess.url, "");
-    assert.equal(on.data.publicAccess.source, "");
-    assert.match(on.data.publicAccess.detail, /Tailscale is installed, but Funnel is not approved/);
-    assert.match(on.data.publicAccess.detail, /https:\/\/login\.tailscale\.com\/f\/funnel\?node=n1/);
-    assert.equal(String(on.data.guest.publicUrl || "").includes("trycloudflare"), false);
+    assert.equal(blocked.res.status, 200);
+    assert.ok(starts >= 1);
+    assert.equal(blocked.data.publicAccess.url, "");
+    assert.equal(blocked.data.guest.publicUrl || null, null);
+    assert.equal(blocked.data.guest.scoreUrl || null, null);
+    assert.equal(fetched.length > 0, true);
+    const guestHidden = await fetch(`${started.origin}/api/guest-qr`);
+    const scoreHidden = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
+    assert.equal(guestHidden.status, 404);
+    assert.equal(scoreHidden.status, 404);
+    assert.equal(encoded.length, 0);
+    assertNoPrivateGuestHost(JSON.stringify(blocked.data.guest));
+    assertNoPrivateGuestHost(blocked.data.publicAccess.detail);
+
+    for (const bad of forbidden) {
+      const before = fetched.length;
+      tunnelUrl = bad;
+      const refused = await json(started.origin, "/api/public-access", {
+        method: "PUT",
+        headers: { "x-pin": "2224" },
+        body: { enabled: true },
+      });
+      assert.equal(refused.data.guest.publicUrl || null, null);
+      assert.equal(refused.data.guest.scoreUrl || null, null);
+      assert.equal(fetched.length, before);
+      assert.equal(encoded.length, 0);
+    }
+
+    phase = "ok";
+    tunnelUrl = "https://pinball-guest.trycloudflare.com";
+    const ready = await json(started.origin, "/api/public-access", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { enabled: true },
+    });
+    const secret = JSON.parse(await fs.readFile(started.configPath, "utf8")).guestSecret;
+    const token = guestToken(secret, guestDay(started.now()));
+    const guestUrl = `https://pinball-guest.trycloudflare.com/?k=${token}`;
+    assert.equal(ready.data.publicAccess.url, "https://pinball-guest.trycloudflare.com");
+    assert.equal(ready.data.publicAccess.source, "cloudflare");
+    assert.equal(ready.data.guest.publicUrl, guestUrl);
+    assert.equal(ready.data.guest.scoreUrl, guestUrl);
+    assert.match(ready.data.publicAccess.detail, /Cloudflare is up/);
+    const guestQr = await fetch(`${started.origin}/api/guest-qr`);
+    const scoreQr = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
+    assert.equal(guestQr.status, 200);
+    assert.equal(scoreQr.status, 200);
+    assert.match(guestQr.headers.get("content-type") || "", /image\/png/);
+    assert.match(scoreQr.headers.get("content-type") || "", /image\/png/);
+    assert.equal(encoded.at(-2), guestUrl);
+    const scoreLink = new URL(encoded.at(-1));
+    assert.equal(scoreLink.origin, "https://pinball-guest.trycloudflare.com");
+    assert.equal(scoreLink.searchParams.get("k"), token);
+    assert.equal(scoreLink.searchParams.get("tab"), "scores");
+    assert.equal(scoreLink.searchParams.get("board"), boardToken);
+    for (const text of encoded) assertNoPrivateGuestHost(text);
+    const beforeRemote = encoded.length;
+    const remoteGuest = await fetch(`${started.origin}/api/guest-qr`, { headers: { "x-forwarded-for": "8.8.8.8" } });
+    const remoteScore = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`, { headers: { "x-forwarded-for": "8.8.8.8" } });
+    assert.equal(remoteGuest.status, 404);
+    assert.equal(remoteScore.status, 404);
+    assert.equal(encoded.length, beforeRemote);
+
+    phase = "fail";
+    const dropped = await json(started.origin, "/api/public-access", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { enabled: true },
+    });
+    assert.equal(dropped.data.publicAccess.url, "");
+    assert.equal(dropped.data.guest.publicUrl || null, null);
+    assert.equal(dropped.data.guest.scoreUrl || null, null);
+    assert.equal((await fetch(`${started.origin}/api/guest-qr`)).status, 404);
+    assert.equal((await fetch(`${started.origin}/api/score-qr?board=${boardToken}`)).status, 404);
+
+    phase = "moved";
+    tunnelUrl = "https://party-guest.trycloudflare.com";
+    const moved = await json(started.origin, "/api/public-access", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { enabled: true },
+    });
+    const movedUrl = `https://party-guest.trycloudflare.com/?k=${token}`;
+    assert.equal(moved.data.guest.publicUrl, movedUrl);
+    assert.equal(moved.data.guest.scoreUrl, movedUrl);
+    assert.equal(String(moved.data.guest.publicUrl).includes("pinball-guest"), false);
+    await fetch(`${started.origin}/api/guest-qr`);
+    await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
+    assert.equal(encoded.at(-2), movedUrl);
+    const movedScore = new URL(encoded.at(-1));
+    assert.equal(movedScore.origin, "https://party-guest.trycloudflare.com");
+    assert.equal(movedScore.searchParams.get("tab"), "scores");
+    assert.equal(movedScore.searchParams.get("board"), boardToken);
+    assert.equal(movedScore.searchParams.get("k"), token);
+    for (const text of encoded) assertNoPrivateGuestHost(text);
   } finally {
+    qrcode.toBuffer = original;
     started.server.close();
   }
 });
@@ -383,6 +538,56 @@ test("a phone photo leaves admin and guest responding", async () => {
   }
 });
 
+test("approved photos stay in auto rotation before the cloudflare QR verifies", async () => {
+  const { planRotation, rotationKey } = require("../src/playlist");
+  const started = await startServer();
+  try {
+    const posted = await fetch(`${started.origin}/api/guest-photos`, {
+      method: "POST",
+      headers: { "content-type": "image/jpeg", "x-caption": "party", "x-guest-name": "Ada" },
+      body: await jpeg("#446688"),
+    });
+    assert.equal(posted.status, 200);
+    await json(started.origin, "/api/rotation", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { items: { pinboard: false } },
+    });
+    const on = await json(started.origin, "/api/public-access", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { enabled: true },
+    });
+    assert.equal(on.data.guest.pinboard, true);
+    assert.equal(on.data.guest.publicUrl || null, null);
+    assert.equal(on.data.guest.scoreUrl || null, null);
+    assert.equal(on.data.guest.photos.some((photo) => photo.status === "approved"), true);
+    assert.equal(on.data.state.rotation.items.pinboard, true);
+    assert.equal(on.data.playlist.some((card) => card.type === "pinboard"), true);
+    const layout = {
+      1: { content: "rotation", enabled: true },
+      2: { content: "rotation", enabled: true },
+      3: { content: "rotation", enabled: true },
+    };
+    let saw = false;
+    for (let tick = 0; tick < on.data.playlist.length; tick += 1) {
+      const plan = planRotation(on.data.playlist, {
+        startedAt: 0,
+        intervalSec: 30,
+        screenCount: 3,
+        layout,
+        now: tick * 30000,
+      });
+      if (["1", "2", "3"].some((slot) => rotationKey(plan[slot]) === "pinboard")) saw = true;
+    }
+    assert.equal(saw, true);
+    assert.equal((await fetch(`${started.origin}/api/guest-qr`)).status, 404);
+    assert.equal((await fetch(`${started.origin}/api/score-qr?board=11111111-1111-4111-8111-111111111111`)).status, 404);
+  } finally {
+    started.server.close();
+  }
+});
+
 test("pinboard off leaves rotation and rejects a pinboard slot", async () => {
   const started = await startServer();
   try {
@@ -403,6 +608,14 @@ test("pinboard off leaves rotation and rejects a pinboard slot", async () => {
       body: { content: "pinboard" },
     });
     assert.equal(slot.res.status, 400);
+    const on = await json(started.origin, "/api/guest-photos/settings", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { pinboard: true },
+    });
+    assert.equal(on.data.guest.pinboard, true);
+    assert.equal(on.data.state.rotation.items.pinboard, true);
+    assert.equal(on.data.playlist.some((card) => card.type === "pinboard"), true);
   } finally {
     started.server.close();
   }
@@ -513,9 +726,7 @@ test("score QR deep-links the public guest app and scores stay pending until aut
   assert.equal(bare.scores.autoApprove, false);
   assert.equal(bare.photos.autoApprove, true);
 
-  const started = await startServer({
-    publicProbe: async () => ({ url: "https://pinball.example.ts.net", source: "tailscale" }),
-  });
+  const started = await startServer();
   const qrcode = require("qrcode");
   const original = qrcode.toBuffer;
   const encoded = [];
@@ -549,33 +760,24 @@ test("score QR deep-links the public guest app and scores stay pending until aut
       body: { publicBaseUrl: "https://guests.example.com" },
     });
     const baseQr = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
-    assert.equal(baseQr.status, 200);
-    assert.match(baseQr.headers.get("content-type") || "", /image\/png/);
-    assert.ok((await baseQr.arrayBuffer()).byteLength > 80);
-    assert.equal(encoded.at(-1), `https://guests.example.com/app?tab=scores&board=${boardToken}`);
+    assert.equal(baseQr.status, 404);
+    assert.equal(await baseQr.text(), "");
+    assert.equal(encoded.length, 0);
 
     const enabled = await json(started.origin, "/api/public-access", {
       method: "PUT",
       headers: { "x-pin": "2224" },
       body: { enabled: true },
     });
-    assert.match(enabled.data.guest.scoreUrl, /^https:\/\/pinball\.example\.ts\.net\/\?k=/);
-    assert.equal(String(enabled.data.guest.scoreUrl).includes("127.0.0.1"), false);
+    assert.equal(enabled.data.guest.scoreUrl || null, null);
+    assert.equal(enabled.data.guest.publicUrl || null, null);
     const funnelQr = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`);
-    assert.equal(funnelQr.status, 200);
-    const link = new URL(encoded.at(-1));
-    assert.equal(link.origin, "https://pinball.example.ts.net");
-    assert.equal(link.searchParams.get("tab"), "scores");
-    assert.equal(link.searchParams.get("board"), boardToken);
-    assert.ok(link.searchParams.get("k"));
-    assert.equal(encoded.at(-1).includes("127.0.0.1"), false);
-    assert.equal(encoded.at(-1).includes(String(started.port)), false);
-    const beforeRemote = encoded.length;
+    assert.equal(funnelQr.status, 404);
+    assert.equal(encoded.length, 0);
     const remote = await fetch(`${started.origin}/api/score-qr?board=${boardToken}`, {
       headers: { "x-forwarded-for": "8.8.8.8" },
     });
     assert.equal(remote.status, 404);
-    assert.equal(encoded.length, beforeRemote);
 
     const added = await json(started.origin, "/api/machines", {
       method: "POST",

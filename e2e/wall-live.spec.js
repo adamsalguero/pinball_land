@@ -245,6 +245,8 @@ test("pinboard polaroids stay inside the 1080p frame", async ({ page }) => {
     await page.goto(`/display/1?preview=pinboard&pins=${count}&shot=1`);
     await page.waitForSelector(".pin-card");
     await page.waitForFunction(() => {
+      const card = document.querySelector(".pin-qr");
+      if (!card || card.hidden) return true;
       const img = document.querySelector("#pin-qr");
       return img && img.complete && img.naturalWidth > 20;
     });
