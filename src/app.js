@@ -44,7 +44,6 @@ const {
   readGuestCookie,
   scanPage,
 } = require("./guest-link");
-const { detectTailscale } = require("./public-access");
 const { createCloudflareTunnel } = require("./cloudflared");
 const { isTunneledRequest, isGuestRoute, guestPortFor } = require("./tunnel");
 const { maskProfanity } = require("./text-filter");
@@ -132,6 +131,32 @@ function publicLeaderboards(leaderboards) {
   });
 }
 
+function cloudflareGuestOrigin(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || ""));
+  } catch {
+    return "";
+  }
+  if (parsed.protocol !== "https:") return "";
+  if (parsed.username || parsed.password || parsed.port) return "";
+  if (!/^[a-z0-9-]+\.trycloudflare\.com$/i.test(parsed.hostname)) return "";
+  return `https://${parsed.hostname}`;
+}
+
+function responseHeader(res, name) {
+  const headers = res?.headers;
+  if (!headers) return "";
+  if (name === "set-cookie" && typeof headers.getSetCookie === "function") {
+    const lines = headers.getSetCookie();
+    if (Array.isArray(lines) && lines.length) return lines.join(", ");
+  }
+  if (typeof headers.get === "function") return String(headers.get(name) || "");
+  const raw = headers[name] ?? headers[String(name).toLowerCase()];
+  if (Array.isArray(raw)) return raw.join(", ");
+  return raw ? String(raw) : "";
+}
+
 function effectiveRotation(state) {
   const override = Number.parseInt(process.env.PINBALL_ROTATION_SEC || "", 10);
   if (Number.isFinite(override) && override >= 1 && override <= 120) {
@@ -166,8 +191,9 @@ function createApp({
   clipCache = false,
   clipIdList = null,
   readyClipIds = null,
-  publicProbe = null,
   ensureGuestListener = null,
+  tunnelImpl = null,
+  probeFetch = null,
 }) {
   const app = express();
   app.set("trust proxy", "loopback");
@@ -368,6 +394,10 @@ function createApp({
   function payload() {
     const state = store.getState();
     const config = currentConfig();
+    // Pinboard photos Off stores this flag as false and used to leave it false after On.
+    if (config.photos.pinboard !== false && state.rotation?.items?.pinboard === false) {
+      state.rotation.items.pinboard = true;
+    }
     const displays = config.displays;
     const mapped = mapDisplaysToSlots(monitors, displays);
     const air = airplayController.ready();
@@ -711,26 +741,21 @@ function createApp({
   const LOGIN_LIMIT = 5;
   const globalLoginFailures = [];
   let publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: 0 };
+  let verifiedOrigin = "";
+  let verifySerial = 0;
   let lastGuestDetail = "";
   let routesReady = false;
   let accessReady = Promise.resolve();
   const tunnelRoot = dataDir || path.dirname(mediaRoot);
   const tunnelLog = path.join(tunnelRoot, "logs", "tunnel.log");
-  const cloudflareTunnel = createCloudflareTunnel({
+  const tunnelAllowed = Boolean(tunnelImpl) || !process.env.NODE_TEST_CONTEXT;
+  const cloudflareTunnel = tunnelImpl || createCloudflareTunnel({
     binDir: path.join(tunnelRoot, "bin"),
     logFile: tunnelLog,
     port: () => guestPortFor(Number(currentConfig().port) || 3000),
     onChange(live) {
-      const access = currentConfig().publicAccess;
-      if (!access?.enabled || !access.cloudflare) return;
-      if (publicStatus.source === "tailscale" && publicStatus.url) return;
-      publicStatus = {
-        url: live.url || "",
-        source: live.url ? "cloudflare" : "",
-        detail: [lastGuestDetail, live.detail].filter(Boolean).join(" "),
-        checkedAt: clockNow(),
-      };
-      broadcast();
+      if (!currentConfig().publicAccess?.enabled) return;
+      void applyTunnel(live).catch((err) => console.error(err));
     },
   });
 
@@ -777,69 +802,129 @@ function createApp({
     }
   }
 
+  async function probeCloudflare(origin) {
+    const fetchImpl = probeFetch || fetch;
+    const token = guestToken(guestSecret(), guestDay(clockNow()));
+    let current = `${origin}/?k=${encodeURIComponent(token)}`;
+    let cookie = "";
+    const host = new URL(origin).hostname;
+    for (let hop = 0; hop < 4; hop += 1) {
+      let res;
+      try {
+        res = await fetchImpl(current, {
+          method: "GET",
+          redirect: "manual",
+          headers: cookie ? { cookie } : {},
+          signal: AbortSignal.timeout(8000),
+        });
+      } catch {
+        return false;
+      }
+      let seen;
+      try {
+        seen = new URL(current);
+      } catch {
+        return false;
+      }
+      if (seen.protocol !== "https:" || seen.hostname !== host) return false;
+      const status = Number(res?.status) || 0;
+      if (status === 200) return true;
+      if (status < 300 || status >= 400) return false;
+      const loc = responseHeader(res, "location");
+      if (!loc) return false;
+      let next;
+      try {
+        next = new URL(loc, current);
+      } catch {
+        return false;
+      }
+      if (next.protocol !== "https:" || next.hostname !== host) return false;
+      const setCookie = responseHeader(res, "set-cookie");
+      const match = /pl_guest=[^;,\s]+/i.exec(setCookie);
+      if (match) cookie = match[0];
+      current = next.toString();
+    }
+    return false;
+  }
+
+  async function applyTunnel(live) {
+    if (!currentConfig().publicAccess?.enabled) return publicStatus;
+    const serial = ++verifySerial;
+    const candidate = cloudflareGuestOrigin(live?.url);
+    if (!candidate) {
+      verifiedOrigin = "";
+      publicStatus = {
+        url: "",
+        source: "",
+        detail: withGuest(live?.detail || "Cloudflare is starting. The guest link will show here when it is ready."),
+        checkedAt: clockNow(),
+      };
+      broadcast();
+      return publicStatus;
+    }
+    const sameLink = verifiedOrigin === candidate;
+    if (!sameLink) {
+      verifiedOrigin = "";
+      publicStatus = {
+        url: "",
+        source: "cloudflare",
+        detail: withGuest(live.detail || `Cloudflare is up. Guests use ${candidate}`),
+        checkedAt: clockNow(),
+      };
+      broadcast();
+    }
+    const ok = await probeCloudflare(candidate);
+    if (serial !== verifySerial || currentConfig().publicAccess?.enabled !== true) return publicStatus;
+    const still = cloudflareGuestOrigin(cloudflareTunnel.status()?.url);
+    if (!ok || still !== candidate) {
+      verifiedOrigin = "";
+      publicStatus = {
+        url: "",
+        source: "cloudflare",
+        detail: withGuest(live.detail || `Cloudflare is up. Guests use ${candidate}`),
+        checkedAt: clockNow(),
+      };
+      broadcast();
+      return publicStatus;
+    }
+    verifiedOrigin = candidate;
+    publicStatus = {
+      url: candidate,
+      source: "cloudflare",
+      detail: withGuest(`Cloudflare is up. Guests use ${candidate}`),
+      checkedAt: clockNow(),
+    };
+    broadcast();
+    return publicStatus;
+  }
+
   async function refreshPublicAccess() {
     const access = currentConfig().publicAccess;
     if (!access?.enabled) {
+      verifySerial += 1;
       cloudflareTunnel.stop();
+      verifiedOrigin = "";
       lastGuestDetail = "";
       publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: clockNow() };
       broadcast();
       return publicStatus;
     }
     await openGuestPortForAccess();
-    const probe = publicProbe || detectTailscale;
-    let found = { url: "", source: "" };
-    try {
-      found = await probe();
-    } catch {
-      found = { url: "", source: "" };
-    }
-    if (found?.url) {
+    if (!tunnelAllowed) {
+      verifySerial += 1;
       cloudflareTunnel.stop();
-      publicStatus = {
-        url: found.url,
-        source: found.source || "tailscale",
-        detail: withGuest("Tailscale Funnel is up. The wall QR uses that link."),
-        checkedAt: clockNow(),
-      };
-      broadcast();
-      return publicStatus;
-    }
-    if (found?.installed && found?.loggedIn) {
-      cloudflareTunnel.stop();
-      const link = found.approvalUrl ? ` Approve it at ${found.approvalUrl}` : "";
+      verifiedOrigin = "";
       publicStatus = {
         url: "",
         source: "",
-        detail: withGuest(`Tailscale is installed, but Funnel is not approved.${link}`),
+        detail: withGuest("Cloudflare is off while tests are running."),
         checkedAt: clockNow(),
       };
       broadcast();
       return publicStatus;
     }
-    if (access.cloudflare && !process.env.NODE_TEST_CONTEXT) {
-      cloudflareTunnel.start();
-      const live = cloudflareTunnel.status();
-      publicStatus = {
-        url: live.url || "",
-        source: live.url ? "cloudflare" : "",
-        detail: withGuest(live.detail),
-        checkedAt: clockNow(),
-      };
-      broadcast();
-      return publicStatus;
-    }
-    cloudflareTunnel.stop();
-    publicStatus = {
-      url: "",
-      source: "",
-      detail: withGuest(access.cloudflare
-        ? "Cloudflare is off while tests are running."
-        : "Tailscale is not up. Turn on Cloudflare in Settings and this PC will download it and open a guest link."),
-      checkedAt: clockNow(),
-    };
-    broadcast();
-    return publicStatus;
+    cloudflareTunnel.start();
+    return applyTunnel(cloudflareTunnel.status());
   }
 
   function settleAccess() {
@@ -855,41 +940,19 @@ function createApp({
   if (publicTimer.unref) publicTimer.unref();
 
   function entryUrl() {
-    const config = currentConfig();
-    const base = config.publicAccess?.enabled && publicStatus.url ? String(publicStatus.url).replace(/\/$/, "") : "";
-    if (base) {
-      const token = guestToken(guestSecret(), guestDay(clockNow()));
-      return `${base}/?k=${token}`;
-    }
-    const configured = config.photos.publicBaseUrl;
-    if (configured) return `${configured.replace(/\/$/, "")}/app`;
-    const host = getLanIPv4s()[0];
-    if (host) return `http://${host}:${config.port}/app`;
-    return "";
-  }
-
-  function isShareableGuestUrl(value) {
-    let parsed;
-    try {
-      parsed = new URL(value);
-    } catch {
-      return false;
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    const host = parsed.hostname;
-    if (!host || host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
-    if (host.includes(":")) return false;
-    return true;
+    const origin = cloudflareGuestOrigin(publicStatus.url);
+    if (!currentConfig().publicAccess?.enabled || !origin) return "";
+    const token = guestToken(guestSecret(), guestDay(clockNow()));
+    return `${origin}/?k=${token}`;
   }
 
   function scoreEntryUrl() {
     const entry = entryUrl();
-    return isShareableGuestUrl(entry) ? entry : "";
+    return cloudflareGuestOrigin(entry) ? entry : "";
   }
 
   function scoreGuestUrl(entry, boardId) {
-    if (!isShareableGuestUrl(entry)) return "";
+    if (!cloudflareGuestOrigin(entry)) return "";
     const url = new URL(entry);
     url.searchParams.set("tab", "scores");
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(boardId || ""))) {
@@ -2141,17 +2204,13 @@ function createApp({
     }
   }
 
-  function guestPublicUrl(req) {
-    const entry = entryUrl();
-    if (entry) return entry;
-    return `${req.protocol}://${req.get("host")}/app`;
-  }
-
   app.get("/api/guest-qr", async (req, res, next) => {
     try {
       if (isPublicRequest(req) && !isAuthed(req)) return sendJson(res, 404, { error: "Not found" });
+      const target = entryUrl();
+      if (!cloudflareGuestOrigin(target)) return res.status(404).end();
       const QRCode = require("qrcode");
-      const png = await QRCode.toBuffer(guestPublicUrl(req), {
+      const png = await QRCode.toBuffer(target, {
         margin: 1,
         width: 480,
         color: { dark: "#1a1916", light: "#f8f8f5" },
@@ -2407,6 +2466,10 @@ function createApp({
           await store.setSlot(id, { content: "rotation" });
         }
       }
+      return;
+    }
+    if (state.rotation?.items?.pinboard === false) {
+      await store.setRotation({ items: { pinboard: true } });
     }
   }
 

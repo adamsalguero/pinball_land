@@ -2036,6 +2036,11 @@ function placePhotos(target, card) {
 let qrShownKey = null;
 let scoreQrKey = "";
 
+function wallGuestUrl() {
+  const publicUrl = payload?.guest?.publicUrl || "";
+  return publicUrl;
+}
+
 function refreshScoreQr() {
   const wrap = document.querySelector("#board-score-qr");
   const img = document.querySelector("#board-score-qr-img");
@@ -2049,11 +2054,12 @@ function refreshScoreQr() {
       wrap.hidden = true;
     });
   }
-  const publicUrl = payload?.guest?.scoreUrl || "";
+  const publicUrl = wallGuestUrl();
   const boardId = shownBoard?.id || "";
   if (screen.dataset.mode !== "board" || !publicUrl || !boardId) {
     wrap.hidden = true;
     scoreQrKey = "";
+    img.removeAttribute("src");
     return;
   }
   const day = payload?.guest?.qrDay || "";
@@ -2075,20 +2081,22 @@ function refreshGuestQr() {
   const qr = document.querySelector("#pin-qr");
   const card = document.querySelector(".pin-qr");
   if (!qr || !card) return;
-  if (payload?.guest?.pinboard === false) {
+  const publicUrl = wallGuestUrl();
+  if (payload?.guest?.pinboard === false || !publicUrl) {
     card.hidden = true;
+    qrShownKey = "";
+    qr.removeAttribute("src");
     return;
   }
   card.hidden = false;
   const day = payload?.guest?.qrDay || "";
-  const publicUrl = payload?.guest?.publicUrl || "";
   const key = `${day}|${publicUrl}`;
   if (key === qrShownKey) return;
   qrShownKey = key;
   const params = new URLSearchParams();
   if (day) params.set("d", day);
-  if (publicUrl) params.set("u", publicUrl);
-  const next = params.toString() ? `/api/guest-qr?${params}` : "/api/guest-qr";
+  params.set("u", publicUrl);
+  const next = `/api/guest-qr?${params}`;
   if (qr.getAttribute("src") !== next) qr.src = next;
 }
 

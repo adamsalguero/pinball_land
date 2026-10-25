@@ -100,13 +100,13 @@
         <div data-panel="settings" hidden>
           <section id="public-access-section">
             <h2>Public access</h2>
-            <p class="muted">Guests open a link from outside the venue WiFi. Turn this on after the one-time Tailscale setup. The wall QR then carries a daily code. Phones on the venue WiFi need no code. If Tailscale is installed but Funnel is not approved, the status line shows the approval link and Cloudflare stays off. The Cloudflare box is only for a PC that does not have Tailscale. It downloads cloudflared and opens a guest link on its own. The status line shows that link, or the reason it is not up yet.</p>
+            <p class="muted">Guests open a link from outside the venue WiFi. When public access is on, Cloudflare is always used. The wall QR then carries a daily code. Phones on the venue WiFi need no code. The status line shows the Cloudflare link, or the reason it is not up yet.</p>
             <div class="theme-toggle" id="public-access-toggle">
               <button class="btn" type="button" id="public-access-on">On</button>
               <button class="btn" type="button" id="public-access-off">Off</button>
             </div>
             <p id="public-access-status" class="muted"></p>
-            <label class="muted"><input id="public-cloudflare" type="checkbox" /> Cloudflare quick tunnel when Tailscale is not installed</label>
+            <label class="muted"><input id="public-cloudflare" type="checkbox" /> Cloudflare is always used</label>
             <h2>Pinboard photos</h2>
             <div class="theme-toggle">
               <button class="btn" type="button" id="pinboard-on">On</button>

@@ -202,7 +202,7 @@ test("wall and controller snapshots", async ({ page }) => {
   await page.screenshot({ path: "e2e/artifacts/wall-amenity.png" });
 
   await page.goto("/display/1?preview=pinboard&shot=1");
-  await expect(page.locator("#pin-qr")).toBeVisible();
+  await expect(page.locator(".pin-qr")).toBeHidden();
   await page.screenshot({ path: "e2e/artifacts/wall-pinboard.png" });
 
   await page.setViewportSize({ width: 390, height: 844 });

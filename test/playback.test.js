@@ -138,6 +138,7 @@ test("kiosk and the home Chrome launcher disable window occlusion", () => {
   assert.match(wall, /function decorationsPaused\(\) \{\n  return Boolean\(SHOT \|\| document\.documentElement\.dataset\.motion === "reduced"\);\n\}/);
   assert.match(wall, /else if \(planned\?\.type === "video" && heldClip\.tick === serverTick\(\)\)/);
   assert.match(wall, /const publicUrl = payload\?\.guest\?\.publicUrl \|\| ""/);
+  assert.match(wall, /const publicUrl = wallGuestUrl\(\)/);
   assert.match(control, /\(\$\{percent\}%\) at/);
   assert.match(control, /label: "Auto"/);
   assert.match(control, /Show photo on wall/);
