@@ -170,6 +170,7 @@ html, body, .screen {
   text-align: center;
 }
 .pin-qr img { width: 100%; }
+.pin-qr p { margin: 6px 0 0; text-transform: none; font-weight: 700; line-height: 1.15; }
 .collage-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
