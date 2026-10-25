@@ -51,6 +51,9 @@ jobs:
             [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
             if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           }
+      - name: Update now writes a trace
+        shell: pwsh
+        run: node scripts/update-now-windows.js
       - run: npm run electron-smoke
       - name: Installer dry run
         shell: pwsh

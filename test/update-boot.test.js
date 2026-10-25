@@ -71,6 +71,34 @@ test("the kiosk task opens Chrome when Electron exits early", () => {
   assert.match(kiosk, /app\.exit\(0\)/);
 });
 
+test("update now is a scheduled task and an up-to-date nightly does not stop the wall", () => {
+  const script = read("scripts/invoke-update.ps1");
+  const updater = read("src/self-update.js");
+  const control = read("public/control.js");
+  const html = read("public/control.html");
+  const register = read("scripts/register-update-tasks.ps1");
+  const app = read("src/app.js");
+  assert.match(script, /PinballLandUpdateNow/);
+  assert.match(script, /Write-UpdateTrace "start"/);
+  assert.match(script, /up-to-date; leaving the wall running/);
+  assert.match(script, /nightly left the wall running/);
+  const upToDate = script.indexOf("up-to-date; leaving the wall running");
+  const stopCall = script.indexOf("  Stop-PinballTasks\n");
+  assert.ok(upToDate > 0 && stopCall > upToDate, "the up-to-date check happens before the wall is stopped");
+  assert.match(script, /if \(\(\$Mode -eq "nightly" -or \$Mode -eq "now"\) -and -not \$skipRestart\)/);
+  assert.match(updater, /schtasks\.exe/);
+  assert.match(updater, /\/TN", "PinballLandUpdateNow"/);
+  assert.match(updater, /invoke \$\{mode\} requested/);
+  assert.doesNotMatch(updater, /function launchDetachedUpdate/);
+  assert.match(app, /launchScheduledUpdate\(\{ dataDir: updateDataDir, mode: "now" \}\)/);
+  assert.match(app, /photo processor unavailable/);
+  assert.match(control, /not started/);
+  assert.match(control, /20000/);
+  assert.match(html, /id="photo-processor"/);
+  assert.match(register, /\$nowTask = "PinballLandUpdateNow"/);
+  assert.match(read(".github/workflows/ci.yml"), /node scripts\/update-now-windows\.js/);
+});
+
 test("the score QR sits in the bottom-right and does not share the title row", () => {
   const html = read("public/display.html");
   const css = read("public/display.css");

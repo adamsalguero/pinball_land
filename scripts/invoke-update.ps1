@@ -19,6 +19,7 @@ $serverTask = "PinballLandServer"
 $kioskTask = "PinballLandKiosk"
 
 function Get-PinballDataDir {
+  if ($env:PINBALL_DATA_DIR) { return $env:PINBALL_DATA_DIR }
   $base = if ($env:ProgramData) { $env:ProgramData } else { "C:\ProgramData" }
   return (Join-Path $base "PinballLand")
 }
@@ -202,7 +203,66 @@ function Register-UpdateRetry {
   }
 }
 
+function Test-CheckoutUpToDate {
+  $branch = "main"
+  $config = Join-Path (Get-PinballDataDir) "config.json"
+  if (Test-Path -LiteralPath $config) {
+    try {
+      $json = Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json
+      $named = [string]$json.updates.branch
+      if ($named -match '^[A-Za-z0-9._/-]+$') { $branch = $named }
+    } catch {
+      $branch = "main"
+    }
+  }
+  $git = Get-Command git.exe -ErrorAction SilentlyContinue
+  if (-not $git) { $git = Get-Command git -ErrorAction SilentlyContinue }
+  if (-not $git) { return $false }
+  & $git.Source fetch --prune origin $branch
+  if ($LASTEXITCODE -ne 0) { return $false }
+  $head = ((& $git.Source rev-parse "HEAD") | Out-String).Trim()
+  $remote = ((& $git.Source rev-parse "origin/$branch") | Out-String).Trim()
+  if ($head -notmatch '^[0-9a-f]{7,40}$') { return $false }
+  return $head -eq $remote
+}
+
+function Register-UpdateNowTask {
+  $name = "PinballLandUpdateNow"
+  $existing = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+  if ($existing) { return }
+  $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+  $hidden = Join-Path $PSScriptRoot "launch-hidden.vbs"
+  if (-not (Test-Path -LiteralPath $wscript) -or -not (Test-Path -LiteralPath $hidden)) {
+    Write-UpdateTrace "could not register $name"
+    return
+  }
+  $action = New-ScheduledTaskAction -Execute $wscript -Argument "//B //Nologo `"$hidden`" now" -WorkingDirectory $RepoRoot
+  $trigger = New-ScheduledTaskTrigger -Once -At ([datetime]::Parse("2035-01-01T00:00:00"))
+  $trigger.Enabled = $false
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+  $user = $env:USERNAME
+  foreach ($level in @("Highest", "Limited")) {
+    try {
+      $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel $level
+      Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+      Write-UpdateTrace "registered $name"
+      return
+    } catch {
+      Write-UpdateTrace "register $name ($level) failed: $($_.Exception.Message)"
+    }
+  }
+}
+
+$skipWall = $false
+$skipRestart = $false
 try {
+# The button looks for this line. Write it before DNS, git, or stopping the wall.
+Write-UpdateTrace "start"
+if ($env:PINBALL_UPDATE_SMOKE -eq "1") {
+  $skipWall = $true
+  return
+}
+
 if ($Mode -eq "nightly" -and -not (Test-UpdatesEnabled)) {
   Write-UpdateTrace "skipped because automatic updates are off"
   Write-Host "Automatic updates are off. Nightly restart was not run."
@@ -226,13 +286,23 @@ $nodeExe = Resolve-NodeExe
 $updateJs = Join-Path $RepoRoot "scripts\run-update.js"
 $flag = if ($Mode -eq "nightly") { "--nightly" } elseif ($Mode -eq "now") { "--now" } else { "--boot" }
 
-Write-UpdateTrace "start"
-if ($Mode -eq "nightly" -or $Mode -eq "now") {
+if ($Mode -eq "boot" -or $Mode -eq "nightly") {
+  Register-UpdateNowTask
+}
+
+if ($Mode -eq "nightly" -and (Test-CheckoutUpToDate)) {
+  Write-UpdateTrace "up-to-date; leaving the wall running"
+  $skipRestart = $true
+}
+
+if (($Mode -eq "nightly" -or $Mode -eq "now") -and -not $skipRestart) {
   Write-Host "Stopping the server and the kiosk before the update."
   Stop-PinballTasks
 }
 
-if (-not $nodeExe) {
+if ($skipRestart) {
+  Write-UpdateTrace "skipped the updater because nothing changed"
+} elseif (-not $nodeExe) {
   Write-UpdateTrace "node.exe missing; starting the current tasks"
   Write-Warning "node.exe was not found. Starting the current version."
 } else {
@@ -248,8 +318,15 @@ if ($incomingMode -eq "boot" -and (Test-NetworkSkip (Read-UpdateStatus))) {
 }
 
 } finally {
-  Write-Host "Starting the server and the kiosk."
+  if ($skipWall) { return }
+  if ($skipRestart) {
+    Write-UpdateTrace "nightly left the wall running"
+    Write-Host "Nothing changed. Leaving the wall running."
+  } else {
+    Write-Host "Starting the server and the kiosk."
+  }
   try {
+    # Start-Wall leaves a task that is already running alone, so an up-to-date nightly does not bounce the TVs.
     Start-Wall
     Write-UpdateTrace "server and kiosk started"
   } catch {

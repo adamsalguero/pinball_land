@@ -4,7 +4,14 @@ const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
 const { normalizeUpdates } = require("../src/config");
-const { appendUpdateLog, runSelfUpdate } = require("../src/self-update");
+const {
+  appendUpdateLog,
+  invokeNowStarted,
+  launchScheduledUpdate,
+  runSelfUpdate,
+  verifyRuntimeDeps,
+} = require("../src/self-update");
+const { GuestAlbum } = require("../src/photos");
 
 const HEAD = "aaaaaaaa";
 const NEXT = "bbbbbbbb";
@@ -35,6 +42,7 @@ async function setup() {
   await fs.writeFile(kept.config, "{\"pin\":\"2224\",\"updates\":{\"nightlyAt\":\"03:17\"}}\n");
   await fs.writeFile(kept.photo, "photo-bytes");
   await fs.writeFile(kept.media, "media-bytes");
+  await fs.writeFile(path.join(appRoot, "package.json"), `${JSON.stringify({ dependencies: { sharp: "0.33.5" } })}\n`);
   const before = {};
   for (const [key, file] of Object.entries(kept)) before[key] = await fs.readFile(file);
   return {
@@ -48,7 +56,7 @@ async function setup() {
   };
 }
 
-function scripted({ ahead = "1", fetchMode = "ok", npmFailOn = 0 } = {}) {
+function scripted({ ahead = "1", fetchMode = "ok", npmFailOn = 0, depFail = false } = {}) {
   const calls = [];
   let npmCalls = 0;
   async function run(command, args) {
@@ -65,6 +73,10 @@ function scripted({ ahead = "1", fetchMode = "ok", npmFailOn = 0 } = {}) {
     if (args[0] === "ci") {
       npmCalls += 1;
       if (npmFailOn && npmCalls === npmFailOn) return fail("npm ci exploded");
+      return ok("");
+    }
+    if (args[0] === "-e") {
+      if (depFail) return fail("Invalid or unexpected token");
       return ok("");
     }
     return ok("");
@@ -205,6 +217,74 @@ test("a good update records the new commit and keeps venue data", async () => {
   const previous = await fs.readFile(path.join(ctx.dataDir, "updates", "previous.txt"), "utf8");
   assert.match(previous, new RegExp(HEAD));
   await ctx.assertDataUntouched();
+});
+
+test("a runtime dependency that will not load reruns npm ci and rolls back", async () => {
+  const ctx = await setup();
+  const script = scripted({ depFail: true });
+  const result = await update(ctx, script, {
+    smoke: async () => {
+      throw new Error("smoke should not run");
+    },
+  });
+  assert.equal(result.action, "rolled-back");
+  assert.match(result.detail, /runtime dependencies failed to load/);
+  assert.match(result.detail, /Invalid or unexpected token/);
+  assert.equal(script.calls.filter((call) => call[1] === "-e").length, 2);
+  assert.equal(script.npmCount(), 3);
+  await ctx.assertDataUntouched();
+});
+
+test("a zero-filled dependency file fails the runtime check", async () => {
+  const appRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-sharp-"));
+  const valid = path.join(appRoot, "node_modules", "sharp", "node_modules", "semver", "ranges", "valid.js");
+  await fs.mkdir(path.dirname(valid), { recursive: true });
+  await fs.writeFile(path.join(appRoot, "package.json"), `${JSON.stringify({ dependencies: { sharp: "0.33.5" } })}\n`);
+  await fs.writeFile(path.join(appRoot, "node_modules", "sharp", "package.json"), `${JSON.stringify({ name: "sharp", version: "0.0.0" })}\n`);
+  await fs.writeFile(path.join(appRoot, "node_modules", "sharp", "index.js"), "require('semver/ranges/valid');\nmodule.exports = function sharp() { return {}; };\n");
+  await fs.writeFile(path.join(appRoot, "node_modules", "sharp", "node_modules", "semver", "package.json"), `${JSON.stringify({ name: "semver", version: "7.8.5" })}\n`);
+  await fs.writeFile(valid, Buffer.alloc(326, 0));
+  const result = await verifyRuntimeDeps(appRoot);
+  assert.equal(result.ok, false);
+  assert.match(result.detail, /Invalid or unexpected token/);
+});
+
+test("update now logs the request before schtasks and ignores a requested line", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-now-"));
+  const calls = [];
+  const launched = launchScheduledUpdate({
+    dataDir,
+    mode: "now",
+    platform: "win32",
+    now: () => new Date("2026-10-25T06:00:00.000Z"),
+    run(command, args) {
+      calls.push([command, ...args]);
+      return { status: 1, stdout: "", stderr: "ERROR: The system cannot find the file specified." };
+    },
+  });
+  assert.equal(launched.started, false);
+  assert.deepEqual(calls, [["schtasks.exe", "/Run", "/TN", "PinballLandUpdateNow"]]);
+  const log = await fs.readFile(path.join(dataDir, "logs", "update.log"), "utf8");
+  assert.match(log, /\[2026-10-25T06:00:00.000Z\] invoke now requested/);
+  assert.match(log, /invoke now not started/);
+  assert.equal(invokeNowStarted(log, launched.requestedAt), false);
+  const started = `${log}[2026-10-25T06:00:01.000Z] invoke now start\n`;
+  assert.equal(invokeNowStarted(started, launched.requestedAt), true);
+  assert.equal(invokeNowStarted("[2026-10-25T05:00:00.000Z] invoke now start\n", launched.requestedAt), false);
+});
+
+test("a broken photo processor tells the guest it is unavailable", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-album-"));
+  const album = new GuestAlbum({
+    root: dir,
+    sharpLoader() {
+      throw new SyntaxError("Invalid or unexpected token");
+    },
+  });
+  await assert.rejects(
+    () => album.ingest(Buffer.from("not-a-photo"), { ip: "guest" }),
+    (err) => err.status === 503 && err.message === "photo processor unavailable"
+  );
 });
 
 test("turning updates off skips fetch on boot", async () => {

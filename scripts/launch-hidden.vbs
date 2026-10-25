@@ -39,12 +39,14 @@ ElseIf mode = "kiosk" Then
   command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & root & "\scripts\start-kiosk.ps1"""
   waitForCommand = True
 ElseIf mode = "boot" Or mode = "nightly" Or mode = "now" Or mode = "retry" Then
+  ' Wait so Task Scheduler does not tear down the update when wscript returns.
   command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & root & "\scripts\invoke-update.ps1"" -Mode " & mode
+  waitForCommand = True
 Else
   WScript.Quit 1
 End If
 
-' 0 = hidden window. The kiosk script waits; the others return immediately.
+' 0 = hidden window. The kiosk and the update wait. The server returns immediately.
 If waitForCommand Then
   shell.Run command, 0, True
 Else

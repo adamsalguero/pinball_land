@@ -1723,6 +1723,7 @@ function renderYoutube() {
 async function renderPhotos() {
   const root = document.getElementById("photos-root");
   if (!root || document.getElementById("app").hidden) return;
+  renderPhotoProcessor();
   let data = { photos: [], settings: current.guest || {} };
   try {
     data = await api("/api/guest-photos");
@@ -1842,9 +1843,20 @@ function renderAccess() {
     : "Off. Guests use the venue WiFi.";
 }
 
+function renderPhotoProcessor() {
+  const text = current.photoProcessor || "";
+  for (const id of ["photo-processor", "photo-processor-settings"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.hidden = !text;
+    el.textContent = text;
+  }
+}
+
 async function renderAdmin() {
   const version = document.getElementById("version-line");
   if (!version || document.getElementById("app").hidden) return;
+  renderPhotoProcessor();
   const updates = current.updates || {};
   const commit = updates.commit ? ` · ${updates.commit}` : "";
   version.textContent = `Version ${current.version || ""}${commit}`;
@@ -1940,8 +1952,38 @@ document.getElementById("tvs-toggle")?.addEventListener("click", async () => {
   renderTvs();
 });
 document.getElementById("update-now").addEventListener("click", async () => {
-  const result = await api("/api/updates/now", { method: "POST" });
-  toast(result.note || `Version ${result.version}`);
+  const button = document.getElementById("update-now");
+  button.disabled = true;
+  try {
+    const result = await api("/api/updates/now", { method: "POST" });
+    if (!result.started) {
+      toast("not started");
+      return;
+    }
+    const since = encodeURIComponent(result.requestedAt || "");
+    const deadline = Date.now() + 20000;
+    let last = null;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      last = await api(`/api/updates/now?since=${since}`);
+      if (last.finished) {
+        current.updates = {
+          ...current.updates,
+          lastAt: last.lastAt,
+          lastResult: last.lastResult,
+          lastDetail: last.lastDetail,
+        };
+        renderAdmin();
+        toast(last.note || last.lastResult || "Update started.");
+        return;
+      }
+    }
+    toast(last && last.started ? "Update started." : "not started");
+  } catch (err) {
+    toast(err.message || "not started");
+  } finally {
+    button.disabled = false;
+  }
 });
 
 const installHint = document.getElementById("install-hint");

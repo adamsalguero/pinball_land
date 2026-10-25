@@ -26,7 +26,7 @@ const { canonicalDisplayContent, layoutForDisplays, mapDisplaysToSlots } = requi
 const { PlugService, createPlugClient, createMockPlugClient, sanitizePlugLog } = require("./plugs");
 const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./media");
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
-const { GuestAlbum } = require("./photos");
+const { GuestAlbum, loadSharp } = require("./photos");
 const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
 const { starterThemes } = require("./season");
 const { noteStall } = require("./playback-flags");
@@ -49,7 +49,15 @@ const { isTunneledRequest, isGuestRoute, guestPortFor } = require("./tunnel");
 const { maskProfanity } = require("./text-filter");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
 const { isInside, defaultDataDir, dataLayout } = require("./paths");
-const { launchDetachedUpdate, launchRegisterTasks, readGitCommit, readUpdateStatusSync } = require("./self-update");
+const {
+  inspectRuntimeDependencies,
+  invokeNowStarted,
+  launchRegisterTasks,
+  launchScheduledUpdate,
+  readGitCommit,
+  readUpdateLogSync,
+  readUpdateStatusSync,
+} = require("./self-update");
 const pkg = require("../package.json");
 
 const UPLOAD_TYPES = {
@@ -307,6 +315,13 @@ function createApp({
   if (clipCache || process.env.PINBALL_CLIP_CACHE === "1") clips.start();
   let playback = null;
   const updateDataDir = dataDir || defaultDataDir();
+  const runtimeDeps = inspectRuntimeDependencies(appRoot);
+  if (!runtimeDeps.ok) {
+    for (const item of runtimeDeps.failed) {
+      console.error(`runtime dependency ${item.name} failed to load: ${item.message}`);
+    }
+  }
+  const photoProcessorWarning = runtimeDeps.photoProcessor || "";
   let commitCache = null;
   let statusCache = { at: 0, value: null };
 
@@ -525,6 +540,7 @@ function createApp({
         autoApprove: config.scores?.autoApprove === true,
       },
       updates: updateFields(config),
+      photoProcessor: photoProcessorWarning,
       kiosk: {
         restartToken,
         monitors: mapped.arranged.map((display) => ({
@@ -2242,12 +2258,21 @@ function createApp({
   const proofDir = path.join(dataDir || path.dirname(store.filePath), "score-proofs");
 
   async function saveScoreProof(buffer) {
-    const sharp = require("sharp");
-    const processed = await sharp(buffer, { failOn: "none", animated: false })
-      .rotate()
-      .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 82 })
-      .toBuffer();
+    const sharp = loadSharp();
+    let processed;
+    try {
+      processed = await sharp(buffer, { failOn: "none", animated: false })
+        .rotate()
+        .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 82 })
+        .toBuffer();
+    } catch (err) {
+      if (err && err.status) throw err;
+      if (err instanceof SyntaxError || /unexpected token/i.test(String(err && err.message))) {
+        throw Object.assign(new Error("photo processor unavailable"), { status: 503, cause: err });
+      }
+      throw err;
+    }
     const proofFile = `${crypto.randomUUID()}.jpg`;
     fs.mkdirSync(proofDir, { recursive: true });
     fs.writeFileSync(path.join(proofDir, proofFile), processed);
@@ -2835,13 +2860,42 @@ function createApp({
           note: "Update now runs on the Windows kiosk. This computer was not changed.",
         });
       }
-      launchDetachedUpdate({ appRoot, mode: "now" });
+      const launched = launchScheduledUpdate({ dataDir: updateDataDir, mode: "now" });
       sendJson(res, 200, {
         version: pkg.version,
         commit: updates.commit,
-        started: true,
+        started: launched.started,
+        requestedAt: launched.requestedAt,
         applied: false,
-        note: "Update started. The wall comes back when it finishes. Venue data is not changed.",
+        note: launched.started ? "Checking that the update started." : "not started",
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/updates/now", requirePin, (req, res, next) => {
+    try {
+      const since = String(req.query.since || "");
+      const logsDir = dataLayout(updateDataDir).logs;
+      const started = invokeNowStarted(readUpdateLogSync(logsDir), since);
+      const status = readUpdateStatusSync(logsDir) || {};
+      const sinceMs = Date.parse(since);
+      const statusMs = Date.parse(status.at || "");
+      const finished = status.mode === "now"
+        && Number.isFinite(statusMs)
+        && (!Number.isFinite(sinceMs) || statusMs + 2000 >= sinceMs);
+      sendJson(res, 200, {
+        started,
+        finished,
+        lastAt: finished ? status.at : null,
+        lastResult: finished ? status.action || null : null,
+        lastDetail: finished ? status.detail || "" : "",
+        note: finished
+          ? `Last update ${status.at}: ${status.action || "unknown"}. ${status.detail || ""}`
+          : started
+            ? "Update started."
+            : "not started",
       });
     } catch (err) {
       next(err);

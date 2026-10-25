@@ -3,7 +3,7 @@ const fsp = require("fs/promises");
 const http = require("http");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { loadConfig, normalizeUpdates } = require("./config");
 const { dataLayout } = require("./paths");
 const { planRollback, rollbackInstall, swapInstall } = require("./updater");
@@ -115,6 +115,78 @@ function readGitCommit(appRoot) {
   } catch {
     return "";
   }
+}
+
+function appendUpdateLogSync(logsDir, text) {
+  fs.mkdirSync(logsDir, { recursive: true });
+  fs.appendFileSync(path.join(logsDir, "update.log"), text);
+}
+
+function readUpdateLogSync(logsDir) {
+  try {
+    return fs.readFileSync(path.join(logsDir, "update.log"), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function invokeNowStarted(logText, sinceIso) {
+  const since = Date.parse(sinceIso || "");
+  return String(logText || "").split(/\n/).some((line) => {
+    if (!/\binvoke now start\b/.test(line)) return false;
+    if (!Number.isFinite(since)) return true;
+    const stamp = Date.parse((line.match(/^\[([^\]]+)\]/) || [])[1] || "");
+    return Number.isFinite(stamp) && stamp + 2000 >= since;
+  });
+}
+
+function runtimeDependencyNames(appRoot) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+  return Object.keys(pkg.dependencies || {});
+}
+
+function inspectRuntimeDependencies(appRoot = path.join(__dirname, "..")) {
+  let names = [];
+  try {
+    names = runtimeDependencyNames(appRoot);
+  } catch (err) {
+    return {
+      ok: false,
+      failed: [{ name: "package.json", message: err.message }],
+      photoProcessor: "photo processor unavailable",
+    };
+  }
+  const failed = [];
+  for (const name of names) {
+    try {
+      require(name);
+    } catch (err) {
+      failed.push({ name, message: String(err && err.message || err) });
+    }
+  }
+  return {
+    ok: failed.length === 0,
+    failed,
+    photoProcessor: failed.some((item) => item.name === "sharp") ? "photo processor unavailable" : "",
+  };
+}
+
+async function verifyRuntimeDeps(appRoot, run = defaultRun, timeoutMs = NPM_TIMEOUT_MS) {
+  let names;
+  try {
+    names = runtimeDependencyNames(appRoot);
+  } catch (err) {
+    return { ok: false, detail: `could not read package.json: ${err.message}` };
+  }
+  if (!names.length) return { ok: true, detail: "no runtime dependencies" };
+  const expression = `const names = ${JSON.stringify(names)}; for (const name of names) { require(name); }`;
+  const result = await run(process.execPath, ["-e", expression], { cwd: appRoot, timeoutMs });
+  if (!result.ok) {
+    const text = `${result.stderr || ""}\n${result.stdout || ""}`;
+    const headline = text.split(/\n/).map((line) => line.trim()).find((line) => /unexpected token|SyntaxError|Error:/i.test(line));
+    return { ok: false, detail: (headline || tail(text) || "runtime dependency failed to load").slice(0, 400) };
+  }
+  return { ok: true, detail: "runtime dependencies loaded" };
 }
 
 async function appendUpdateLog(logsDir, text, { maxBytes = LOG_MAX_BYTES } = {}) {
@@ -245,15 +317,33 @@ async function npmCi(appRoot, run, timeoutMs, command) {
   return run(command, ["ci", "--omit=dev"], { cwd: appRoot, timeoutMs });
 }
 
-function launchDetachedUpdate({ appRoot, mode }) {
-  const script = path.join(appRoot, "scripts", "invoke-update.ps1");
-  const child = spawn(
-    "powershell.exe",
-    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Mode", mode],
-    { cwd: appRoot, detached: true, stdio: "ignore", windowsHide: true }
-  );
-  child.unref();
-  return { started: true };
+function launchScheduledUpdate({
+  dataDir,
+  mode = "now",
+  now = () => new Date(),
+  run = spawnSync,
+  platform = process.platform,
+} = {}) {
+  const logsDir = dataLayout(dataDir).logs;
+  const requestedAt = now().toISOString();
+  appendUpdateLogSync(logsDir, `[${requestedAt}] invoke ${mode} requested\n`);
+  if (platform !== "win32") {
+    return { started: false, requestedAt, detail: "Update now runs on the Windows kiosk." };
+  }
+  const result = run("schtasks.exe", ["/Run", "/TN", "PinballLandUpdateNow"], {
+    windowsHide: true,
+    encoding: "utf8",
+    timeout: 20000,
+  });
+  const detail = `${result.stdout || ""} ${result.stderr || ""}`.trim();
+  const started = result.status === 0;
+  if (!started) {
+    appendUpdateLogSync(
+      logsDir,
+      `[${now().toISOString()}] invoke ${mode} not started: ${detail || "schtasks failed"}\n`
+    );
+  }
+  return { started, requestedAt, detail };
 }
 
 function launchRegisterTasks({ appRoot }) {
@@ -397,6 +487,18 @@ async function runSelfUpdate({
     return restore(head, why);
   }
 
+  let deps = await verifyRuntimeDeps(appRoot, run, npmTimeoutMs);
+  if (!deps.ok) {
+    await log(`runtime dependencies failed to load (${deps.detail}). Running npm ci again.`);
+    const again = await npmCi(appRoot, run, npmTimeoutMs, npmBin);
+    if (!again.ok) {
+      const why = again.timedOut ? "npm ci timed out" : `npm ci failed: ${tail(again.stderr || again.stdout)}`;
+      return restore(head, why);
+    }
+    deps = await verifyRuntimeDeps(appRoot, run, npmTimeoutMs);
+    if (!deps.ok) return restore(head, `runtime dependencies failed to load: ${deps.detail}`);
+  }
+
   const electron = await ensureElectron(appRoot, run, npmTimeoutMs);
   if (!electron.ok) return restore(head, electron.detail);
 
@@ -433,9 +535,14 @@ async function runSelfUpdate({
 module.exports = {
   FETCH_TIMEOUT_MS,
   appendUpdateLog,
+  appendUpdateLogSync,
   electronBinary,
-  launchDetachedUpdate,
+  inspectRuntimeDependencies,
+  invokeNowStarted,
+  launchScheduledUpdate,
   launchRegisterTasks,
+  readUpdateLogSync,
+  verifyRuntimeDeps,
   npmCommand,
   readGitCommit,
   readUpdateStatusSync,

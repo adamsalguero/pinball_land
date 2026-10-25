@@ -17,6 +17,7 @@ $bootTask = "PinballLandUpdateBoot"
 $nightlyTask = "PinballLandUpdateNightly"
 $serverTask = "PinballLandServer"
 $kioskTask = "PinballLandKiosk"
+$nowTask = "PinballLandUpdateNow"
 
 function Resolve-NodeExe {
   $cmd = Get-Command node.exe -ErrorAction SilentlyContinue
@@ -127,6 +128,7 @@ $serverAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs
 $kioskAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs kiosk" -WorkingDirectory $RepoRoot
 $bootAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs boot" -WorkingDirectory $RepoRoot
 $nightlyAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs nightly" -WorkingDirectory $RepoRoot
+$nowAction = New-ScheduledTaskAction -Execute $wscript -Argument "$hiddenArgs now" -WorkingDirectory $RepoRoot
 
 $clock = Get-NightlyClock -Root $RepoRoot
 $match = [regex]::Match($clock, '^(\d{1,2}):(\d{2})$')
@@ -154,7 +156,10 @@ Register-PinballTask -Name $kioskTask -Action $kioskAction -Trigger (New-OnDeman
 Disable-TaskTriggers -Name $kioskTask
 Register-PinballTask -Name $bootTask -Action $bootAction -Trigger $bootTrigger -Settings $settings -UserId $user -RunLevel Highest
 Register-PinballTask -Name $nightlyTask -Action $nightlyAction -Trigger $nightlyTrigger -Settings $settings -UserId $user -RunLevel Highest
+Register-PinballTask -Name $nowTask -Action $nowAction -Trigger (New-OnDemandTrigger) -Settings $settings -UserId $user -RunLevel Highest
+Disable-TaskTriggers -Name $nowTask
 
 Write-Host "Registered '$bootTask' at sign-in. It updates, then starts '$serverTask' and '$kioskTask'."
-Write-Host "Registered '$nightlyTask' daily at $('{0:D2}:{1:D2}' -f $hour, $minute) local. The wall restarts fullscreen afterward."
+Write-Host "Registered '$nowTask' on demand. Update now starts that task, outside the server process."
+Write-Host "Registered '$nightlyTask' daily at $('{0:D2}:{1:D2}' -f $hour, $minute) local. The wall restarts fullscreen only when main changed."
 Write-Host "Update tasks run as $user in the signed-in session so the kiosk still has the TV desktop."
