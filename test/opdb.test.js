@@ -47,6 +47,24 @@ test("catalog search returns Jaws variants and skips a group", async () => {
   assert.equal(EXPORT_URL.includes("opdb-v2.json"), true);
 });
 
+test("an unreachable catalog still searches the bundled export, including edition aliases", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pinball-opdb-offline-"));
+  const opdb = createOpdb({
+    apiKey: "",
+    cacheDir: dir,
+    fetchImpl: async () => {
+      throw new Error("catalog unreachable");
+    },
+  });
+  const rows = await opdb.search("jaws");
+  const names = rows.map((row) => row.name);
+  for (const name of ["JAWS (Pro)", "JAWS (Premium)", "JAWS (LE)", "Jaws (50th anniversary)"]) {
+    assert.ok(names.includes(name), names.join(", "));
+  }
+  assert.equal(names.includes("JAWS"), false);
+  assert.equal(names.includes("JAWS (Premium/LE)"), false);
+});
+
 test("guest routes include machine search and cabinet photos", () => {
   assert.equal(isGuestRoute({ method: "GET", path: "/api/opdb/search" }), true);
   assert.equal(isGuestRoute({ method: "GET", path: "/api/opdb/cabinet/GLWll-MXr4N" }), true);

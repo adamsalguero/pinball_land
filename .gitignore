@@ -11,6 +11,7 @@ tools/uxplay-windows/
 media/**
 !media/.gitkeep
 !media/catalog.json
+!media/opdb-catalog.json.gz
 !media/halloween/
 !media/halloween/.gitkeep
 !media/christmas/
