@@ -35,9 +35,25 @@ const { discoverDisplayOrigins } = require("./display-origins");
 
 const waitingPage = path.join(__dirname, "..", "public", "waiting.html");
 
+// requestSingleInstanceLock() returns false when the userData mutex cannot be
+// created, then app.exit(0) leaves the task with result 0 and no windows.
+// A Limited task cannot write an admin-owned %APPDATA%\pinball-land, so the
+// lock lives in a directory this user creates.
+const kioskUserData = path.join(
+  process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || "", "AppData", "Local"),
+  "pinball-land",
+  "kiosk"
+);
+try {
+  fs.mkdirSync(kioskUserData, { recursive: true });
+  app.setPath("userData", kioskUserData);
+} catch (err) {
+  console.error(`Kiosk user-data directory is not writable (${err.code || err.message}).`);
+}
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  app.quit();
+  console.error("Kiosk did not get the single-instance lock. Exiting without opening the wall.");
+  app.exit(0);
 }
 
 let port = null;

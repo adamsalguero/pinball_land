@@ -26,7 +26,7 @@ const { canonicalDisplayContent, layoutForDisplays, mapDisplaysToSlots } = requi
 const { PlugService, createPlugClient, createMockPlugClient, sanitizePlugLog } = require("./plugs");
 const { MediaLibrary, MAX_BYTES, extensionFor, normalizeFolder } = require("./media");
 const { DeviceStore, COOKIE_NAME: DEVICE_COOKIE, DEVICE_MAX_AGE_MS, pinIsValid, DEFAULT_PIN } = require("./devices");
-const { GuestAlbum } = require("./photos");
+const { GuestAlbum, loadSharp } = require("./photos");
 const { loadCatalog, starterFile, starterCards, purgeRemovedStarters } = require("./catalog");
 const { starterThemes } = require("./season");
 const { noteStall } = require("./playback-flags");
@@ -44,12 +44,21 @@ const {
   readGuestCookie,
   scanPage,
 } = require("./guest-link");
-const { createCloudflareTunnel } = require("./cloudflared");
+const { createCloudflareTunnel, formatTunnelCheck, shouldRestartTunnel } = require("./cloudflared");
 const { isTunneledRequest, isGuestRoute, guestPortFor } = require("./tunnel");
 const { maskProfanity } = require("./text-filter");
 const { embedSrc, parseYoutubeInput } = require("./youtube");
 const { isInside, defaultDataDir, dataLayout } = require("./paths");
-const { launchDetachedUpdate, launchRegisterTasks, readGitCommit, readUpdateStatusSync } = require("./self-update");
+const {
+  inspectRuntimeDependencies,
+  invokeNowCompleted,
+  invokeNowStarted,
+  launchRegisterTasks,
+  launchScheduledUpdate,
+  readGitCommit,
+  readUpdateLogSync,
+  readUpdateStatusSync,
+} = require("./self-update");
 const pkg = require("../package.json");
 
 const UPLOAD_TYPES = {
@@ -307,6 +316,13 @@ function createApp({
   if (clipCache || process.env.PINBALL_CLIP_CACHE === "1") clips.start();
   let playback = null;
   const updateDataDir = dataDir || defaultDataDir();
+  const runtimeDeps = inspectRuntimeDependencies(appRoot);
+  if (!runtimeDeps.ok) {
+    for (const item of runtimeDeps.failed) {
+      console.error(`runtime dependency ${item.name} failed to load: ${item.message}`);
+    }
+  }
+  const photoProcessorWarning = runtimeDeps.photoProcessor || "";
   let commitCache = null;
   let statusCache = { at: 0, value: null };
 
@@ -333,6 +349,9 @@ function createApp({
       lastAt: status.at || null,
       lastResult: status.action || null,
       lastDetail: status.detail || "",
+      integrityAt: status.integrityAt || null,
+      integrityOk: status.integrityAt ? status.integrityOk === true : null,
+      integrityDetail: status.integrityDetail || "",
     };
   }
 
@@ -525,6 +544,8 @@ function createApp({
         autoApprove: config.scores?.autoApprove === true,
       },
       updates: updateFields(config),
+      build: commitCache || "",
+      photoProcessor: photoProcessorWarning,
       kiosk: {
         restartToken,
         monitors: mapped.arranged.map((display) => ({
@@ -563,6 +584,7 @@ function createApp({
       },
       serverNow: full.serverNow,
       version: full.version,
+      build: full.build || "",
       motion: full.motion,
       slogans: full.slogans,
     };
@@ -743,6 +765,7 @@ function createApp({
   let publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: 0 };
   let verifiedOrigin = "";
   let verifyMisses = 0;
+  let tunnelFailures = { url: "", failures: 0, since: 0, passedOnce: false };
   let verifySerial = 0;
   let lastGuestDetail = "";
   let routesReady = false;
@@ -803,6 +826,45 @@ function createApp({
     }
   }
 
+  function appendTunnelLog(line) {
+    try {
+      fs.mkdirSync(path.dirname(tunnelLog), { recursive: true });
+      fs.appendFileSync(tunnelLog, `${new Date().toISOString()} ${line}\n`);
+    } catch {
+      // The status line still carries the result.
+    }
+  }
+
+  function noteTunnelCheck(candidate, probe) {
+    appendTunnelLog(formatTunnelCheck({
+      url: candidate,
+      ok: probe.ok === true,
+      status: probe.status || 0,
+      error: probe.error || "",
+    }));
+    if (tunnelFailures.url !== candidate) {
+      tunnelFailures = { url: candidate, failures: 0, since: 0, passedOnce: false };
+    }
+    if (probe.ok === true) {
+      tunnelFailures.failures = 0;
+      tunnelFailures.since = 0;
+      tunnelFailures.passedOnce = true;
+      return;
+    }
+    tunnelFailures.failures += 1;
+    if (!tunnelFailures.since) tunnelFailures.since = clockNow();
+    const due = shouldRestartTunnel({
+      failing: true,
+      passedOnce: tunnelFailures.passedOnce,
+      failures: tunnelFailures.failures,
+      failingForMs: clockNow() - tunnelFailures.since,
+    });
+    if (!due || typeof cloudflareTunnel.restart !== "function") return;
+    tunnelFailures = { url: "", failures: 0, since: 0, passedOnce: false };
+    appendTunnelLog(`restart ${candidate} after failed checks`);
+    cloudflareTunnel.restart("public link checks failed");
+  }
+
   async function probeCloudflare(origin) {
     const fetchImpl = probeFetch || fetch;
     const token = guestToken(guestSecret(), guestDay(clockNow()));
@@ -818,34 +880,34 @@ function createApp({
           headers: cookie ? { cookie } : {},
           signal: AbortSignal.timeout(8000),
         });
-      } catch {
-        return false;
+      } catch (err) {
+        return { ok: false, status: 0, error: err.code || err.name || "network" };
       }
       let seen;
       try {
         seen = new URL(current);
       } catch {
-        return false;
+        return { ok: false, status: 0, error: "bad-url" };
       }
-      if (seen.protocol !== "https:" || seen.hostname !== host) return false;
+      if (seen.protocol !== "https:" || seen.hostname !== host) return { ok: false, status: 0, error: "left-cloudflare" };
       const status = Number(res?.status) || 0;
-      if (status === 200) return true;
-      if (status < 300 || status >= 400) return false;
+      if (status === 200) return { ok: true, status: 200, error: "" };
+      if (status < 300 || status >= 400) return { ok: false, status, error: status ? "" : "no-status" };
       const loc = responseHeader(res, "location");
-      if (!loc) return false;
+      if (!loc) return { ok: false, status, error: "no-location" };
       let next;
       try {
         next = new URL(loc, current);
       } catch {
-        return false;
+        return { ok: false, status, error: "bad-location" };
       }
-      if (next.protocol !== "https:" || next.hostname !== host) return false;
+      if (next.protocol !== "https:" || next.hostname !== host) return { ok: false, status, error: "left-cloudflare" };
       const setCookie = responseHeader(res, "set-cookie");
       const match = /pl_guest=[^;,\s]+/i.exec(setCookie);
       if (match) cookie = match[0];
       current = next.toString();
     }
-    return false;
+    return { ok: false, status: 0, error: "too-many-redirects" };
   }
 
   function hidePublicLink(detail) {
@@ -875,10 +937,11 @@ function createApp({
     if (!candidate) {
       return noteProbeMiss(live?.detail || "Cloudflare is starting. The guest link will show here when it is ready.");
     }
-    const ok = await probeCloudflare(candidate);
+    const probe = await probeCloudflare(candidate);
+    noteTunnelCheck(candidate, probe);
     if (serial !== verifySerial || currentConfig().publicAccess?.enabled !== true) return publicStatus;
     const still = cloudflareGuestOrigin(cloudflareTunnel.status()?.url);
-    if (!ok || still !== candidate) {
+    if (!probe.ok || still !== candidate) {
       return noteProbeMiss(live?.detail || `Cloudflare is up. Guests use ${candidate}`);
     }
     verifyMisses = 0;
@@ -2242,12 +2305,21 @@ function createApp({
   const proofDir = path.join(dataDir || path.dirname(store.filePath), "score-proofs");
 
   async function saveScoreProof(buffer) {
-    const sharp = require("sharp");
-    const processed = await sharp(buffer, { failOn: "none", animated: false })
-      .rotate()
-      .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 82 })
-      .toBuffer();
+    const sharp = loadSharp();
+    let processed;
+    try {
+      processed = await sharp(buffer, { failOn: "none", animated: false })
+        .rotate()
+        .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 82 })
+        .toBuffer();
+    } catch (err) {
+      if (err && err.status) throw err;
+      if (err instanceof SyntaxError || /unexpected token/i.test(String(err && err.message))) {
+        throw Object.assign(new Error("photo processor unavailable"), { status: 503, cause: err });
+      }
+      throw err;
+    }
     const proofFile = `${crypto.randomUUID()}.jpg`;
     fs.mkdirSync(proofDir, { recursive: true });
     fs.writeFileSync(path.join(proofDir, proofFile), processed);
@@ -2835,13 +2907,43 @@ function createApp({
           note: "Update now runs on the Windows kiosk. This computer was not changed.",
         });
       }
-      launchDetachedUpdate({ appRoot, mode: "now" });
+      const launched = launchScheduledUpdate({ dataDir: updateDataDir, mode: "now" });
       sendJson(res, 200, {
         version: pkg.version,
         commit: updates.commit,
-        started: true,
+        started: launched.started,
+        requestedAt: launched.requestedAt,
         applied: false,
-        note: "Update started. The wall comes back when it finishes. Venue data is not changed.",
+        note: launched.started ? "Checking that the update started." : "not started",
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/updates/now", requirePin, (req, res, next) => {
+    try {
+      const since = String(req.query.since || "");
+      const logsDir = dataLayout(updateDataDir).logs;
+      const logText = readUpdateLogSync(logsDir);
+      const started = invokeNowStarted(logText, since);
+      const completed = invokeNowCompleted(logText, since);
+      const status = readUpdateStatusSync(logsDir) || {};
+      const finished = started && completed;
+      sendJson(res, 200, {
+        started,
+        finished,
+        lastAt: finished ? status.at || null : null,
+        lastResult: finished ? status.action || null : null,
+        lastDetail: finished ? status.detail || "" : "",
+        integrityAt: finished ? status.integrityAt || null : null,
+        integrityOk: finished && status.integrityAt ? status.integrityOk === true : null,
+        integrityDetail: finished ? status.integrityDetail || "" : "",
+        note: finished
+          ? `Last update ${status.at || ""}: ${status.action || "unknown"}. ${status.detail || ""}`.trim()
+          : started
+            ? "Update started."
+            : "not started",
       });
     } catch (err) {
       next(err);

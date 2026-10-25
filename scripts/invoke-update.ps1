@@ -1,10 +1,12 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Boot, nightly, or manual update. Starts the current server even when GitHub is down.
+  Boot, nightly, or manual update. Boot opens the wall before it waits for GitHub.
 .DESCRIPTION
-  Boot runs before the server and the kiosk. Nightly and Update now stop those tasks,
-  update, then start them again so the TVs come back fullscreen. Venue data is not deleted.
+  Boot runs a local integrity check, starts the current server and kiosk, then waits
+  for the network in the background. A staged update restarts only the server.
+  Nightly and Update now stop those tasks, update, then start them again.
+  Venue data is not deleted.
 #>
 param(
   [ValidateSet("boot", "nightly", "now", "retry")]
@@ -12,13 +14,20 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-Set-Location $RepoRoot
+$ScriptDir = $PSScriptRoot
+if ($env:PINBALL_APP_ROOT) {
+  $RepoRoot = (Resolve-Path -LiteralPath $env:PINBALL_APP_ROOT).Path
+} else {
+  $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+}
+# Leave the install directory so a staged swap can rename it.
+Set-Location (Split-Path -Parent $RepoRoot)
 
 $serverTask = "PinballLandServer"
 $kioskTask = "PinballLandKiosk"
 
 function Get-PinballDataDir {
+  if ($env:PINBALL_DATA_DIR) { return $env:PINBALL_DATA_DIR }
   $base = if ($env:ProgramData) { $env:ProgramData } else { "C:\ProgramData" }
   return (Join-Path $base "PinballLand")
 }
@@ -85,20 +94,192 @@ function Start-PinballTask {
   param([Parameter(Mandatory = $true)][string]$Name)
   $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
   if (-not $task) {
+    Write-UpdateTrace "scheduled task $Name is not registered"
     Write-Warning "Scheduled task '$Name' is not registered."
-    return
+    return $false
   }
-  if ([string]$task.State -eq "Running") { return }
-  Start-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+  if ([string]$task.State -eq "Running") {
+    Write-UpdateTrace "$Name already running"
+    return $true
+  }
+  try {
+    Start-ScheduledTask -TaskName $Name -ErrorAction Stop
+    Write-UpdateTrace "started $Name"
+    return $true
+  } catch {
+    Write-UpdateTrace "Start-ScheduledTask $Name failed: $($_.Exception.Message)"
+    Write-Warning "Could not start '$Name': $($_.Exception.Message)"
+    return $false
+  }
+}
+
+function Start-HiddenLauncher {
+  param([Parameter(Mandatory = $true)][string]$Kind)
+  $vbs = Join-Path $PSScriptRoot "launch-hidden.vbs"
+  $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+  if (-not (Test-Path -LiteralPath $vbs) -or -not (Test-Path -LiteralPath $wscript)) {
+    Write-UpdateTrace "hidden launcher missing for $Kind"
+    return $false
+  }
+  Start-Process -FilePath $wscript -ArgumentList @("//B", "//Nologo", $vbs, $Kind) -WindowStyle Hidden
+  Write-UpdateTrace "started hidden $Kind"
+  return $true
 }
 
 function Start-Wall {
-  Start-PinballTask -Name $serverTask
-  Start-Sleep -Seconds 5
-  Start-PinballTask -Name $kioskTask
+  $pause = 5
+  if ($env:PINBALL_WALL_PAUSE_SEC -match '^\d+$') { $pause = [int]$env:PINBALL_WALL_PAUSE_SEC }
+  Write-UpdateTrace "phase wall-server"
+  if (-not (Start-PinballTask -Name $serverTask)) {
+    if (-not $env:PINBALL_APP_ROOT) { Start-HiddenLauncher -Kind server | Out-Null }
+  }
+  if ($pause -gt 0) { Start-Sleep -Seconds $pause }
+  Write-UpdateTrace "phase wall-kiosk"
+  if (-not (Start-PinballTask -Name $kioskTask)) {
+    if (-not $env:PINBALL_APP_ROOT) { Start-HiddenLauncher -Kind kiosk | Out-Null }
+  }
+}
+
+function Stop-PinballServer {
+  Stop-ScheduledTask -TaskName $serverTask -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 300
+  $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $cmd = [string]$_.CommandLine
+    if (-not $cmd) { return $false }
+    if ($cmd -match "run-update\.js" -or $cmd -match "invoke-update\.ps1" -or $cmd -match "check-install\.js" -or $cmd -match "check-upload\.js") { return $false }
+    return ($cmd -match "src\\server\.js" -or $cmd -match "src/server\.js")
+  })
+  foreach ($proc in $procs) {
+    Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Milliseconds 500
+}
+
+function Test-KioskRunning {
+  $task = Get-ScheduledTask -TaskName $kioskTask -ErrorAction SilentlyContinue
+  if ($task -and [string]$task.State -eq "Running") { return $true }
+  $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $cmd = [string]$_.CommandLine
+    if (-not $cmd) { return $false }
+    return ($cmd -match "start-kiosk" -or $cmd -match "kiosk\.js" -or $cmd -match "kiosk\.ps1" -or $cmd -match "electron")
+  })
+  return @($procs).Count -gt 0
+}
+
+function Start-ServerOnly {
+  Write-UpdateTrace "phase server-restart"
+  if (-not (Start-PinballTask -Name $serverTask)) {
+    if (-not $env:PINBALL_APP_ROOT) { Start-HiddenLauncher -Kind server | Out-Null }
+  }
+  if (Test-KioskRunning) {
+    Write-UpdateTrace "restarted the server only"
+  } else {
+    Write-UpdateTrace "kiosk was dead; restarted windows"
+    Write-UpdateTrace "phase wall-kiosk"
+    if (-not (Start-PinballTask -Name $kioskTask)) {
+      if (-not $env:PINBALL_APP_ROOT) { Start-HiddenLauncher -Kind kiosk | Out-Null }
+    }
+  }
+}
+
+function Invoke-BootSequence {
+  Write-UpdateTrace "phase quick-check"
+  if ($nodeExe -and (Test-Path -LiteralPath $checkJs)) {
+    & $nodeExe $checkJs --quick
+    if ($LASTEXITCODE -ne 0) {
+      Write-UpdateTrace "quick check failed; repairing before the wall"
+      & $nodeExe $checkJs --repair
+      & $nodeExe $checkJs --quick
+      if ($LASTEXITCODE -eq 0) { Write-UpdateTrace "quick check ok after repair" }
+      else { Write-UpdateTrace "quick check still failing" }
+    } else {
+      Write-UpdateTrace "quick check ok"
+    }
+  } else {
+    Write-UpdateTrace "quick check skipped; node.exe missing"
+  }
+
+  Start-Wall
+  $script:wallOpened = $true
+  Write-UpdateTrace "wall open at $($script:bootWatch.ElapsedMilliseconds)ms"
+
+  if ($nodeExe -and (Test-Path -LiteralPath $checkJs)) {
+    Write-UpdateTrace "phase zero-scan"
+    $scanRaw = & $nodeExe $checkJs --zeros
+    $scanCode = $LASTEXITCODE
+    $elapsed = "0"
+    try {
+      $parsed = $scanRaw | ConvertFrom-Json
+      if ($null -ne $parsed.elapsedMs) { $elapsed = [string]$parsed.elapsedMs }
+    } catch {
+      Write-UpdateTrace "zero-scan output was not json"
+    }
+    Write-UpdateTrace "zero-scan ${elapsed}ms exit $scanCode"
+    if ($scanCode -ne 0) {
+      Write-UpdateTrace "zero-scan failed; repairing"
+      Stop-PinballServer
+      & $nodeExe $checkJs --repair
+      Start-ServerOnly
+    }
+  }
+
+  if ($nodeExe -and (Test-Path -LiteralPath $uploadJs)) {
+    Write-UpdateTrace "phase upload-check"
+    & $nodeExe $uploadJs
+    if ($LASTEXITCODE -ne 0) {
+      Write-UpdateTrace "upload check failed; repairing"
+      Stop-PinballServer
+      & $nodeExe $uploadJs --repair
+      if ($LASTEXITCODE -ne 0) { & $nodeExe $checkJs --repair }
+      & $nodeExe $uploadJs
+      if ($LASTEXITCODE -eq 0) { Write-UpdateTrace "upload check ok after repair" }
+      else { Write-UpdateTrace "upload check still failing" }
+      Start-ServerOnly
+    } else {
+      Write-UpdateTrace "upload check ok"
+    }
+  }
+
+  Write-UpdateTrace "phase dns-wait"
+  $dnsOk = Wait-ForGithubDns -TimeoutSec $dnsTimeout
+  if (-not $dnsOk) {
+    Write-UpdateTrace "phase update-skip"
+    Write-UpdateTrace "network unavailable; skipping the update"
+    $env:PINBALL_UPDATE_OFFLINE = "1"
+    $script:scheduleRetry = $true
+    if ($nodeExe -and (Test-Path -LiteralPath $checkJs)) { & $nodeExe $checkJs --offline-note | Out-Null }
+    return
+  }
+
+  $plan = 0
+  if ($nodeExe -and (Test-Path -LiteralPath $updateJs)) {
+    Write-UpdateTrace "phase update-plan"
+    & $nodeExe $updateJs --boot --status-only
+    $plan = $LASTEXITCODE
+    if ($plan -eq 10) { Write-UpdateTrace "update available" }
+    if ($plan -eq 11) { Write-UpdateTrace "update skipped" }
+  }
+  if ($plan -ne 10) { return }
+
+  Write-UpdateTrace "phase update-stage"
+  & $nodeExe $updateJs --boot --stage-only
+  if ($LASTEXITCODE -ne 0) {
+    Write-UpdateTrace "staging failed; leaving the current version"
+    return
+  }
+  Write-UpdateTrace "phase update-swap"
+  Stop-PinballServer
+  & $nodeExe $updateJs --boot --swap-staged
+  if ($LASTEXITCODE -ne 0) {
+    Write-UpdateTrace "swap failed; starting the current server"
+  }
+  Start-ServerOnly
 }
 
 function Test-GithubDns {
+  if ($env:PINBALL_DNS_FILE) {
+    return Test-Path -LiteralPath $env:PINBALL_DNS_FILE
+  }
   try {
     $answers = [System.Net.Dns]::GetHostAddresses("github.com")
     return ($null -ne $answers) -and (@($answers).Length -gt 0)
@@ -115,6 +296,7 @@ function Wait-ForGithubDns {
       Write-UpdateTrace "github.com resolves"
       return $true
     }
+    Write-UpdateTrace "waiting for github.com"
     if ((Get-Date) -ge $deadline) {
       Write-UpdateTrace "github.com did not resolve within ${TimeoutSec}s"
       return $false
@@ -155,9 +337,13 @@ function Test-NetworkSkip {
 function Register-UpdateRetry {
   $taskName = "PinballLandUpdateRetry"
   $when = (Get-Date).AddMinutes(3)
-  $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-  $wrapper = Join-Path $PSScriptRoot "invoke-update.ps1"
-  $action = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$wrapper`" -Mode retry" -WorkingDirectory $RepoRoot
+  $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+  $hidden = Join-Path $PSScriptRoot "launch-hidden.vbs"
+  if (-not (Test-Path -LiteralPath $wscript) -or -not (Test-Path -LiteralPath $hidden)) {
+    Write-UpdateTrace "could not schedule retry"
+    return
+  }
+  $action = New-ScheduledTaskAction -Execute $wscript -Argument "//B //Nologo `"$hidden`" retry" -WorkingDirectory $RepoRoot
   $trigger = New-ScheduledTaskTrigger -Once -At $when
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
   $user = $env:USERNAME
@@ -173,51 +359,168 @@ function Register-UpdateRetry {
   }
 }
 
+function Remove-TemporaryWallTask {
+  $name = "PinballLandWallNow"
+  $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+  if (-not $task) { return }
+  try {
+    Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
+    Write-UpdateTrace "removed PinballLandWallNow"
+  } catch {
+    Write-UpdateTrace "could not remove PinballLandWallNow: $($_.Exception.Message)"
+  }
+}
+
+function Register-UpdateNowTask {
+  $name = "PinballLandUpdateNow"
+  $existing = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+  if ($existing) { return }
+  $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+  $hidden = Join-Path $PSScriptRoot "launch-hidden.vbs"
+  if (-not (Test-Path -LiteralPath $wscript) -or -not (Test-Path -LiteralPath $hidden)) {
+    Write-UpdateTrace "could not register $name"
+    return
+  }
+  $action = New-ScheduledTaskAction -Execute $wscript -Argument "//B //Nologo `"$hidden`" now" -WorkingDirectory $RepoRoot
+  $trigger = New-ScheduledTaskTrigger -Once -At ([datetime]::Parse("2035-01-01T00:00:00"))
+  $trigger.Enabled = $false
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+  $user = $env:USERNAME
+  foreach ($level in @("Highest", "Limited")) {
+    try {
+      $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel $level
+      Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+      Write-UpdateTrace "registered $name"
+      return
+    } catch {
+      Write-UpdateTrace "register $name ($level) failed: $($_.Exception.Message)"
+    }
+  }
+}
+
+$skipWall = $false
+$skipRestart = $false
+$scheduleRetry = $false
+$wallOpened = $false
+try {
+# The button looks for this line. Write it before DNS, git, or stopping the wall.
+$script:bootWatch = [Diagnostics.Stopwatch]::StartNew()
+Write-UpdateTrace "start"
+if ($env:PINBALL_UPDATE_SMOKE -eq "1") {
+  $skipWall = $true
+  return
+}
+
+$updatesOff = $false
 if ($Mode -eq "nightly" -and -not (Test-UpdatesEnabled)) {
   Write-UpdateTrace "skipped because automatic updates are off"
   Write-Host "Automatic updates are off. Nightly restart was not run."
-  exit 0
+  $updatesOff = $true
 }
 
 $incomingMode = $Mode
 if ($Mode -eq "retry") {
   if (-not (Wait-ForGithubDns -TimeoutSec 120)) {
     Write-UpdateTrace "retry gave up; github.com still does not resolve"
-    exit 0
+    return
   }
   $Mode = "now"
 }
 
-if ($Mode -eq "boot") {
-  Wait-ForGithubDns -TimeoutSec 120 | Out-Null
+$dnsTimeout = 120
+if ($env:PINBALL_DNS_TIMEOUT_SEC -match '^\d+$') { $dnsTimeout = [int]$env:PINBALL_DNS_TIMEOUT_SEC }
+
+if ($Mode -eq "boot" -or $Mode -eq "nightly") {
+  Register-UpdateNowTask
 }
 
 $nodeExe = Resolve-NodeExe
-$updateJs = Join-Path $RepoRoot "scripts\run-update.js"
-$flag = if ($Mode -eq "nightly") { "--nightly" } elseif ($Mode -eq "now") { "--now" } else { "--boot" }
+$updateJs = Join-Path $ScriptDir "run-update.js"
+$checkJs = Join-Path $ScriptDir "check-install.js"
+$uploadJs = Join-Path $ScriptDir "check-upload.js"
 
-Write-UpdateTrace "start"
-if ($Mode -eq "nightly" -or $Mode -eq "now") {
-  Write-Host "Stopping the server and the kiosk before the update."
-  Stop-PinballTasks
-}
-
-if (-not $nodeExe) {
-  Write-UpdateTrace "node.exe missing; starting the current tasks"
-  Write-Warning "node.exe was not found. Starting the current version."
+if ($Mode -eq "boot") {
+  Invoke-BootSequence
 } else {
-  & $nodeExe $updateJs $flag
-  if ($LASTEXITCODE -ne 0) {
-    Write-UpdateTrace "updater exit $LASTEXITCODE; starting the current version"
-    Write-Warning "Updater exited $LASTEXITCODE. Starting the current version."
+  $flag = if ($Mode -eq "nightly") { "--nightly" } else { "--now" }
+  $plan = 0
+  if (-not $updatesOff -and $nodeExe -and (Test-Path -LiteralPath $updateJs)) {
+    Write-UpdateTrace "phase update-plan"
+    & $nodeExe $updateJs $flag --status-only
+    $plan = $LASTEXITCODE
+    if ($plan -eq 10) { Write-UpdateTrace "update available" }
+    if ($plan -eq 11) { Write-UpdateTrace "update skipped" }
+  }
+
+  $installHealthy = $true
+  if (($Mode -eq "nightly" -or $Mode -eq "now") -and $nodeExe -and (Test-Path -LiteralPath $checkJs)) {
+    & $nodeExe $checkJs --scan
+    if ($LASTEXITCODE -ne 0) {
+      $installHealthy = $false
+      Write-UpdateTrace "install integrity failed"
+    }
+  }
+
+  $apply = ($plan -eq 10) -and -not $updatesOff
+  if (($Mode -eq "nightly" -or $Mode -eq "now") -and -not $apply -and $installHealthy) {
+    Write-UpdateTrace "up-to-date; leaving the wall running"
+    $skipRestart = $true
+  }
+
+  if (($Mode -eq "nightly" -or $Mode -eq "now") -and -not $skipRestart) {
+    Write-Host "Stopping the server and the kiosk before the update."
+    Stop-PinballTasks
+  }
+
+  if ($apply -and -not $skipRestart -and $nodeExe) {
+    Write-UpdateTrace "phase update-apply"
+    & $nodeExe $updateJs $flag
+    if ($LASTEXITCODE -ne 0) {
+      Write-UpdateTrace "updater exit $LASTEXITCODE; starting the current version"
+      Write-Warning "Updater exited $LASTEXITCODE. Starting the current version."
+    }
+  } elseif (-not $nodeExe -and -not $skipRestart) {
+    Write-UpdateTrace "node.exe missing; starting the current tasks"
+    Write-Warning "node.exe was not found. Starting the current version."
+  }
+
+  if (-not $skipRestart -and $nodeExe -and (Test-Path -LiteralPath $checkJs)) {
+    Write-UpdateTrace "phase integrity"
+    & $nodeExe $checkJs --repair
+    if ($LASTEXITCODE -ne 0) {
+      Write-UpdateTrace "install integrity failed"
+      Write-Warning "Install integrity check failed. Starting the current version."
+    } else {
+      Write-UpdateTrace "install integrity ok"
+    }
+  } elseif ($skipRestart) {
+    Write-UpdateTrace "install integrity ok"
   }
 }
 
-if ($incomingMode -eq "boot" -and (Test-NetworkSkip (Read-UpdateStatus))) {
+Remove-TemporaryWallTask
+
+if ($incomingMode -eq "boot" -and ($scheduleRetry -or (Test-NetworkSkip (Read-UpdateStatus)))) {
   Register-UpdateRetry
 }
 
-Write-Host "Starting the server and the kiosk."
-Start-Wall
-Write-UpdateTrace "server and kiosk started"
+} finally {
+  # A flag skips the wall here. Leaving the block directly is a parse error.
+  if (-not $skipWall -and -not $wallOpened) {
+    if ($skipRestart) {
+      Write-UpdateTrace "nightly left the wall running"
+      Write-Host "Nothing changed. Leaving the wall running."
+    } else {
+      Write-Host "Starting the server and the kiosk."
+    }
+    try {
+      # Start-Wall leaves a task that is already running alone, so an up-to-date nightly does not bounce the TVs.
+      Start-Wall
+      Write-UpdateTrace "server and kiosk started"
+    } catch {
+      Write-UpdateTrace "Start-Wall failed: $($_.Exception.Message)"
+      Write-Warning "The wall did not start: $($_.Exception.Message)"
+    }
+  }
+}
 exit 0

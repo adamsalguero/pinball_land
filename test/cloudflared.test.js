@@ -12,6 +12,7 @@ const {
   createCloudflareTunnel,
   plainTunnelError,
   sha256Buffer,
+  shouldRestartTunnel,
 } = require("../src/cloudflared");
 
 test("cloudflared download keeps a matching file and rejects a bad checksum", async () => {
@@ -148,6 +149,62 @@ test("a spawn failure names the downloaded file and is written to the tunnel log
     assert.match(log, /cloudflared\.exe/);
     assert.match(log, /ENOENT/);
     assert.equal(log.includes(" start cloudflared "), false);
+  } finally {
+    tunnel?.stop();
+    asset.sha256 = original;
+  }
+});
+
+test("shouldRestartTunnel uses three misses after a pass, or five minutes", () => {
+  assert.equal(shouldRestartTunnel({ failing: true, passedOnce: true, failures: 2, failingForMs: 1000 }), false);
+  assert.equal(shouldRestartTunnel({ failing: true, passedOnce: true, failures: 3, failingForMs: 1000 }), true);
+  assert.equal(shouldRestartTunnel({ failing: true, passedOnce: false, failures: 9, failingForMs: 1000 }), false);
+  assert.equal(shouldRestartTunnel({ failing: true, passedOnce: false, failures: 1, failingForMs: 5 * 60 * 1000 }), true);
+  assert.equal(shouldRestartTunnel({ failing: false, passedOnce: true, failures: 3, failingForMs: 9 * 60 * 1000 }), false);
+});
+
+test("repeated tunnel registration errors kill cloudflared for a fresh url", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pinball-tunnel-"));
+  const asset = cloudflaredAsset("linux", "x64");
+  const original = asset.sha256;
+  const body = Buffer.from("bin");
+  asset.sha256 = sha256Buffer(body);
+  const children = [];
+  let tunnel;
+  try {
+    tunnel = createCloudflareTunnel({
+      binDir: dir,
+      logFile: path.join(dir, "logs", "tunnel.log"),
+      port: 3010,
+      platform: "linux",
+      arch: "x64",
+      backoffStart: 20,
+      fetchImpl: async () => ({ ok: true, arrayBuffer: async () => body }),
+      spawnImpl(bin, args) {
+        const child = new EventEmitter();
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => child.emit("exit", 0);
+        child.args = args;
+        children.push(child);
+        return child;
+      },
+    });
+    tunnel.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    children[0].stderr.emit("data", "https://old-name.trycloudflare.com\n");
+    assert.equal(tunnel.status().url, "https://old-name.trycloudflare.com");
+    const line = 'ERR Register tunnel error from server side error="Unauthorized: Tunnel not found"\n';
+    children[0].stderr.emit("data", line);
+    children[0].stderr.emit("data", line);
+    assert.equal(children.length, 1);
+    assert.equal(tunnel.status().url, "https://old-name.trycloudflare.com");
+    children[0].stderr.emit("data", line);
+    assert.equal(tunnel.status().url, "");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(children.length >= 2, true);
+    const log = await fsp.readFile(path.join(dir, "logs", "tunnel.log"), "utf8");
+    assert.match(log, /restart tunnel registration failed/);
   } finally {
     tunnel?.stop();
     asset.sha256 = original;

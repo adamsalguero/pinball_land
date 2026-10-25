@@ -277,7 +277,29 @@ async function startServer() {
 
 const retainedServers = [];
 
+function hideServerConsole() {
+  if (process.platform !== "win32" || process.env.PINBALL_SHOW_CONSOLE === "1") return;
+  const { execFileSync } = require("child_process");
+  const command = [
+    "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class PinballConsole {",
+    "[DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow();",
+    "[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); }';",
+    "$hwnd = [PinballConsole]::GetConsoleWindow();",
+    "if ($hwnd -ne [IntPtr]::Zero) { [void][PinballConsole]::ShowWindow($hwnd, 0) }",
+  ].join(" ");
+  try {
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+      windowsHide: true,
+      stdio: "ignore",
+      timeout: 8000,
+    });
+  } catch {
+    // The server still runs when the console cannot be hidden.
+  }
+}
+
 if (require.main === module) {
+  hideServerConsole();
   startServer()
     .then((started) => {
       retainedServers.push(started);

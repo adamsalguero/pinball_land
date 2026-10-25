@@ -2286,6 +2286,7 @@ function tick() {
 }
 
 function applyPayload(next) {
+  if (window.PinballBuild?.watchBuild(next?.build)) return;
   const showing = wallVideo?.dataset?.mediaUrl || "";
   const drop = window.PinballRotation.clipsToRelease(
     payload?.rotationPlan,

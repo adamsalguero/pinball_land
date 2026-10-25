@@ -114,11 +114,26 @@ function writeUxplayArguments({
       existing = "";
     }
     const body = `${mergeUxplayArguments(existing, windowTitle)}\n`;
-    fsImpl.mkdirSync(path.dirname(file), { recursive: true });
-    fsImpl.writeFileSync(file, body);
-    written.push(file);
+    try {
+      fsImpl.mkdirSync(path.dirname(file), { recursive: true });
+      fsImpl.writeFileSync(file, body);
+      written.push(file);
+    } catch (err) {
+      const code = err && err.code;
+      if (code === "EPERM" || code === "EACCES" || code === "EBUSY") {
+        written.denied = written.denied || [];
+        written.denied.push(file);
+        continue;
+      }
+      throw err;
+    }
   }
   return written;
+}
+
+function airplayBackoffMs(restarts) {
+  const n = Math.max(0, Number(restarts) || 0);
+  return Math.min(60000, 5000 * (2 ** n));
 }
 
 function uxplayImageRunning(image, execImpl = execFileSync) {
@@ -368,6 +383,7 @@ class AirplayController {
     this.slot = null;
     this.keepAlive = false;
     this.restarts = 0;
+    this.argumentBackoffUntil = 0;
     this.logBuffer = "";
     this.session = new AirplaySession();
   }
@@ -389,7 +405,9 @@ class AirplayController {
       extraArgs: airplay.args,
       platform: this.platform,
     });
-    this.rememberArguments(airplay.windowTitle);
+    if (this.rememberArguments(airplay.windowTitle) === false) {
+      return { ok: false, error: "Could not write UxPlay arguments" };
+    }
     if (this.externalRunning()) {
       return { ok: true, already: true, external: true, command: resolved.command };
     }
@@ -454,17 +472,33 @@ class AirplayController {
   }
 
   rememberArguments(windowTitle) {
-    if (process.env.NODE_TEST_CONTEXT) return;
+    if (process.env.NODE_TEST_CONTEXT) return true;
     try {
-      writeUxplayArguments({ windowTitle, platform: this.platform });
+      const written = writeUxplayArguments({ windowTitle, platform: this.platform });
+      if (written && written.denied && written.denied.length && written.length === 0) {
+        if (!this.argumentsDeniedLogged) {
+          this.argumentsDeniedLogged = true;
+          console.error(`AirPlay arguments were not written (${written.denied.join(", ")}). Backing off.`);
+        }
+        return false;
+      }
+      return true;
     } catch (err) {
-      console.error(err);
+      console.error(`AirPlay arguments were not written (${err.code || err.message}). Backing off.`);
+      return false;
     }
   }
 
   launch(resolved, args, slot) {
+    if (this.argumentBackoffUntil && Date.now() < this.argumentBackoffUntil) {
+      return { ok: false, error: "UxPlay argument write is backing off" };
+    }
     const airplay = this.getAirplayConfig() || {};
-    this.rememberArguments(airplay.windowTitle);
+    if (this.rememberArguments(airplay.windowTitle) === false) {
+      this.restarts += 1;
+      this.argumentBackoffUntil = Date.now() + airplayBackoffMs(this.restarts);
+      return { ok: false, error: "Could not write UxPlay arguments" };
+    }
     if (this.externalRunning()) {
       return { ok: true, already: true, external: true, command: resolved.command };
     }
@@ -501,7 +535,7 @@ class AirplayController {
         this.restarts += 1;
         const timer = setTimeout(() => {
           if (this.keepAlive && !this.child) this.ensureRunning();
-        }, 2000);
+        }, airplayBackoffMs(this.restarts));
         if (typeof timer.unref === "function") timer.unref();
       }
     };
@@ -585,6 +619,7 @@ module.exports = {
   mergeUxplayArguments,
   uxplayArgumentPaths,
   writeUxplayArguments,
+  airplayBackoffMs,
   uxplayAlreadyRunning,
   buildAirplayArgs,
   buildPlacementScript,

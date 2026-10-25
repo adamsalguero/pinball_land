@@ -383,8 +383,8 @@ function Write-KioskVerifySummary {
     $nightlyArg = ""
     if ($boot -and $boot.Actions) { $bootArg = [string]@($boot.Actions)[0].Arguments }
     if ($nightly -and $nightly.Actions) { $nightlyArg = [string]@($nightly.Actions)[0].Arguments }
-    $bootOk = $boot -and $bootArg -match "invoke-update\.ps1" -and $bootArg -match "-Mode boot"
-    $nightlyOk = $nightly -and $nightlyArg -match "invoke-update\.ps1" -and $nightlyArg -match "-Mode nightly"
+    $bootOk = $boot -and (($bootArg -match "invoke-update\.ps1" -and $bootArg -match "-Mode boot") -or ($bootArg -match "launch-hidden\.vbs" -and $bootArg -match "\bboot\b"))
+    $nightlyOk = $nightly -and (($nightlyArg -match "invoke-update\.ps1" -and $nightlyArg -match "-Mode nightly") -or ($nightlyArg -match "launch-hidden\.vbs" -and $nightlyArg -match "\bnightly\b"))
     Add-Row "Update boot task" $(if ($bootOk) { "OK" } else { "FAIL" }) $(if ($bootOk) { "PinballLandUpdateBoot" } else { "missing" })
     Add-Row "Update nightly task" $(if ($nightlyOk) { "OK" } else { "FAIL" }) $(if ($nightlyOk) { "PinballLandUpdateNightly" } else { "missing" })
     $serverWaits = Test-TaskWaitsForUpdate -Task $server
@@ -392,10 +392,12 @@ function Write-KioskVerifySummary {
     $orderOk = $serverWaits -and $kioskWaits
     Add-Row "Update before start" $(if ($orderOk) { "OK" } else { "FAIL" }) "server and kiosk start from the boot task"
     $nodePath = $null
+    $serverArg = ""
     if ($server -and $server.Actions) {
       $nodePath = [string]@($server.Actions)[0].Execute
+      $serverArg = [string]@($server.Actions)[0].Arguments
     }
-    $nodeOk = $nodePath -and [System.IO.Path]::IsPathRooted($nodePath) -and $nodePath.ToLower().EndsWith("\node.exe")
+    $nodeOk = ($nodePath -and [System.IO.Path]::IsPathRooted($nodePath) -and $nodePath.ToLower().EndsWith("\node.exe")) -or ($nodePath -and $nodePath.ToLower().EndsWith("\wscript.exe") -and $serverArg -match "launch-hidden\.vbs" -and $serverArg -match "\bserver\b")
     Add-Row "Server node.exe" $(if ($nodeOk) { "OK" } else { "FAIL" }) $(if ($nodePath) { $nodePath } else { "missing" })
   }
   $dataDir = Get-PinballDataDir

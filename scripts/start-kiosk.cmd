@@ -17,4 +17,5 @@ if not exist "node_modules\" (
 )
 
 echo Starting Pinball Land kiosk...
-call npm run kiosk
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-kiosk.ps1"
+exit /b %ERRORLEVEL%

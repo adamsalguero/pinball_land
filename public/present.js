@@ -50,6 +50,10 @@ function connectSocket() {
   socket.addEventListener("message", (event) => {
     try {
     const message = JSON.parse(event.data);
+    if (message.type === "state") {
+      if (window.PinballBuild?.watchBuild(message.build)) return;
+      return;
+    }
     if (message.type === "present-viewer-ready") {
       publishOffer().catch((err) => setStatus(err.message || "Could not start the share"));
     } else if (message.type === "present-signal") {

@@ -15,14 +15,23 @@ function cleanText(value, max) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function loadSharp() {
+  try {
+    return require("sharp");
+  } catch (err) {
+    throw Object.assign(new Error("photo processor unavailable"), { status: 503, cause: err });
+  }
+}
+
 class GuestAlbum {
-  constructor({ root, sharpImpl } = {}) {
+  constructor({ root, sharpImpl, sharpLoader = loadSharp } = {}) {
     if (!root) throw new Error("GuestAlbum needs a root folder");
     this.root = root;
     this.filesDir = path.join(root, "files");
     this.archiveDir = path.join(root, "archive");
     this.catalogPath = path.join(root, "album.json");
     this.sharp = sharpImpl;
+    this.sharpLoader = sharpLoader;
     this.events = [];
     this.photos = [];
     this.hits = new Map();
@@ -82,7 +91,12 @@ class GuestAlbum {
 
   async sharpLib() {
     if (this.sharp) return this.sharp;
-    this.sharp = require("sharp");
+    try {
+      this.sharp = this.sharpLoader();
+    } catch (err) {
+      if (err && err.status) throw err;
+      throw Object.assign(new Error("photo processor unavailable"), { status: 503, cause: err });
+    }
     return this.sharp;
   }
 
@@ -133,6 +147,9 @@ class GuestAlbum {
       return this.toPublic(photo);
     } catch (err) {
       if (err.status) throw err;
+      if (err instanceof SyntaxError || /unexpected token/i.test(String(err && err.message))) {
+        throw Object.assign(new Error("photo processor unavailable"), { status: 503, cause: err });
+      }
       throw Object.assign(new Error("That file is not a photo the wall can use."), { status: 400 });
     }
   }
@@ -272,4 +289,4 @@ class GuestAlbum {
   }
 }
 
-module.exports = { GuestAlbum, WINDOW_MS, MAX_PER_WINDOW, MAX_STORED };
+module.exports = { GuestAlbum, loadSharp, WINDOW_MS, MAX_PER_WINDOW, MAX_STORED };

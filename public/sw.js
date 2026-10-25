@@ -1,4 +1,4 @@
-const CACHE = "pinball-guest-v3";
+const CACHE = "pinball-guest-v4";
 const SHELL = ["/", "/app", "/guest.css", "/guest.js", "/machine-gallery.css", "/machine-gallery.js", "/cabinet-placeholder.png", "/design-tokens.css", "/manifest.webmanifest", "/icons/guest-180.png", "/icons/guest-192.png", "/icons/guest-512.png"];
 
 self.addEventListener("install", (event) => {
