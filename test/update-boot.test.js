@@ -16,7 +16,7 @@ test("sign-in update waits for github.com and schedules one later retry", () => 
   assert.match(script, /Wait-ForGithubDns -TimeoutSec 120/);
   assert.match(script, /AddMinutes\(3\)/);
   assert.match(script, /PinballLandUpdateRetry/);
-  assert.match(script, /-WindowStyle Hidden -File `"\$wrapper`" -Mode retry/);
+  assert.match(script, /\/\/B \/\/Nologo `"\$hidden`" retry/);
   assert.match(script, /if \(\$incomingMode -eq "boot" -and \(\$scheduleRetry -or \(Test-NetworkSkip \(Read-UpdateStatus\)\)\)\)/);
   assert.match(script, /Could not resolve host/);
   const retry = script.indexOf('if ($Mode -eq "retry")');

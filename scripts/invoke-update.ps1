@@ -199,9 +199,13 @@ function Test-NetworkSkip {
 function Register-UpdateRetry {
   $taskName = "PinballLandUpdateRetry"
   $when = (Get-Date).AddMinutes(3)
-  $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-  $wrapper = Join-Path $PSScriptRoot "invoke-update.ps1"
-  $action = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$wrapper`" -Mode retry" -WorkingDirectory $RepoRoot
+  $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+  $hidden = Join-Path $PSScriptRoot "launch-hidden.vbs"
+  if (-not (Test-Path -LiteralPath $wscript) -or -not (Test-Path -LiteralPath $hidden)) {
+    Write-UpdateTrace "could not schedule retry"
+    return
+  }
+  $action = New-ScheduledTaskAction -Execute $wscript -Argument "//B //Nologo `"$hidden`" retry" -WorkingDirectory $RepoRoot
   $trigger = New-ScheduledTaskTrigger -Once -At $when
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
   $user = $env:USERNAME
