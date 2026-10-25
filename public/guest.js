@@ -77,7 +77,7 @@ chooseFile.addEventListener("change", () => {
 });
 
 async function uploadOne(file) {
-  const res = await fetch("/api/guest-photos", {
+  const data = await guestJson("/api/guest-photos", {
     method: "POST",
     headers: {
       "content-type": file.type || "image/jpeg",
@@ -86,8 +86,6 @@ async function uploadOne(file) {
     },
     body: file,
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Upload failed");
   return data.photo;
 }
 
@@ -105,6 +103,7 @@ post.addEventListener("click", async () => {
     chooseFile.value = "";
     loadFeed();
   } catch (err) {
+    if (err && err.unreachable) markReach(false);
     status.textContent = err.message;
     post.disabled = false;
   }
@@ -170,11 +169,53 @@ function when(stamp) {
   return new Date(n).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+const REACH = "Can't reach Pinball Land right now.";
+
+function markReach(ok) {
+  const banner = document.getElementById("reach-status");
+  if (banner) banner.hidden = ok;
+}
+
+async function guestJson(url, options = {}) {
+  const opts = { ...options };
+  if (opts.body && typeof opts.body === "object" && !(opts.body instanceof Blob)) {
+    opts.headers = { "content-type": "application/json", ...(opts.headers || {}) };
+    opts.body = JSON.stringify(opts.body);
+  }
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch {
+    const error = new Error(REACH);
+    error.unreachable = true;
+    throw error;
+  }
+  const text = await res.text();
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+  }
+  if ((res.status >= 500) || (data === null && text)) {
+    const error = new Error(REACH);
+    error.unreachable = true;
+    throw error;
+  }
+  if (!res.ok) {
+    const error = new Error((data && data.error) || "Request failed");
+    error.status = res.status;
+    throw error;
+  }
+  return data || {};
+}
+
 async function loadFeed() {
   try {
-  const res = await fetch("/api/guest-photos/feed");
-  if (!res.ok) return;
-  const data = await res.json();
+  const data = await guestJson("/api/guest-photos/feed");
+  markReach(true);
   feed.replaceChildren();
   const photos = data.photos || [];
   feedEmpty.hidden = photos.length > 0;
@@ -191,6 +232,11 @@ async function loadFeed() {
     feed.append(card);
   }
   } catch (err) {
+    if (err && err.unreachable) {
+      markReach(false);
+      feedEmpty.hidden = true;
+      return;
+    }
     console.error(err);
   }
 }
@@ -250,15 +296,22 @@ function maybeScrollScoreForm() {
 }
 
 async function loadScores() {
-  const res = await fetch("/api/guest");
-  const data = await res.json();
-  applyTheme(data.state?.theme);
-  boards = (data.state?.leaderboards || []).filter((board) => board.kind === "machine");
-  renderPicker();
-  const wanted = scoreBoardFromUrl();
-  if (wanted && boards.some((board) => board.id === wanted)) picker.value = wanted;
-  renderScores();
-  maybeScrollScoreForm();
+  try {
+    const data = await guestJson("/api/guest");
+    markReach(true);
+    applyTheme(data.state?.theme);
+    boards = (data.state?.leaderboards || []).filter((board) => board.kind === "machine");
+    renderPicker();
+    const wanted = scoreBoardFromUrl();
+    if (wanted && boards.some((board) => board.id === wanted)) picker.value = wanted;
+    renderScores();
+    maybeScrollScoreForm();
+  } catch (err) {
+    if (err && err.unreachable) {
+      markReach(false);
+      scores.replaceChildren();
+    }
+  }
 }
 
 picker.addEventListener("change", () => {
@@ -317,28 +370,25 @@ document.getElementById("score-form").addEventListener("submit", async (event) =
   const photo = document.getElementById("score-photo").files?.[0];
   note.textContent = "Sending…";
   try {
-    let res;
-    if (photo) {
-      const headers = {
-        "content-type": photo.type || "image/jpeg",
-        "x-name": encodeURIComponent(name),
-        "x-score": score,
-      };
-      if (requested) headers["x-opdb-id"] = encodeURIComponent(requested.opdbId);
-      else headers["x-board-id"] = encodeURIComponent(board.id);
-      res = await fetch("/api/scores", { method: "POST", headers, body: photo });
-    } else {
-      const body = requested
-        ? { opdbId: requested.opdbId, name, score }
-        : { boardId: board.id, name, score };
-      res = await fetch("/api/scores", {
+    const data = photo
+      ? await guestJson("/api/scores", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        headers: {
+          "content-type": photo.type || "image/jpeg",
+          "x-name": encodeURIComponent(name),
+          "x-score": score,
+          ...(requested
+            ? { "x-opdb-id": encodeURIComponent(requested.opdbId) }
+            : { "x-board-id": encodeURIComponent(board.id) }),
+        },
+        body: photo,
+      })
+      : await guestJson("/api/scores", {
+        method: "POST",
+        body: requested
+          ? { opdbId: requested.opdbId, name, score }
+          : { boardId: board.id, name, score },
       });
-    }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Could not send that score");
     note.textContent = data.submission?.status === "approved"
       ? "Sent. It's on the board."
       : "Sent. It shows on the board after the host approves it.";
@@ -346,7 +396,8 @@ document.getElementById("score-form").addEventListener("submit", async (event) =
     showRequested(null);
     if (data.submission?.status === "approved") loadScores();
   } catch (err) {
-    note.textContent = err.message;
+    if (err && err.unreachable) markReach(false);
+    note.textContent = err.unreachable ? err.message : (err.message || "Could not send that score");
   }
 });
 
@@ -376,9 +427,8 @@ function applyGuestAccess(data) {
 
 async function watchTheme() {
   try {
-    const res = await fetch("/api/guest");
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await guestJson("/api/guest");
+    markReach(true);
     applyGuestAccess(data);
     applyTheme(data.state?.theme);
     boards = (data.state?.leaderboards || []).filter((board) => board.kind === "machine");
@@ -386,8 +436,8 @@ async function watchTheme() {
       renderPicker();
       renderScores();
     }
-  } catch {
-    // keep the last theme
+  } catch (err) {
+    if (err && err.unreachable) markReach(false);
   }
 }
 

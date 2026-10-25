@@ -17,6 +17,7 @@
     <link rel="stylesheet" href="/machine-gallery.css" />
   </head>
   <body>
+    <p id="reach-status" class="reach-status" role="status" hidden>Can't reach Pinball Land right now.</p>
     <div id="login" class="login">
       <form id="login-form" class="login-card">
         <p class="eyebrow">Pinball Land</p>
@@ -156,6 +157,7 @@
             <p class="muted">At sign-in the PC checks GitHub main before the server starts, then again at this time. A bad update rolls back. Scores, photos, and settings stay put.</p>
             <p id="version-line" class="muted"></p>
             <p id="photo-processor-settings" class="muted" hidden></p>
+            <p id="integrity-status" class="muted"></p>
             <p id="update-status" class="muted"></p>
             <form id="update-settings" class="add-row">
               <label class="muted"><input id="update-enabled" type="checkbox" checked /> Automatic updates</label>

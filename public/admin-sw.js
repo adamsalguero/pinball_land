@@ -1,4 +1,4 @@
-const CACHE = "pinball-admin-v2";
+const CACHE = "pinball-admin-v3";
 const SHELL = ["/admin", "/control.css", "/admin.css", "/control.js", "/design-tokens.css", "/admin.webmanifest", "/icons/admin-180.png", "/icons/admin-192.png", "/icons/admin-512.png"];
 
 self.addEventListener("install", (event) => {

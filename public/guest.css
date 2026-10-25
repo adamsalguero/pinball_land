@@ -69,6 +69,14 @@ input[type="file"][hidden] {
 }
 .btn.primary { width: 100%; margin-top: 8px; }
 .status { color: var(--muted); min-height: 1.2em; }
+.reach-status {
+  margin: 0;
+  padding: 12px 16px;
+  background: #7a1f2b;
+  color: #fff;
+  text-align: center;
+  font-weight: 700;
+}
 .feed, .scores { display: grid; gap: 12px; }
 .card, .score-card {
   background: var(--panel); border-radius: 20px; overflow: hidden; box-shadow: var(--shadow);

@@ -17,7 +17,7 @@ test("sign-in update waits for github.com and schedules one later retry", () => 
   assert.match(script, /AddMinutes\(3\)/);
   assert.match(script, /PinballLandUpdateRetry/);
   assert.match(script, /-WindowStyle Hidden -File `"\$wrapper`" -Mode retry/);
-  assert.match(script, /if \(\$incomingMode -eq "boot" -and \(Test-NetworkSkip \(Read-UpdateStatus\)\)\)/);
+  assert.match(script, /if \(\$incomingMode -eq "boot" -and \(\$scheduleRetry -or \(Test-NetworkSkip \(Read-UpdateStatus\)\)\)\)/);
   assert.match(script, /Could not resolve host/);
   const retry = script.indexOf('if ($Mode -eq "retry")');
   const stopCall = script.indexOf("  Stop-PinballTasks\n");
@@ -98,6 +98,19 @@ test("update now is a scheduled task and an up-to-date nightly does not stop the
   assert.match(html, /id="photo-processor"/);
   assert.match(register, /\$nowTask = "PinballLandUpdateNow"/);
   assert.match(read(".github/workflows/ci.yml"), /node scripts\/update-now-windows\.js/);
+  assert.match(read(".github/workflows/ci.yml"), /node scripts\/boot-order-windows\.js/);
+  const body = script.slice(script.indexOf("try {"), script.indexOf("} finally {"));
+  const dns = body.indexOf("phase dns-wait");
+  const plan = body.indexOf("phase update-plan");
+  const apply = body.indexOf("phase update-apply");
+  const integrity = body.indexOf("phase integrity");
+  const offline = body.indexOf("phase update-skip");
+  assert.ok(dns > 0 && dns < plan && plan < apply && apply < integrity, "boot updates, then checks the install, then the wall");
+  assert.ok(offline > dns && offline < integrity, "a boot with no network still reaches the integrity check");
+  assert.match(read("public/guest.js"), /Can't reach Pinball Land right now/);
+  assert.match(read("public/control.js"), /Can't reach Pinball Land right now/);
+  assert.match(read("src/cloudflared.js"), /restart tunnel registration failed/);
+  assert.match(read("src/cloudflared.js"), /tunnel not found\|register tunnel error/);
 });
 
 test("the score QR sits in the bottom-right and does not share the title row", () => {

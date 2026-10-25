@@ -95,6 +95,20 @@ function plainTunnelError(err) {
   return `Cloudflare did not start: ${err.message || "the program could not be launched"}.`;
 }
 
+function shouldRestartTunnel({ failing = false, passedOnce = false, failures = 0, failingForMs = 0 } = {}) {
+  if (!failing) return false;
+  if (passedOnce && failures >= 3) return true;
+  if (failingForMs >= 5 * 60 * 1000) return true;
+  return false;
+}
+
+function formatTunnelCheck({ url, ok, status = 0, error = "" } = {}) {
+  const outcome = ok ? "pass" : "fail";
+  const statusText = status ? ` status=${status}` : "";
+  const errorText = error ? ` error=${error}` : "";
+  return `check ${url} ${outcome}${statusText}${errorText}`;
+}
+
 function createCloudflareTunnel({
   binDir,
   logFile,
@@ -113,6 +127,8 @@ function createCloudflareTunnel({
   let attempt = 0;
   let timer = null;
   let starting = false;
+  let useHttp2 = false;
+  let registrationErrors = 0;
 
   function writeLog(line) {
     const text = String(line || "").trim();
@@ -165,8 +181,11 @@ function createCloudflareTunnel({
       }
       const targetPort = typeof port === "function" ? port() : port;
       const target = `http://127.0.0.1:${targetPort}`;
-      writeLog(`start ${bin} ${target}`);
-      const spawned = spawnImpl(bin, ["tunnel", "--no-autoupdate", "--url", target], {
+      const args = ["tunnel", "--no-autoupdate"];
+      if (useHttp2) args.push("--protocol", "http2");
+      args.push("--url", target);
+      writeLog(`start ${bin} ${target}${useHttp2 ? " protocol=http2" : ""}`);
+      const spawned = spawnImpl(bin, args, {
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
@@ -174,9 +193,28 @@ function createCloudflareTunnel({
       if (!spawned) throw Object.assign(new Error("spawn failed"), { code: "spawn", path: bin });
       child = spawned;
       starting = false;
+      registrationErrors = 0;
       const take = (chunk) => {
         const text = String(chunk || "");
-        for (const line of text.split(/\r?\n/)) writeLog(line);
+        for (const line of text.split(/\r?\n/)) {
+          writeLog(line);
+          if (!useHttp2 && /quic/i.test(line)) {
+            useHttp2 = true;
+            writeLog("switching to http2 after a QUIC failure");
+            try { spawned.kill(); } catch { /* already gone */ }
+          }
+          if (/tunnel not found|register tunnel error/i.test(line)) {
+            registrationErrors += 1;
+            if (registrationErrors >= 3) {
+              registrationErrors = 0;
+              url = "";
+              detail = "Cloudflare lost the tunnel. Starting a fresh link.";
+              writeLog("restart tunnel registration failed");
+              publish();
+              try { spawned.kill(); } catch { /* exit handler starts the next process */ }
+            }
+          }
+        }
         const found = parseCloudflareLine(text);
         if (found) {
           url = found;
@@ -232,7 +270,17 @@ function createCloudflareTunnel({
       publish();
     },
     status() {
-      return { url, detail };
+      return { url, detail, http2: useHttp2 };
+    },
+    restart(reason) {
+      writeLog(`restart ${reason || "requested"}`);
+      url = "";
+      const current = child;
+      if (!current) {
+        launch().catch(() => {});
+        return;
+      }
+      try { current.kill(); } catch { /* exit handler starts the next one */ }
     },
   };
 }
@@ -244,6 +292,8 @@ module.exports = {
   cloudflaredUrl,
   ensureCloudflared,
   createCloudflareTunnel,
+  formatTunnelCheck,
   plainTunnelError,
   sha256Buffer,
+  shouldRestartTunnel,
 };

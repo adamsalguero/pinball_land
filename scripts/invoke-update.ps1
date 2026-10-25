@@ -12,8 +12,14 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-Set-Location $RepoRoot
+$ScriptDir = $PSScriptRoot
+if ($env:PINBALL_APP_ROOT) {
+  $RepoRoot = (Resolve-Path -LiteralPath $env:PINBALL_APP_ROOT).Path
+} else {
+  $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+}
+# Leave the install directory so a staged swap can rename it.
+Set-Location (Split-Path -Parent $RepoRoot)
 
 $serverTask = "PinballLandServer"
 $kioskTask = "PinballLandKiosk"
@@ -119,16 +125,23 @@ function Start-HiddenLauncher {
 }
 
 function Start-Wall {
+  $pause = 5
+  if ($env:PINBALL_WALL_PAUSE_SEC -match '^\d+$') { $pause = [int]$env:PINBALL_WALL_PAUSE_SEC }
+  Write-UpdateTrace "phase wall-server"
   if (-not (Start-PinballTask -Name $serverTask)) {
-    Start-HiddenLauncher -Kind server | Out-Null
+    if (-not $env:PINBALL_APP_ROOT) { Start-HiddenLauncher -Kind server | Out-Null }
   }
-  Start-Sleep -Seconds 5
+  if ($pause -gt 0) { Start-Sleep -Seconds $pause }
+  Write-UpdateTrace "phase wall-kiosk"
   if (-not (Start-PinballTask -Name $kioskTask)) {
-    Start-HiddenLauncher -Kind kiosk | Out-Null
+    if (-not $env:PINBALL_APP_ROOT) { Start-HiddenLauncher -Kind kiosk | Out-Null }
   }
 }
 
 function Test-GithubDns {
+  if ($env:PINBALL_DNS_FILE) {
+    return Test-Path -LiteralPath $env:PINBALL_DNS_FILE
+  }
   try {
     $answers = [System.Net.Dns]::GetHostAddresses("github.com")
     return ($null -ne $answers) -and (@($answers).Length -gt 0)
@@ -145,6 +158,7 @@ function Wait-ForGithubDns {
       Write-UpdateTrace "github.com resolves"
       return $true
     }
+    Write-UpdateTrace "waiting for github.com"
     if ((Get-Date) -ge $deadline) {
       Write-UpdateTrace "github.com did not resolve within ${TimeoutSec}s"
       return $false
@@ -203,27 +217,16 @@ function Register-UpdateRetry {
   }
 }
 
-function Test-CheckoutUpToDate {
-  $branch = "main"
-  $config = Join-Path (Get-PinballDataDir) "config.json"
-  if (Test-Path -LiteralPath $config) {
-    try {
-      $json = Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json
-      $named = [string]$json.updates.branch
-      if ($named -match '^[A-Za-z0-9._/-]+$') { $branch = $named }
-    } catch {
-      $branch = "main"
-    }
+function Remove-TemporaryWallTask {
+  $name = "PinballLandWallNow"
+  $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+  if (-not $task) { return }
+  try {
+    Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
+    Write-UpdateTrace "removed PinballLandWallNow"
+  } catch {
+    Write-UpdateTrace "could not remove PinballLandWallNow: $($_.Exception.Message)"
   }
-  $git = Get-Command git.exe -ErrorAction SilentlyContinue
-  if (-not $git) { $git = Get-Command git -ErrorAction SilentlyContinue }
-  if (-not $git) { return $false }
-  & $git.Source fetch --prune origin $branch
-  if ($LASTEXITCODE -ne 0) { return $false }
-  $head = ((& $git.Source rev-parse "HEAD") | Out-String).Trim()
-  $remote = ((& $git.Source rev-parse "origin/$branch") | Out-String).Trim()
-  if ($head -notmatch '^[0-9a-f]{7,40}$') { return $false }
-  return $head -eq $remote
 }
 
 function Register-UpdateNowTask {
@@ -255,6 +258,7 @@ function Register-UpdateNowTask {
 
 $skipWall = $false
 $skipRestart = $false
+$scheduleRetry = $false
 try {
 # The button looks for this line. Write it before DNS, git, or stopping the wall.
 Write-UpdateTrace "start"
@@ -263,10 +267,11 @@ if ($env:PINBALL_UPDATE_SMOKE -eq "1") {
   return
 }
 
+$updatesOff = $false
 if ($Mode -eq "nightly" -and -not (Test-UpdatesEnabled)) {
   Write-UpdateTrace "skipped because automatic updates are off"
   Write-Host "Automatic updates are off. Nightly restart was not run."
-  return
+  $updatesOff = $true
 }
 
 $incomingMode = $Mode
@@ -278,19 +283,47 @@ if ($Mode -eq "retry") {
   $Mode = "now"
 }
 
+$dnsTimeout = 120
+if ($env:PINBALL_DNS_TIMEOUT_SEC -match '^\d+$') { $dnsTimeout = [int]$env:PINBALL_DNS_TIMEOUT_SEC }
+$dnsOk = $true
 if ($Mode -eq "boot") {
-  Wait-ForGithubDns -TimeoutSec 120 | Out-Null
+  Write-UpdateTrace "phase dns-wait"
+  $dnsOk = Wait-ForGithubDns -TimeoutSec $dnsTimeout
 }
-
-$nodeExe = Resolve-NodeExe
-$updateJs = Join-Path $RepoRoot "scripts\run-update.js"
-$flag = if ($Mode -eq "nightly") { "--nightly" } elseif ($Mode -eq "now") { "--now" } else { "--boot" }
 
 if ($Mode -eq "boot" -or $Mode -eq "nightly") {
   Register-UpdateNowTask
 }
 
-if ($Mode -eq "nightly" -and (Test-CheckoutUpToDate)) {
+$nodeExe = Resolve-NodeExe
+$updateJs = Join-Path $ScriptDir "run-update.js"
+$checkJs = Join-Path $ScriptDir "check-install.js"
+$flag = if ($Mode -eq "nightly") { "--nightly" } elseif ($Mode -eq "now") { "--now" } else { "--boot" }
+$plan = 0
+if (-not $updatesOff -and $dnsOk -and $nodeExe -and (Test-Path -LiteralPath $updateJs)) {
+  Write-UpdateTrace "phase update-plan"
+  & $nodeExe $updateJs $flag --status-only
+  $plan = $LASTEXITCODE
+  if ($plan -eq 10) { Write-UpdateTrace "update available" }
+  if ($plan -eq 11) { Write-UpdateTrace "update skipped" }
+} elseif ($Mode -eq "boot" -and -not $dnsOk) {
+  Write-UpdateTrace "phase update-skip"
+  Write-UpdateTrace "network unavailable; skipping the update"
+  $env:PINBALL_UPDATE_OFFLINE = "1"
+  $scheduleRetry = $true
+}
+
+$installHealthy = $true
+if (($Mode -eq "nightly" -or $Mode -eq "now") -and $nodeExe -and (Test-Path -LiteralPath $checkJs)) {
+  & $nodeExe $checkJs --scan
+  if ($LASTEXITCODE -ne 0) {
+    $installHealthy = $false
+    Write-UpdateTrace "install integrity failed"
+  }
+}
+
+$apply = ($plan -eq 10) -and -not $updatesOff
+if (($Mode -eq "nightly" -or $Mode -eq "now") -and -not $apply -and $installHealthy) {
   Write-UpdateTrace "up-to-date; leaving the wall running"
   $skipRestart = $true
 }
@@ -300,20 +333,34 @@ if (($Mode -eq "nightly" -or $Mode -eq "now") -and -not $skipRestart) {
   Stop-PinballTasks
 }
 
-if ($skipRestart) {
-  Write-UpdateTrace "skipped the updater because nothing changed"
-} elseif (-not $nodeExe) {
-  Write-UpdateTrace "node.exe missing; starting the current tasks"
-  Write-Warning "node.exe was not found. Starting the current version."
-} else {
+if ($apply -and -not $skipRestart -and $nodeExe) {
+  Write-UpdateTrace "phase update-apply"
   & $nodeExe $updateJs $flag
   if ($LASTEXITCODE -ne 0) {
     Write-UpdateTrace "updater exit $LASTEXITCODE; starting the current version"
     Write-Warning "Updater exited $LASTEXITCODE. Starting the current version."
   }
+} elseif (-not $nodeExe -and -not $skipRestart) {
+  Write-UpdateTrace "node.exe missing; starting the current tasks"
+  Write-Warning "node.exe was not found. Starting the current version."
 }
 
-if ($incomingMode -eq "boot" -and (Test-NetworkSkip (Read-UpdateStatus))) {
+if (-not $skipRestart -and $nodeExe -and (Test-Path -LiteralPath $checkJs)) {
+  Write-UpdateTrace "phase integrity"
+  & $nodeExe $checkJs --repair
+  if ($LASTEXITCODE -ne 0) {
+    Write-UpdateTrace "install integrity failed"
+    Write-Warning "Install integrity check failed. Starting the current version."
+  } else {
+    Write-UpdateTrace "install integrity ok"
+  }
+} elseif ($skipRestart) {
+  Write-UpdateTrace "install integrity ok"
+}
+
+Remove-TemporaryWallTask
+
+if ($incomingMode -eq "boot" -and ($scheduleRetry -or (Test-NetworkSkip (Read-UpdateStatus)))) {
   Register-UpdateRetry
 }
 

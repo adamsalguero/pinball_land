@@ -67,23 +67,50 @@ function csrfToken() {
   return match ? decodeURIComponent(match[1]) : "";
 }
 
+const REACH = "Can't reach Pinball Land right now.";
+
+function markReach(ok) {
+  const banner = document.getElementById("reach-status");
+  if (banner) banner.hidden = ok;
+}
+
 async function api(url, options = {}) {
   const headers = { "content-type": "application/json", ...(options.headers || {}) };
   if (deviceToken()) headers["x-device-token"] = deviceToken();
   const csrf = csrfToken();
   if (csrf) headers["x-csrf"] = csrf;
-  const res = await fetch(url, {
-    headers,
-    credentials: "same-origin",
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
+  let res;
+  try {
+    res = await fetch(url, {
+      headers,
+      credentials: "same-origin",
+      ...options,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    markReach(false);
+    throw Object.assign(new Error(REACH), { unreachable: true });
+  }
+  const text = await res.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      markReach(false);
+      throw Object.assign(new Error(REACH), { unreachable: true });
+    }
+  }
+  if (res.status >= 500) {
+    markReach(false);
+    throw Object.assign(new Error(REACH), { unreachable: true });
+  }
   if (!res.ok) {
-    const error = new Error(data.error || res.statusText);
+    const error = new Error(data.error || res.statusText || "Request failed");
     error.status = res.status;
     throw error;
   }
+  markReach(true);
   return data;
 }
 
@@ -1338,11 +1365,15 @@ function showTab(name) {
 }
 
 async function boot() {
-  const auth = await api("/api/auth");
-  if (!auth.ok) return;
-  showApp();
-  applyPayload(await api("/api/state"));
-  showTab(localStorage.getItem("pl-admin-tab") || "screens");
+  try {
+    const auth = await api("/api/auth");
+    if (!auth.ok) return;
+    showApp();
+    applyPayload(await api("/api/state"));
+    showTab(localStorage.getItem("pl-admin-tab") || "screens");
+  } catch (err) {
+    if (err && err.unreachable) markReach(false);
+  }
 }
 
 loginForm.addEventListener("submit", async (event) => {
@@ -1353,7 +1384,8 @@ loginForm.addEventListener("submit", async (event) => {
     if (session.token) localStorage.setItem("pl-admin-device", session.token);
     showApp();
     applyPayload(await api("/api/state"));
-  } catch {
+  } catch (err) {
+    loginError.textContent = err && err.unreachable ? err.message : "Wrong PIN";
     loginError.hidden = false;
   }
 });
@@ -1860,6 +1892,12 @@ async function renderAdmin() {
   const updates = current.updates || {};
   const commit = updates.commit ? ` · ${updates.commit}` : "";
   version.textContent = `Version ${current.version || ""}${commit}`;
+  const integrity = document.getElementById("integrity-status");
+  if (integrity) {
+    integrity.textContent = updates.integrityAt
+      ? `Install check ${updates.integrityAt}: ${updates.integrityOk ? "ok" : "needs repair"}. ${updates.integrityDetail || ""}`
+      : "No install check has run yet.";
+  }
   const status = document.getElementById("update-status");
   if (status) {
     status.textContent = updates.lastAt
@@ -1961,24 +1999,37 @@ document.getElementById("update-now").addEventListener("click", async () => {
       return;
     }
     const since = encodeURIComponent(result.requestedAt || "");
-    const deadline = Date.now() + 20000;
+    const startedDeadline = Date.now() + 20000;
     let last = null;
-    while (Date.now() < deadline) {
+    while (Date.now() < startedDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       last = await api(`/api/updates/now?since=${since}`);
+      if (last.started || last.finished) break;
+    }
+    if (!last || !last.started) {
+      toast("not started");
+      return;
+    }
+    const resultDeadline = Date.now() + 15 * 60 * 1000;
+    while (Date.now() < resultDeadline) {
       if (last.finished) {
         current.updates = {
           ...current.updates,
           lastAt: last.lastAt,
           lastResult: last.lastResult,
           lastDetail: last.lastDetail,
+          integrityAt: last.integrityAt,
+          integrityOk: last.integrityOk,
+          integrityDetail: last.integrityDetail,
         };
         renderAdmin();
         toast(last.note || last.lastResult || "Update started.");
         return;
       }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      last = await api(`/api/updates/now?since=${since}`);
     }
-    toast(last && last.started ? "Update started." : "not started");
+    toast("Update is still running. The status line fills in when it finishes.");
   } catch (err) {
     toast(err.message || "not started");
   } finally {

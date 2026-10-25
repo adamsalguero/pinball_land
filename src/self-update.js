@@ -6,7 +6,18 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { loadConfig, normalizeUpdates } = require("./config");
 const { dataLayout } = require("./paths");
-const { planRollback, rollbackInstall, swapInstall } = require("./updater");
+const { planRollback, swapInstall } = require("./updater");
+const {
+  flushVolume,
+  recoverInterrupted,
+  restorePreviousInstall,
+  scanInstall,
+  stagePaths,
+  swapDirectories,
+  writeIntegrityStatus,
+  writeMarker,
+  clearMarker,
+} = require("./install-guard");
 
 const LOG_MAX_BYTES = 512 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -130,14 +141,22 @@ function readUpdateLogSync(logsDir) {
   }
 }
 
-function invokeNowStarted(logText, sinceIso) {
+function invokeLogAfter(logText, sinceIso, pattern) {
   const since = Date.parse(sinceIso || "");
   return String(logText || "").split(/\n/).some((line) => {
-    if (!/\binvoke now start\b/.test(line)) return false;
+    if (!pattern.test(line)) return false;
     if (!Number.isFinite(since)) return true;
     const stamp = Date.parse((line.match(/^\[([^\]]+)\]/) || [])[1] || "");
     return Number.isFinite(stamp) && stamp + 2000 >= since;
   });
+}
+
+function invokeNowStarted(logText, sinceIso) {
+  return invokeLogAfter(logText, sinceIso, /\binvoke now start\b/);
+}
+
+function invokeNowCompleted(logText, sinceIso) {
+  return invokeLogAfter(logText, sinceIso, /\binvoke now (server and kiosk started|nightly left the wall running)\b/);
 }
 
 function runtimeDependencyNames(appRoot) {
@@ -187,6 +206,128 @@ async function verifyRuntimeDeps(appRoot, run = defaultRun, timeoutMs = NPM_TIME
     return { ok: false, detail: (headline || tail(text) || "runtime dependency failed to load").slice(0, 400) };
   }
   return { ok: true, detail: "runtime dependencies loaded" };
+}
+
+async function pathExists(target) {
+  try {
+    await fsp.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function inspectTree(root, run, timeoutMs) {
+  const scanned = await scanInstall(root);
+  if (!scanned.ok) return scanned;
+  return verifyRuntimeDeps(root, run, timeoutMs);
+}
+
+async function discardStaging(dataDir, paths) {
+  await fsp.rm(paths.staging, { recursive: true, force: true }).catch(() => {});
+  await clearMarker(dataDir).catch(() => {});
+}
+
+async function stageCommit({
+  appRoot,
+  dataDir,
+  commit,
+  run,
+  npmBin,
+  npmTimeoutMs,
+  now,
+  log = async () => {},
+}) {
+  const paths = stagePaths(appRoot);
+  await fsp.rm(paths.staging, { recursive: true, force: true });
+  await writeMarker(dataDir, { phase: "staging", commit, at: now().toISOString() });
+  const cloned = await run("git", ["clone", "--local", "--no-hardlinks", paths.live, paths.staging], { timeoutMs: 20000 });
+  if (!cloned.ok) return { ok: false, detail: `git clone failed: ${tail(cloned.stderr || cloned.stdout)}` };
+  const checked = await run("git", ["-C", paths.staging, "checkout", "--detach", commit], { timeoutMs: 20000 });
+  if (!checked.ok) return { ok: false, detail: `git checkout failed: ${tail(checked.stderr || checked.stdout)}` };
+  let installed = await npmCi(paths.staging, run, npmTimeoutMs, npmBin);
+  if (!installed.ok) installed = await npmCi(paths.staging, run, npmTimeoutMs, npmBin);
+  if (!installed.ok) {
+    const why = installed.timedOut ? "npm ci timed out" : `npm ci failed: ${tail(installed.stderr || installed.stdout)}`;
+    return { ok: false, detail: why };
+  }
+  const electron = await ensureElectron(paths.staging, run, npmTimeoutMs);
+  if (!electron.ok) return { ok: false, detail: electron.detail };
+  await flushVolume(paths.staging, run);
+  let deps = await inspectTree(paths.staging, run, npmTimeoutMs);
+  if (!deps.ok) {
+    await log(`runtime dependencies failed to load (${deps.detail}). Running npm ci again.`);
+    const again = await npmCi(paths.staging, run, npmTimeoutMs, npmBin);
+    if (!again.ok) {
+      const why = again.timedOut ? "npm ci timed out" : `npm ci failed: ${tail(again.stderr || again.stdout)}`;
+      return { ok: false, detail: why };
+    }
+    await flushVolume(paths.staging, run);
+    deps = await inspectTree(paths.staging, run, npmTimeoutMs);
+    if (!deps.ok) return { ok: false, detail: `runtime dependencies failed to load: ${deps.detail}` };
+  }
+  return { ok: true, detail: deps.detail || "staging install verified", paths };
+}
+
+async function repairInstall({
+  appRoot,
+  dataDir,
+  run = defaultRun,
+  npmBin = npmCommand(),
+  npmTimeoutMs = NPM_TIMEOUT_MS,
+  now = () => new Date(),
+  scanOnly = false,
+} = {}) {
+  const paths = stagePaths(appRoot);
+  const recovered = await recoverInterrupted(dataDir, paths);
+  async function publish(ok, detail, action) {
+    const integrity = { at: now().toISOString(), ok: ok === true, detail: detail || "" };
+    await writeIntegrityStatus(dataDir, integrity);
+    return {
+      ok: integrity.ok,
+      action,
+      detail: integrity.detail,
+      at: integrity.at,
+      recovered: Boolean(recovered && recovered.recovered),
+      recoveryDetail: (recovered && recovered.detail) || "",
+    };
+  }
+  const scanned = await inspectTree(appRoot, run, npmTimeoutMs);
+  if (scanned.ok) return publish(true, scanned.detail || "install files are intact", "intact");
+  if (scanOnly) return publish(false, scanned.detail, "needs-repair");
+  if (await pathExists(paths.previous)) {
+    const prev = await inspectTree(paths.previous, run, npmTimeoutMs);
+    if (prev.ok) {
+      try {
+        await restorePreviousInstall({ live: paths.live, previous: paths.previous, dataDir });
+        const again = await inspectTree(appRoot, run, npmTimeoutMs);
+        if (again.ok) return publish(true, "restored the previous install", "rolled-back");
+      } catch {
+        // A failed swap falls through to a rebuild of the recorded commit.
+      }
+    }
+  }
+  const headResult = await run("git", ["rev-parse", "HEAD"], { cwd: appRoot, timeoutMs: 10000 });
+  const head = String(headResult.stdout || "").trim();
+  if (!headResult.ok || !isCommit(head)) return publish(false, scanned.detail, "needs-repair");
+  const staged = await stageCommit({ appRoot, dataDir, commit: head, run, npmBin, npmTimeoutMs, now });
+  if (!staged.ok) {
+    await discardStaging(dataDir, paths);
+    return publish(false, staged.detail || scanned.detail, "needs-repair");
+  }
+  try {
+    await swapDirectories({
+      live: paths.live,
+      incoming: paths.staging,
+      outgoing: paths.previous,
+      dataDir,
+      prefer: "staging",
+    });
+  } catch (err) {
+    await discardStaging(dataDir, paths);
+    return publish(false, `could not switch to the repaired install: ${err.message}`, "needs-repair");
+  }
+  return publish(true, "rebuilt the install from git", "repaired");
 }
 
 async function appendUpdateLog(logsDir, text, { maxBytes = LOG_MAX_BYTES } = {}) {
@@ -371,18 +512,20 @@ async function runSelfUpdate({
   testTimeoutMs = TEST_TIMEOUT_MS,
   now = () => new Date(),
   npmBin = npmCommand(),
+  recordOnly = false,
 } = {}) {
   const logsDir = dataLayout(dataDir).logs;
   const pointerRoot = path.join(dataDir, "updates");
   const config = readUpdateConfig(dataDir, updates);
   const branch = config.branch || "main";
+  const paths = stagePaths(appRoot);
 
   async function log(message) {
     const line = `[${now().toISOString()}] ${mode} ${message}\n`;
     await appendUpdateLog(logsDir, line);
   }
 
-  async function finish(result) {
+  async function finish(result, { persist = true } = {}) {
     const payload = {
       at: now().toISOString(),
       mode,
@@ -392,41 +535,104 @@ async function runSelfUpdate({
       previous: result.previous || "",
       detail: result.detail || "",
     };
-    await writeUpdateStatus(logsDir, payload);
+    if (result.integrityAt) {
+      payload.integrityAt = result.integrityAt;
+      payload.integrityOk = result.integrityOk === true;
+      payload.integrityDetail = result.integrityDetail || "";
+    }
+    if (persist) await writeUpdateStatus(logsDir, payload);
     await log(`result=${payload.action} commit=${payload.commit} ${payload.detail}`.trim());
     return payload;
   }
 
-  async function restore(previousCommit, detail) {
-    const decision = planRollback(false);
-    let rolled = null;
-    if (decision === "rollback") {
-      try {
-        rolled = await rollbackInstall(pointerRoot);
-      } catch (err) {
-        await log(`rollback pointer failed: ${err.message}`);
-      }
-    }
-    const target = rolled && isCommit(rolled.current) ? rolled.current : previousCommit;
-    if (isCommit(target)) {
-      const reset = await run("git", ["reset", "--hard", target], { cwd: appRoot, timeoutMs: 20000 });
-      if (!reset.ok) await log(`git reset --hard ${target} failed: ${tail(reset.stderr)}`);
-      const installed = await npmCi(appRoot, run, npmTimeoutMs, npmBin);
-      if (!installed.ok) await log(`npm ci while restoring ${target} failed: ${tail(installed.stderr)}`);
-      else await ensureElectron(appRoot, run, npmTimeoutMs);
-    }
+  async function abandon(previousCommit, detail) {
+    await discardStaging(dataDir, paths);
     return finish({
       action: "rolled-back",
-      commit: target || previousCommit || "",
-      attempted: rolled ? rolled.failed : "",
+      commit: previousCommit || "",
       previous: previousCommit || "",
       detail,
+      integrityAt: now().toISOString(),
+      integrityOk: false,
+      integrityDetail: detail,
+    });
+  }
+
+  async function promote(commit, action, headCommit) {
+    const staged = await stageCommit({
+      appRoot,
+      dataDir,
+      commit,
+      run,
+      npmBin,
+      npmTimeoutMs,
+      now,
+      log,
+    });
+    if (!staged.ok) return abandon(headCommit, staged.detail);
+    let smokeResult;
+    try {
+      smokeResult = await smoke({ appRoot: paths.staging, timeoutMs: smokeTimeoutMs, run });
+    } catch (err) {
+      smokeResult = { ok: false, detail: `smoke check crashed: ${err.message}` };
+    }
+    if (!smokeResult || smokeResult.ok !== true) {
+      return abandon(headCommit, smokeResult && smokeResult.detail ? smokeResult.detail : "smoke check failed");
+    }
+    await log("running test/platform.test.js; Playwright overflow stays in CI");
+    let tests;
+    try {
+      tests = await runTests({ appRoot: paths.staging, run, timeoutMs: testTimeoutMs });
+    } catch (err) {
+      tests = { ok: false, detail: `unit tests crashed: ${err.message}` };
+    }
+    if (tests && tests.skipped) await log(tests.detail);
+    if (tests && tests.ok === false && !tests.skipped) return abandon(headCommit, tests.detail);
+    const kept = planRollback(true);
+    if (kept !== "keep") return abandon(headCommit, "update plan asked to roll back");
+    try {
+      await swapDirectories({
+        live: paths.live,
+        incoming: paths.staging,
+        outgoing: paths.previous,
+        dataDir,
+        prefer: "staging",
+      });
+    } catch (err) {
+      return abandon(headCommit, `could not switch to the staged install: ${err.message}`);
+    }
+    try {
+      await rememberVersion(pointerRoot, commit);
+    } catch (err) {
+      await log(`could not record ${commit}: ${err.message}`);
+    }
+    const detail = tests && tests.detail ? `${smokeResult.detail}. ${tests.detail}` : smokeResult.detail;
+    return finish({
+      action,
+      commit,
+      previous: headCommit,
+      detail,
+      integrityAt: now().toISOString(),
+      integrityOk: true,
+      integrityDetail: staged.detail || "install files are intact",
     });
   }
 
   if (mode !== "now" && config.enabled === false) {
-    return finish({ action: "skipped", detail: "automatic updates are off" });
+    const scanned = await scanInstall(appRoot);
+    if (scanned.ok) {
+      return finish({
+        action: "skipped",
+        detail: "automatic updates are off",
+        integrityAt: now().toISOString(),
+        integrityOk: true,
+        integrityDetail: scanned.detail,
+      });
+    }
   }
+
+  const recovered = await recoverInterrupted(dataDir, paths);
+  if (recovered.detail) await log(recovered.detail);
 
   const headResult = await run("git", ["rev-parse", "HEAD"], { cwd: appRoot, timeoutMs: 10000 });
   const head = String(headResult.stdout || "").trim();
@@ -470,66 +676,16 @@ async function runSelfUpdate({
     return finish({ action: "up-to-date", commit: head, detail: `origin/${branch} is not ahead` });
   }
 
-  try {
-    await rememberVersion(pointerRoot, remote);
-  } catch (err) {
-    return finish({ action: "skipped", commit: head, detail: `could not record the update pointer: ${err.message}` });
+  if (recordOnly) {
+    return finish({
+      action: "update-available",
+      commit: head,
+      attempted: remote,
+      detail: `${branch} has ${aheadCount} new commit${aheadCount === 1 ? "" : "s"}`,
+    }, { persist: false });
   }
 
-  const checkedOut = await run("git", ["reset", "--hard", remote], { cwd: appRoot, timeoutMs: 20000 });
-  if (!checkedOut.ok) {
-    return restore(head, `git reset --hard failed: ${tail(checkedOut.stderr)}`);
-  }
-
-  const installed = await npmCi(appRoot, run, npmTimeoutMs, npmBin);
-  if (!installed.ok) {
-    const why = installed.timedOut ? "npm ci timed out" : `npm ci failed: ${tail(installed.stderr || installed.stdout)}`;
-    return restore(head, why);
-  }
-
-  let deps = await verifyRuntimeDeps(appRoot, run, npmTimeoutMs);
-  if (!deps.ok) {
-    await log(`runtime dependencies failed to load (${deps.detail}). Running npm ci again.`);
-    const again = await npmCi(appRoot, run, npmTimeoutMs, npmBin);
-    if (!again.ok) {
-      const why = again.timedOut ? "npm ci timed out" : `npm ci failed: ${tail(again.stderr || again.stdout)}`;
-      return restore(head, why);
-    }
-    deps = await verifyRuntimeDeps(appRoot, run, npmTimeoutMs);
-    if (!deps.ok) return restore(head, `runtime dependencies failed to load: ${deps.detail}`);
-  }
-
-  const electron = await ensureElectron(appRoot, run, npmTimeoutMs);
-  if (!electron.ok) return restore(head, electron.detail);
-
-  let smokeResult;
-  try {
-    smokeResult = await smoke({ appRoot, timeoutMs: smokeTimeoutMs, run });
-  } catch (err) {
-    smokeResult = { ok: false, detail: `smoke check crashed: ${err.message}` };
-  }
-  if (!smokeResult || smokeResult.ok !== true) {
-    return restore(head, smokeResult && smokeResult.detail ? smokeResult.detail : "smoke check failed");
-  }
-
-  await log("running test/platform.test.js; Playwright overflow stays in CI");
-  let tests;
-  try {
-    tests = await runTests({ appRoot, run, timeoutMs: testTimeoutMs });
-  } catch (err) {
-    tests = { ok: false, detail: `unit tests crashed: ${err.message}` };
-  }
-  if (tests && tests.skipped) await log(tests.detail);
-  if (tests && tests.ok === false && !tests.skipped) return restore(head, tests.detail);
-
-  const kept = planRollback(true);
-  if (kept !== "keep") return restore(head, "update plan asked to roll back");
-  return finish({
-    action: "updated",
-    commit: remote,
-    previous: head,
-    detail: tests && tests.detail ? `${smokeResult.detail}. ${tests.detail}` : smokeResult.detail,
-  });
+  return promote(remote, "updated", head);
 }
 
 module.exports = {
@@ -538,7 +694,9 @@ module.exports = {
   appendUpdateLogSync,
   electronBinary,
   inspectRuntimeDependencies,
+  invokeNowCompleted,
   invokeNowStarted,
+  repairInstall,
   launchScheduledUpdate,
   launchRegisterTasks,
   readUpdateLogSync,

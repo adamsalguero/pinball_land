@@ -54,6 +54,9 @@ jobs:
       - name: Update now writes a trace
         shell: pwsh
         run: node scripts/update-now-windows.js
+      - name: Cold boot order
+        shell: pwsh
+        run: node scripts/boot-order-windows.js
       - run: npm run electron-smoke
       - name: Installer dry run
         shell: pwsh

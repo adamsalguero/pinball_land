@@ -476,7 +476,10 @@ class AirplayController {
     try {
       const written = writeUxplayArguments({ windowTitle, platform: this.platform });
       if (written && written.denied && written.denied.length && written.length === 0) {
-        console.error(`AirPlay arguments were not written (${written.denied.join(", ")}). Backing off.`);
+        if (!this.argumentsDeniedLogged) {
+          this.argumentsDeniedLogged = true;
+          console.error(`AirPlay arguments were not written (${written.denied.join(", ")}). Backing off.`);
+        }
         return false;
       }
       return true;
