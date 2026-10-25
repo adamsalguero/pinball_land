@@ -29,6 +29,7 @@ test("sign-in update waits for github.com and schedules one later retry", () => 
   const finalAt = script.indexOf("} finally {");
   assert.ok(finalAt > schedule, "the wall starts after the update, including when the update throws");
   assert.match(script.slice(finalAt), /Start-Wall/);
+  assert.doesNotMatch(script.slice(finalAt), /\breturn\b/);
 });
 
 test("server and kiosk tasks launch through a hidden script", () => {

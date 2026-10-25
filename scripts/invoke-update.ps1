@@ -318,20 +318,22 @@ if ($incomingMode -eq "boot" -and (Test-NetworkSkip (Read-UpdateStatus))) {
 }
 
 } finally {
-  if ($skipWall) { return }
-  if ($skipRestart) {
-    Write-UpdateTrace "nightly left the wall running"
-    Write-Host "Nothing changed. Leaving the wall running."
-  } else {
-    Write-Host "Starting the server and the kiosk."
-  }
-  try {
-    # Start-Wall leaves a task that is already running alone, so an up-to-date nightly does not bounce the TVs.
-    Start-Wall
-    Write-UpdateTrace "server and kiosk started"
-  } catch {
-    Write-UpdateTrace "Start-Wall failed: $($_.Exception.Message)"
-    Write-Warning "The wall did not start: $($_.Exception.Message)"
+  # A flag skips the wall here. Leaving the block directly is a parse error.
+  if (-not $skipWall) {
+    if ($skipRestart) {
+      Write-UpdateTrace "nightly left the wall running"
+      Write-Host "Nothing changed. Leaving the wall running."
+    } else {
+      Write-Host "Starting the server and the kiosk."
+    }
+    try {
+      # Start-Wall leaves a task that is already running alone, so an up-to-date nightly does not bounce the TVs.
+      Start-Wall
+      Write-UpdateTrace "server and kiosk started"
+    } catch {
+      Write-UpdateTrace "Start-Wall failed: $($_.Exception.Message)"
+      Write-Warning "The wall did not start: $($_.Exception.Message)"
+    }
   }
 }
 exit 0
