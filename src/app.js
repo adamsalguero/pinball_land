@@ -742,6 +742,7 @@ function createApp({
   const globalLoginFailures = [];
   let publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: 0 };
   let verifiedOrigin = "";
+  let verifyMisses = 0;
   let verifySerial = 0;
   let lastGuestDetail = "";
   let routesReady = false;
@@ -847,46 +848,40 @@ function createApp({
     return false;
   }
 
+  function hidePublicLink(detail) {
+    verifyMisses = 0;
+    verifiedOrigin = "";
+    publicStatus = {
+      url: "",
+      source: "",
+      detail: withGuest(detail || "Cloudflare is starting. The guest link will show here when it is ready."),
+      checkedAt: clockNow(),
+    };
+    broadcast();
+    return publicStatus;
+  }
+
+  function noteProbeMiss(detail) {
+    if (!verifiedOrigin) return hidePublicLink(detail);
+    verifyMisses += 1;
+    if (verifyMisses < 2) return publicStatus;
+    return hidePublicLink(detail);
+  }
+
   async function applyTunnel(live) {
     if (!currentConfig().publicAccess?.enabled) return publicStatus;
     const serial = ++verifySerial;
     const candidate = cloudflareGuestOrigin(live?.url);
     if (!candidate) {
-      verifiedOrigin = "";
-      publicStatus = {
-        url: "",
-        source: "",
-        detail: withGuest(live?.detail || "Cloudflare is starting. The guest link will show here when it is ready."),
-        checkedAt: clockNow(),
-      };
-      broadcast();
-      return publicStatus;
-    }
-    const sameLink = verifiedOrigin === candidate;
-    if (!sameLink) {
-      verifiedOrigin = "";
-      publicStatus = {
-        url: "",
-        source: "cloudflare",
-        detail: withGuest(live.detail || `Cloudflare is up. Guests use ${candidate}`),
-        checkedAt: clockNow(),
-      };
-      broadcast();
+      return noteProbeMiss(live?.detail || "Cloudflare is starting. The guest link will show here when it is ready.");
     }
     const ok = await probeCloudflare(candidate);
     if (serial !== verifySerial || currentConfig().publicAccess?.enabled !== true) return publicStatus;
     const still = cloudflareGuestOrigin(cloudflareTunnel.status()?.url);
     if (!ok || still !== candidate) {
-      verifiedOrigin = "";
-      publicStatus = {
-        url: "",
-        source: "cloudflare",
-        detail: withGuest(live.detail || `Cloudflare is up. Guests use ${candidate}`),
-        checkedAt: clockNow(),
-      };
-      broadcast();
-      return publicStatus;
+      return noteProbeMiss(live?.detail || `Cloudflare is up. Guests use ${candidate}`);
     }
+    verifyMisses = 0;
     verifiedOrigin = candidate;
     publicStatus = {
       url: candidate,
@@ -904,6 +899,7 @@ function createApp({
       verifySerial += 1;
       cloudflareTunnel.stop();
       verifiedOrigin = "";
+      verifyMisses = 0;
       lastGuestDetail = "";
       publicStatus = { url: "", source: "", detail: "Off. Guests use the venue WiFi.", checkedAt: clockNow() };
       broadcast();
@@ -914,6 +910,7 @@ function createApp({
       verifySerial += 1;
       cloudflareTunnel.stop();
       verifiedOrigin = "";
+      verifyMisses = 0;
       publicStatus = {
         url: "",
         source: "",

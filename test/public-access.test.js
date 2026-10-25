@@ -371,6 +371,16 @@ test("wall QRs use only a verified Cloudflare URL and appear together", async ()
     assert.equal(encoded.length, beforeRemote);
 
     phase = "fail";
+    const kept = await json(started.origin, "/api/public-access", {
+      method: "PUT",
+      headers: { "x-pin": "2224" },
+      body: { enabled: true },
+    });
+    assert.equal(kept.data.publicAccess.url, "https://pinball-guest.trycloudflare.com");
+    assert.equal(kept.data.guest.publicUrl, guestUrl);
+    assert.equal(kept.data.guest.scoreUrl, guestUrl);
+    assert.equal((await fetch(`${started.origin}/api/guest-qr`)).status, 200);
+    assert.equal((await fetch(`${started.origin}/api/score-qr?board=${boardToken}`)).status, 200);
     const dropped = await json(started.origin, "/api/public-access", {
       method: "PUT",
       headers: { "x-pin": "2224" },

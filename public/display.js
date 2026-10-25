@@ -2065,8 +2065,9 @@ function refreshScoreQr() {
   const day = payload?.guest?.qrDay || "";
   const key = `${day}|${publicUrl}|${boardId}`;
   if (key === scoreQrKey) return;
+  const keep = !wrap.hidden;
   scoreQrKey = key;
-  wrap.hidden = true;
+  if (!keep) wrap.hidden = true;
   const params = new URLSearchParams();
   if (day) params.set("d", day);
   params.set("u", publicUrl);

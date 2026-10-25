@@ -226,7 +226,7 @@ test("every wall card stays inside 1080p and 720p, including long text", async (
     ["amenity&amenity=oasis", "Outdoor Oasis"],
     ["amenity&amenity=events", "Flexible Event Options"],
     ["board", "First"],
-    ["pinboard", "Post a photo"],
+    ["pinboard", "Post pictures here"],
     ["clock", "Pinnacle Entertainment Center"],
     ["video", "Video"],
   ];

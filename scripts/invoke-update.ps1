@@ -7,7 +7,7 @@
   update, then start them again so the TVs come back fullscreen. Venue data is not deleted.
 #>
 param(
-  [ValidateSet("boot", "nightly", "now")]
+  [ValidateSet("boot", "nightly", "now", "retry")]
   [string]$Mode = "boot"
 )
 
@@ -98,10 +98,98 @@ function Start-Wall {
   Start-PinballTask -Name $kioskTask
 }
 
+function Test-GithubDns {
+  try {
+    $answers = [System.Net.Dns]::GetHostAddresses("github.com")
+    return ($null -ne $answers) -and (@($answers).Length -gt 0)
+  } catch {
+    return $false
+  }
+}
+
+function Wait-ForGithubDns {
+  param([int]$TimeoutSec = 120)
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  while ($true) {
+    if (Test-GithubDns) {
+      Write-UpdateTrace "github.com resolves"
+      return $true
+    }
+    if ((Get-Date) -ge $deadline) {
+      Write-UpdateTrace "github.com did not resolve within ${TimeoutSec}s"
+      return $false
+    }
+    $remaining = ($deadline - (Get-Date)).TotalSeconds
+    if ($remaining -le 0) {
+      Write-UpdateTrace "github.com did not resolve within ${TimeoutSec}s"
+      return $false
+    }
+    Start-Sleep -Seconds ([Math]::Min(5, [Math]::Ceiling($remaining)))
+  }
+}
+
+function Read-UpdateStatus {
+  $file = Join-Path (Get-PinballDataDir) "logs\update-status.json"
+  if (-not (Test-Path -LiteralPath $file)) { return $null }
+  try {
+    return Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json
+  } catch {
+    return $null
+  }
+}
+
+function Test-NetworkSkip {
+  param($Status)
+  if (-not $Status) { return $false }
+  if ([string]$Status.action -ne "skipped") { return $false }
+  try {
+    $parsed = [datetimeoffset]::Parse([string]$Status.at).UtcDateTime
+  } catch {
+    return $false
+  }
+  if (((Get-Date).ToUniversalTime() - $parsed).TotalMinutes -gt 10) { return $false }
+  $detail = [string]$Status.detail
+  return $detail -match "Could not resolve host" -or $detail -match "unable to access" -or $detail -match "git fetch failed" -or $detail -match "git fetch timed out"
+}
+
+function Register-UpdateRetry {
+  $taskName = "PinballLandUpdateRetry"
+  $when = (Get-Date).AddMinutes(3)
+  $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  $wrapper = Join-Path $PSScriptRoot "invoke-update.ps1"
+  $action = New-ScheduledTaskAction -Execute $powershell -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$wrapper`" -Mode retry" -WorkingDirectory $RepoRoot
+  $trigger = New-ScheduledTaskTrigger -Once -At $when
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
+  $user = $env:USERNAME
+  foreach ($level in @("Highest", "Limited")) {
+    try {
+      $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel $level
+      Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+      Write-UpdateTrace "scheduled retry at $($when.ToUniversalTime().ToString('o'))"
+      return
+    } catch {
+      Write-UpdateTrace "retry schedule ($level) failed: $($_.Exception.Message)"
+    }
+  }
+}
+
 if ($Mode -eq "nightly" -and -not (Test-UpdatesEnabled)) {
   Write-UpdateTrace "skipped because automatic updates are off"
   Write-Host "Automatic updates are off. Nightly restart was not run."
   exit 0
+}
+
+$incomingMode = $Mode
+if ($Mode -eq "retry") {
+  if (-not (Wait-ForGithubDns -TimeoutSec 120)) {
+    Write-UpdateTrace "retry gave up; github.com still does not resolve"
+    exit 0
+  }
+  $Mode = "now"
+}
+
+if ($Mode -eq "boot") {
+  Wait-ForGithubDns -TimeoutSec 120 | Out-Null
 }
 
 $nodeExe = Resolve-NodeExe
@@ -123,6 +211,10 @@ if (-not $nodeExe) {
     Write-UpdateTrace "updater exit $LASTEXITCODE; starting the current version"
     Write-Warning "Updater exited $LASTEXITCODE. Starting the current version."
   }
+}
+
+if ($incomingMode -eq "boot" -and (Test-NetworkSkip (Read-UpdateStatus))) {
+  Register-UpdateRetry
 }
 
 Write-Host "Starting the server and the kiosk."
